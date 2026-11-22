@@ -87,7 +87,10 @@ struct fs_struct {
     char cwd[CWD_MAX];
     char *cwd_long;
     /* The working directory's hold: its mount and node, the node held on a
-     * type with `hold`, or NULL on /dev and /proc (vfs_cwd_set). */
+     * type with `hold`, /dev, /proc and /sys among them, or NULL for the boot
+     * root's root directory and a synthetic one entered through a descriptor
+     * that keeps no mount (vfs_cwd_set). A name relative to it is walked from
+     * this pair, and one relative to a NULL pair by its path. */
     struct vfs_mount *cwd_mnt;
     void *cwd_node;
     /* The root directory chroot set: its mount and held node, or NULL for
@@ -95,9 +98,6 @@ struct fs_struct {
      * and `..` stops there. */
     struct vfs_mount *root_mnt;
     void *root_node;
-    /* The count of changes of the root, under `lock`, by which a walk
-     * without the big lock sees that the root it began with has moved. */
-    uint32_t root_seq;
     /* Guards the members above, which change under the big lock and this,
      * for a walk that reads the root without the big lock (vfs.c). */
     struct spinlock lock;
@@ -318,9 +318,9 @@ struct process {
     uint64_t cred_id;
     /* While an openat2 opens the path its checked walk found, the walks of
      * the open replay that walk (`vfs_replay`): VFS_REPLAY_* bits, 0 at every
-     * other time, and the tree's sequence the replay must still see. */
+     * other time, and the walk sequence the replay must still see. */
     uint32_t walk_replay;
-    uint32_t walk_replay_seq;
+    uint64_t walk_replay_seq;
     /* NO_XDEV's mount during the replay, held by the open, or NULL. */
     struct vfs_mount *walk_replay_mnt;
     uint32_t ngroups;             /* live entries in groups[] */

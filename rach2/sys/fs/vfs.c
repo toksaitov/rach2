@@ -6,6 +6,7 @@
 
 #include "../mm/kheap.h"
 #include "vfs.h"
+#include "walkseq.h"
 #include "name.h"
 
 #include "../arch/arch.h"
@@ -293,20 +294,22 @@ void vfs_ref_put(struct vfs_ref *r)
     r->node = 0;
 }
 
-/* The tree's sequence (`vfs_tree_seq`). */
-static uint32_t tree_seq;
-
-uint32_t vfs_tree_seq(void)
+void vfs_mounts_changed(void)
 {
-    return tree_seq;
+    vfs_seq_begin();
+    vfs_seq_end();
 }
 
-void vfs_tree_changed(void)
+/** Move the walk sequence for a change of what is mounted where: a change
+ * of one mount's state or place, made under the big lock and read by the
+ * cached walk under the table's lock, so that a walk without the big lock
+ * that began before it goes again. */
+static void mounts_moved(void)
 {
-    tree_seq++;
+    vfs_mounts_changed();
 }
 
-void vfs_replay(int magic, uint32_t seq, struct vfs_mount *xdev)
+void vfs_replay(int magic, uint64_t seq, struct vfs_mount *xdev)
 {
     current_proc->walk_replay = VFS_REPLAY_ON | (magic ? VFS_REPLAY_MAGIC : 0u);
     current_proc->walk_replay_seq = seq;
@@ -551,67 +554,39 @@ static int may_follow_link(struct vfs_mount *mnt, void *dir, const struct vfs_st
 
 /* The resolver. */
 
-/**
- * Whether the component of `path` at `p`, with the part before it, is the
- * caller's working directory or one of the directories on the way to it,
- * for a walk of `path` from the caller's root: a path with its leading
- * slash, or without it and no `start`, as the open calls give one.
- *
- * The syscall layer joins a relative name to the working directory's path
- * and the walk starts at the root, where Linux starts a relative walk at the
- * working directory and checks no permission on the directories above it. A
- * process that keeps a directory it may not reach by its path, as `su` to an
- * ordinary user from root's home leaves one, may still name files there
- * relatively, so the walk checks no search permission on a component on
- * that way; any other component of such a directory still needs it.
- */
-static int toward_cwd(const struct vfs_ref *start, const char *path, const char *p)
+/** Whether the sets `a` and `b` of mount namespace ids are the same. */
+static int views_same(const struct idset *a, const struct idset *b)
 {
-    const char *cwd = current_proc ? proc_cwd(current_proc) : 0;
-    uint32_t at, len = 0, i;
+    uint32_t i, n = a->words > b->words ? a->words : b->words;
 
-    if (!cwd || cwd[0] != '/' || (start && path[0] != '/') || (path[0] == '/' && path[1] == '/')) {
+    if (a->count != b->count || a->low != b->low) {
         return 0;
     }
-    while (*path == '/') {
-        path++;
-    }
-    while (*cwd == '/') {
-        cwd++;
-    }
-    at = (uint32_t)(p - path);
-    if (p < path || at > k_strlen(path)) {
-        return 0;
-    }
-    while (p[len] != '\0' && p[len] != '/') {
-        len++;
-    }
-    for (i = 0; i < at + len; i++) {
-        if (cwd[i] != path[i]) {
+    for (i = 0; i < n; i++) {
+        if ((i < a->words ? a->more[i] : 0u) != (i < b->words ? b->more[i] : 0u)) {
             return 0;
         }
     }
-    return cwd[i] == '/' || cwd[i] == '\0';
+    return 1;
 }
 
 /**
- * The search check of the full walk at `cur` for the component of `path` at
- * `p`: 0, or may_search's error. A component on the way to the working
- * directory passes (`toward_cwd`) unless `cwd_ok` is 0; that is asked only
- * after the check failed, since it scans the path and the working
- * directory's path.
+ * Whether a walk on the parent of the mount `m` crosses or enters `m`: when
+ * the caller's mount namespace sees `m`, and on a parent it does not see,
+ * which a walk from a descriptor or a working directory on another
+ * namespace's mount stands on (`path_buf_set_dir`), when `m` is seen by the
+ * namespaces that see its parent, the tree that parent is in, as Linux's
+ * walk follows the mounts attached to the one it is on.
  */
-static int walk_may_search(const struct vfs_ref *cur, int use_real, int cwd_ok,
-                           const struct vfs_ref *start, const char *path, const char *p)
+static int mount_in_view(const struct vfs_mount *m)
 {
-    int rc = may_search(cur->mnt, cur->node, use_real);
-
-    return rc != 0 && cwd_ok && toward_cwd(start, path, p) ? 0 : rc;
+    return vfs_mount_seen(m) || (m->parent && !vfs_mount_seen(m->parent) &&
+                                 views_same(&m->ns_seen, &m->parent->ns_seen));
 }
 
 /**
  * The mount whose root replaces `node` when the walk arrives at it: a child
- * of `mnt` covering that node that the caller's mount namespace sees. A
+ * of `mnt` covering that node in the walk's view (`mount_in_view`). A
  * mount being made or unmounted is returned too, and the walk's
  * `vfs_enter` answers EBUSY for it. A nameless mount covers no node; it is
  * entered by name instead (`mount_named`).
@@ -622,7 +597,7 @@ static struct vfs_mount *mount_covering(struct vfs_mount *mnt, void *node)
 
     for (i = 1; i < mount_slots; i++) {
         if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt &&
-            mounts[i]->covered && mounts[i]->covered == node && vfs_mount_seen(mounts[i])) {
+            mounts[i]->covered && mounts[i]->covered == node && mount_in_view(mounts[i])) {
             return mounts[i];
         }
     }
@@ -698,11 +673,11 @@ static int mount_deep(const struct vfs_mount *m)
     return 0;
 }
 
-/** The active nameless mount, of those the caller's mount namespace sees,
- * entered by the name comp[0..len) from the root directory of `mnt`, as
- * /dev, /proc and /sys are from the root's and /dev/shm and /dev/mqueue
- * from /dev's, or by the names comp[0..len) when `len` spans several, as
- * /sys/kernel/debug is from /sys's; or NULL. */
+/** The active nameless mount, of those in the walk's view
+ * (`mount_in_view`), entered by the name comp[0..len) from the root
+ * directory of `mnt`, as /dev, /proc and /sys are from the root's and
+ * /dev/shm and /dev/mqueue from /dev's, or by the names comp[0..len) when
+ * `len` spans several, as /sys/kernel/debug is from /sys's; or NULL. */
 static struct vfs_mount *mount_named_at(struct vfs_mount *mnt, const char *comp, uint32_t len)
 {
     int i;
@@ -712,7 +687,7 @@ static struct vfs_mount *mount_named_at(struct vfs_mount *mnt, const char *comp,
         const char *name;
         uint32_t n;
 
-        if (!m || m->state != VFS_ACTIVE || m->parent != mnt || m->covered || !vfs_mount_seen(m)) {
+        if (!m || m->state != VFS_ACTIVE || m->parent != mnt || m->covered || !mount_in_view(m)) {
             continue;
         }
         name = mount_entry_name(m);
@@ -766,7 +741,7 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
     }
     for (i = 1; i < mount_slots; i++) {
         if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt &&
-            mounts[i]->covered == found && vfs_mount_seen(mounts[i])) {
+            mounts[i]->covered == found && mount_in_view(mounts[i])) {
             m = mounts[i];
         }
     }
@@ -855,7 +830,8 @@ int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name)
         return 0;
     }
     for (pr = proc_list; pr && !is; pr = pr->next) {
-        is = pr->fs && pr->fs->root_mnt == mnt && pr->fs->root_node == found;
+        is = pr->fs && pr->fs->root_mnt && mount_base(pr->fs->root_mnt) == mount_base(mnt) &&
+             pr->fs->root_node == found;
     }
     is = is || bind_rooted_at(mnt, found);
     node_put(mnt, found);
@@ -1018,6 +994,29 @@ static void walk_root(struct vfs_ref *r)
 }
 
 /**
+ * The top of the tree of mounts the caller's mount namespace sees, where a
+ * path that begins "//" starts, as a directory outside the process's root
+ * names itself (`fd_dir_path`): the root mount, or the copy the namespace
+ * made of it (`vfs_mntns_copy`), which shows the namespace's own mounts.
+ */
+static struct vfs_mount *walk_top(void)
+{
+    int i;
+
+    if (vfs_mount_seen(mounts[0])) {
+        return mounts[0];
+    }
+    for (i = 0; i < mount_slots; i++) {
+        struct vfs_mount *c = mounts[i];
+
+        if (c && c->state == VFS_ACTIVE && c->origin == mounts[0] && vfs_mount_seen(c)) {
+            return c;
+        }
+    }
+    return mounts[0];
+}
+
+/**
  * Whether `root`, the root a walk started from, is still the calling
  * process's root. A thread that shares the root (CLONE_FS) may chroot while
  * the walk sleeps in a lookup, and the walk then starts over from the new
@@ -1033,11 +1032,12 @@ static int root_current(const struct vfs_ref *root)
 }
 
 /** Whether `..` at `cur` stays there: at the walk's root, and at the root of
- * the root mount, above which there is nothing, whatever root the walk has. */
+ * a mount with no parent, the root mount or a mount namespace's copy of it,
+ * above which there is nothing, whatever root the walk has. */
 static int dotdot_stays(const struct vfs_ref *cur, const struct vfs_ref *root)
 {
     return (cur->mnt == root->mnt && cur->node == root->node) ||
-           (cur->mnt == mounts[0] && cur->node == mounts[0]->root);
+           (!cur->mnt->parent && cur->node == cur->mnt->root);
 }
 
 /** Replace the node `cur` holds with `node`, held already, on the same mount:
@@ -1049,6 +1049,28 @@ static void ref_move_node(struct vfs_ref *cur, void *node)
     vfs_ref_put(cur);
     cur->mnt = stay;
     cur->node = node;
+}
+
+/**
+ * Move the walk at `cur` to the root directory of its mount, where a type
+ * that takes the rest of a path leaves the walk with its VFS_CLIMB or
+ * VFS_ROOT: the `..` or the nameless mount's name it left is taken there by
+ * the ordinary step (`climbs`, `named_in_rest`), which a walk left on
+ * another directory of the mount would hand the type again, round and round.
+ * Afterwards `cur` is at the mount's root, and a hand-back there that uses
+ * up nothing is the type's fault, which `resolve_full` answers with -EIO.
+ */
+static void walk_to_mount_root(struct vfs_ref *cur)
+{
+    struct vfs_ref top;
+
+    if (cur->node == cur->mnt->root) {
+        return;
+    }
+    top.mnt = cur->mnt;
+    top.node = cur->mnt->root;
+    vfs_ref_hold(&top);
+    ref_move_node(cur, top.node);
 }
 
 /**
@@ -1610,7 +1632,7 @@ static int walk_root_moved(const struct walk_rules *rules, const struct vfs_ref 
  * Whether the walk under `rules` may take `..` from `cur`, whose root is
  * `root`: -EXDEV for a walk through the anchor's real path, which met a `..`
  * the text did not have, and at the anchor under BENEATH; -EAGAIN for a
- * scoped walk once a rename or a mount has moved the tree's sequence.
+ * scoped walk once a rename or a mount has moved the walk sequence.
  */
 static int walk_dotdot_ok(const struct walk_rules *rules, const struct vfs_ref *cur,
                           const struct vfs_ref *root)
@@ -1622,7 +1644,7 @@ static int walk_dotdot_ok(const struct walk_rules *rules, const struct vfs_ref *
                          cur->node == root->node)) {
         return -EXDEV;
     }
-    return vfs_tree_seq() != rules->scope->seq ? -EAGAIN : 0;
+    return vfs_seq_still(rules->scope->seq) ? 0 : -EAGAIN;
 }
 
 /** Look `name` up in `dir` as the walk under `rules` does: from the name
@@ -1636,7 +1658,7 @@ static int walk_lookup(const struct walk_rules *rules, struct vfs_mount *mnt, vo
 
 /**
  * The end of a walk under `rules` on `mnt` that found its node: -EXDEV under
- * NO_XDEV off the walk's mount, -EAGAIN for a replay once the tree's
+ * NO_XDEV off the walk's mount, -EAGAIN for a replay once the walk
  * sequence has moved, else 0.
  */
 static int walk_end_ok(const struct walk_rules *rules, struct vfs_mount *mnt)
@@ -1644,7 +1666,7 @@ static int walk_end_ok(const struct walk_rules *rules, struct vfs_mount *mnt)
     if ((rules->resolve & VFS_RESOLVE_NO_XDEV) && mnt != rules->xdev) {
         return -EXDEV;
     }
-    if (rules->replay && vfs_tree_seq() != current_proc->walk_replay_seq) {
+    if (rules->replay && !vfs_seq_still(current_proc->walk_replay_seq)) {
         current_proc->walk_replay |= VFS_REPLAY_TRIPPED;
         return -EAGAIN;
     }
@@ -1764,6 +1786,42 @@ static int walk_rest_kind(const struct vpath *vp, int rc, struct vfs_mount *mnt,
     if (!parent && !(flags & VFS_WALK_NOFOLLOW) && walk_is_link(mnt, found)) {
         return WALK_REST_LINK;
     }
+    return 0;
+}
+
+/**
+ * Whether the walk under `rules` may go on as `walk_rest_kind` said, `kind`,
+ * from the node of `vp`: 0, `walk_link_ok`'s refusal of a link, or -ELOOP
+ * when a jump to the object or the program of a link of /proc is past
+ * VFS_LINK_MAX for the attempt, counted in `*links` as a link `walk_link`
+ * follows is, so that one allowance covers every link a walk follows.
+ */
+static int walk_rest_follow_ok(const struct walk_rules *rules, const struct vpath *vp, int kind,
+                               int *links)
+{
+    int rc = kind ? walk_link_ok(rules, walk_magic(vp)) : 0;
+
+    if (rc == 0 &&
+        (kind == WALK_REST_OBJECT || (kind == WALK_REST_LINK && vp->kind == VNODE_PROC_EXE))) {
+        rc = ++*links > VFS_LINK_MAX ? -ELOOP : 0;
+    }
+    return rc;
+}
+
+/**
+ * Go on at `left`, which a type that takes the rest of a path handed back
+ * with VFS_CLIMB or VFS_ROOT, from the root of the mount of `cur`
+ * (`walk_to_mount_root`): 0 with `*p` at `left`, or -EIO when the walk was
+ * at that root already and the type used up nothing of `*p`, a fault of
+ * the type that would hand the same back for ever.
+ */
+static int walk_rest_back(struct vfs_ref *cur, const char **p, const char *left)
+{
+    if (left == *p && cur->node == cur->mnt->root) {
+        return -EIO;
+    }
+    *p = left;
+    walk_to_mount_root(cur);
     return 0;
 }
 
@@ -1902,9 +1960,9 @@ static void cached_put(struct vfs_mount *mnt, void *node)
 
 /** Record the directory entry `leaf` of `parent` in `*entry` when `found`,
  * the walk's last node, is a regular file, as `walk_record_entry` does for
- * the full walk; `seq` is the count of changes of names the walk began at.
- * 0, or nonzero with nothing recorded, for the full walk. */
-static int cached_entry(const struct vfs_ref *parent, void *found, const char *leaf, uint32_t seq,
+ * the full walk; `seq` is the walk sequence the walk began at
+ * (`vfs_seq_read`). 0, or nonzero with nothing recorded, for the full walk. */
+static int cached_entry(const struct vfs_ref *parent, void *found, const char *leaf, uint64_t seq,
                         struct vfs_name **entry)
 {
     struct vfs_stat st;
@@ -1917,10 +1975,10 @@ static int cached_entry(const struct vfs_ref *parent, void *found, const char *l
 }
 
 /* Where the cached walk records the last name's entry, NULL for nowhere,
- * and the count of changes of names it began at (`vfs_name_seq`). */
+ * and the walk sequence it began at (`vfs_seq_read`). */
 struct cached_record {
     struct vfs_name **entry;
-    uint32_t seq;
+    uint64_t seq;
 };
 
 /* The cached walk's answer for a symbolic link it follows (`cached_found`). */
@@ -1978,13 +2036,10 @@ static int cached_take(struct vfs_mount *mnt, void *node, struct vfs_ref *cur)
 }
 
 /* The root the cached walk took first: its mount and node, which it does
- * not hold, and the count of changes of the process's root it read with
- * them (`fs_struct.root_seq`), 0 without a process. `taken` is 0 until the
- * walk reads the root, at the start of an absolute path or at its first
- * absolute link. */
+ * not hold. `taken` is 0 until the walk reads the root, at the start of an
+ * absolute path or at its first absolute link. */
 struct cached_root {
     int taken;
-    uint32_t seq;
     struct vfs_mount *mnt;
     void *node;
 };
@@ -1995,31 +2050,33 @@ struct cached_root {
  * calling process's root, read under its lock, or the root mount's, read
  * under the table's, as Linux's `set_root` reads `fs->root` under its
  * sequence (fs/namei.c:943-965). The root is recorded in `seen` the first
- * time; once recorded, a root that has moved since, by a chroot of a thread
- * that shares it (CLONE_FS) or a new root mount, is WALK_FULL, for the full
- * walk to start over at the new root as its `walk_root_moved` does, since
- * Linux's walk keeps the `nd->root` it began with to its end
- * (fs/namei.c:970-1000). 0, or WALK_FULL with nothing taken, for a path the
- * full walk starts at the root of the root mount, one that begins with two
- * slashes, among others. May sleep, to drop a root that moved
+ * time; once recorded, another root, which a chroot of a thread that shares
+ * it (CLONE_FS) or a new root mount gives, is WALK_FULL, for the full walk
+ * to start over at the new root, since Linux's walk keeps the `nd->root` it
+ * began with to its end (fs/namei.c:970-1000). Such a change moves the walk
+ * sequence too, which `resolve_cached` checks before it answers. 0, or
+ * WALK_FULL with nothing taken, for a path the full walk starts at the root
+ * of the root mount, one that begins with two slashes, and for a start on a
+ * mount the caller's namespace may not see, whose mounts the cached walk
+ * does not judge, among others. May sleep, to drop a root that moved
  * (`cached_put`).
  */
 static int cached_start(const struct vfs_ref *start, const char *path, struct vfs_ref *cur,
                         struct cached_root *seen)
 {
     struct fs_struct *fs = current_proc ? current_proc->fs : NULL;
-    uint32_t flags, seq = 0;
+    uint32_t flags;
     int rc = -1;
 
     if (path[0] != '/' && start) {
-        return cached_take(start->mnt, start->node, cur);
+        return vfs_mount_seen_word(start->mnt) == 1 ? cached_take(start->mnt, start->node, cur)
+                                                    : WALK_FULL;
     }
     if (path[0] == '/' && path[1] == '/') {
         return WALK_FULL;
     }
     if (fs) {
         flags = spin_lock_irqsave(&fs->lock);
-        seq = fs->root_seq;
         rc = fs->root_mnt ? cached_take(fs->root_mnt, fs->root_node, cur) : -1;
         spin_unlock_irqrestore(&fs->lock, flags);
     }
@@ -2031,13 +2088,12 @@ static int cached_start(const struct vfs_ref *start, const char *path, struct vf
     if (rc != 0) {
         return rc;
     }
-    if (seen->taken && (seen->seq != seq || seen->mnt != cur->mnt || seen->node != cur->node)) {
+    if (seen->taken && (seen->mnt != cur->mnt || seen->node != cur->node)) {
         cached_put(cur->mnt, cur->node);
         vfs_leave(cur->mnt);
         return WALK_FULL;
     }
     seen->taken = 1;
-    seen->seq = seq;
     seen->mnt = cur->mnt;
     seen->node = cur->node;
     return 0;
@@ -2137,13 +2193,11 @@ static int cached_cross(struct vfs_ref *cur)
 /* The directories the cached walk came down through, nearest last, each
  * held and its mount entered, so that a `..` climbs to the one it came
  * from, as Linux's walk under RCU climbs to `d_parent` (fs/namei.c:1968-
- * 2006). `seq` is the count of changes of names the walk began at, and
- * `calm` whether none was under way then (`vfs_name_seq_peek`). The oldest
- * is let go when there is no room, and a `..` above the rest goes to the
- * full walk. */
+ * 2006). `seq` is the walk sequence the walk began at (`vfs_seq_read`). The
+ * oldest is let go when there is no room, and a `..` above the rest goes to
+ * the full walk. */
 struct cached_dots {
-    uint32_t seq;
-    int calm;
+    uint64_t seq;
     int n;
     struct vfs_ref up[CACHED_DOTS];
 };
@@ -2206,32 +2260,28 @@ static int cached_move(struct vfs_ref *cur, void *found, struct vfs_name **entry
 
 /**
  * Whether a `..` at `cur` stays there, as the full walk's `dotdot_stays`
- * says: at the caller's root, or at the root of the root mount. The root
- * is read as `cached_start` reads it; one that has moved since the walk
- * took it first (`seen`) is -1, for the full walk to start over at the new
- * root, as its `walk_root_moved` does. 1, 0, or -1.
+ * says: at the caller's root, or at the root of a mount with no parent.
+ * The root is read as `cached_start` reads it; the caller has checked that
+ * the walk sequence has not moved, so that it is the root the walk began
+ * with. 1 or 0.
  */
-static int cached_dots_stay(const struct vfs_ref *cur, const struct cached_root *seen)
+static int cached_dots_stay(const struct vfs_ref *cur)
 {
     struct fs_struct *fs = current_proc ? current_proc->fs : NULL;
     struct vfs_mount *mnt = NULL;
     void *node = NULL;
-    uint32_t flags, seq = 0;
+    uint32_t flags;
     int stay;
 
     if (fs) {
         flags = spin_lock_irqsave(&fs->lock);
-        seq = fs->root_seq;
         mnt = fs->root_mnt;
         node = fs->root_node;
         spin_unlock_irqrestore(&fs->lock, flags);
     }
-    if (seen->taken && seen->seq != seq) {
-        return -1;
-    }
     flags = spin_lock_irqsave(&mount_table_lock);
     stay = (mnt && cur->mnt == mnt && cur->node == node) ||
-           (cur->mnt == mounts[0] && cur->node == mounts[0]->root);
+           (!cur->mnt->parent && cur->node == cur->mnt->root);
     spin_unlock_irqrestore(&mount_table_lock, flags);
     return stay;
 }
@@ -2244,24 +2294,21 @@ static int cached_dots_stay(const struct vfs_ref *cur, const struct cached_root 
  * a mount over a directory that directory is the one the covered directory
  * was found in, as the full walk reaches it by the covered directory; at a
  * nameless mount's root it is the parent mount's root, as `nameless_up`
- * uses the `..` up. The kept directory is the parent only while no name has
- * changed since the walk began, which `vfs_name_seq_still` checks, as Linux
- * checks the directory's sequence (fs/namei.c:1994). 0; WALK_FULL, with
- * `cur` held as it was, for a change of names, a moved root, or a walk that
- * kept no directory above `cur`, having started there or let it go for
- * room; or WALK_FULL as `cached_cross` returns it.
+ * uses the `..` up. The kept directory is the parent only while nothing
+ * has changed what a path names since the walk began, which
+ * `vfs_seq_still` checks, as Linux checks the directory's sequence and
+ * `mount_lock` (fs/namei.c:1994). 0; WALK_FULL, with `cur` held as it was,
+ * for such a change, a moved root among them, or a walk that kept no
+ * directory above `cur`, having started there or let it go for room; or
+ * WALK_FULL as `cached_cross` returns it.
  */
-static int cached_dotdot(struct vfs_ref *cur, struct cached_dots *dd,
-                         const struct cached_root *seen)
+static int cached_dotdot(struct vfs_ref *cur, struct cached_dots *dd)
 {
-    int stay;
-
-    if (!dd->calm || !vfs_name_seq_still(dd->seq)) {
+    if (!vfs_seq_still(dd->seq)) {
         return WALK_FULL;
     }
-    stay = cached_dots_stay(cur, seen);
-    if (stay != 0) {
-        return stay > 0 ? 0 : WALK_FULL;
+    if (cached_dots_stay(cur)) {
+        return 0;
     }
     if (dd->n == 0) {
         return WALK_FULL;
@@ -2284,8 +2331,7 @@ static int cached_dotdot(struct vfs_ref *cur, struct cached_dots *dd,
  * where the walk reached and `dd` keeping what it kept, for the caller to
  * let go of both.
  */
-static int cached_dots_step(struct vfs_ref *cur, const char *comp, struct cached_dots *dd,
-                            const struct cached_root *seen)
+static int cached_dots_step(struct vfs_ref *cur, const char *comp, struct cached_dots *dd)
 {
     struct vfs_ref next = {NULL, NULL};
     int rc;
@@ -2294,7 +2340,7 @@ static int cached_dots_step(struct vfs_ref *cur, const char *comp, struct cached
         return 0;
     }
     if (streq(comp, "..")) {
-        return cached_dotdot(cur, dd, seen);
+        return cached_dotdot(cur, dd);
     }
     rc = cur->node == cur->mnt->root ? cached_named(cur->mnt, comp, &next) : 0;
     if (rc == WALK_NAMED) {
@@ -2377,13 +2423,22 @@ static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struc
  * Linux's walk under RCU climbs to the parent, so that Wine's links of
  * `dosdevices`, `c:` to `../drive_c`, stay off the big lock. Anything else,
  * a `..` above where the walk began, any other link and a failed search
- * check among them, which the full walk may excuse on the way to the
- * working directory (`toward_cwd`), goes to the full walk, which gives the
- * same answer for every path this one finishes. The walk takes no
+ * check among them, goes to the full walk, which gives the same answer for
+ * every path this one finishes. The walk takes no
  * namespace lock, since its type needs none, and a mount it ends on is the
  * one `walk_unlock` leaves.
+ *
+ * `seq` is the walk sequence the caller read with no change under way
+ * (`vfs_seq_read`) before it took `start`, the directory a relative path
+ * starts at. Each answer, a found node and a missing name alike, stands only
+ * if nothing has changed what a path names since (`vfs_seq_still`), as
+ * Linux's walk under RCU checks `mount_lock` and the sequences it read
+ * before it leaves RCU (fs/namei.c `try_to_unlazy` and `complete_walk` in
+ * 6.12); a change, a mount, a rename, or a chroot or chdir of a thread that
+ * shares the caller's root and working directory, sends the path to the full
+ * walk.
  */
-static int resolve_cached(const struct vfs_ref *start, const char *path, int flags,
+static int resolve_cached(const struct vfs_ref *start, uint64_t seq, const char *path, int flags,
                           struct vfs_ref *out, struct vfs_name **entry)
 {
     const char *p = path;
@@ -2397,10 +2452,10 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
 
     k_memset(&lk, 0, sizeof(lk));
     dd.n = 0;
-    dd.calm = vfs_name_seq_peek(&dd.seq);
+    dd.seq = seq;
     rec.entry = entry;
-    rec.seq = 0;
-    if ((entry && !vfs_name_seq(&rec.seq)) || cached_start(start, path, &cur, &lk.root) != 0) {
+    rec.seq = seq;
+    if (cached_start(start, path, &cur, &lk.root) != 0) {
         return WALK_FULL;
     }
     for (;;) {
@@ -2427,7 +2482,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
         k_memcpy(comp, p, len);
         comp[len] = '\0';
         p += len;
-        rc = cached_dots_step(&cur, comp, &dd, &lk.root);
+        rc = cached_dots_step(&cur, comp, &dd);
         if (rc == 0) {
             continue;
         }
@@ -2435,7 +2490,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
             goto full;
         }
         rc = dcache_lookup_hit(mount_base(cur.mnt), cur.node, comp, &found);
-        if (rc == -ENOENT) {
+        if (rc == -ENOENT && vfs_seq_still(seq)) {
             dcache_count_hits(found_names + 1);
             cached_put(cur.mnt, cur.node);
             vfs_leave(cur.mnt);
@@ -2465,7 +2520,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
             goto full;
         }
     }
-    if (vfs_mount_gone(cur.mnt)) {
+    if (vfs_mount_gone(cur.mnt) || !vfs_seq_still(seq)) {
         goto full;
     }
     dcache_count_hits(found_names);
@@ -2494,8 +2549,8 @@ static int walk_begin(struct walk_rules *rules, struct vfs_ref *cur, struct vfs_
 {
     *cur = (p[0] == '/' || !start) ? root : *start;
     if (p[0] == '/' && p[1] == '/' && !rules->scope) {
-        cur->mnt = mounts[0];
-        cur->node = mounts[0]->root;
+        cur->mnt = walk_top();
+        cur->node = cur->mnt->root;
     }
     walk_xdev_begin(rules, cur->mnt);
     if (vfs_enter(cur->mnt) != 0) {
@@ -2571,9 +2626,7 @@ static int walk_component(const char **path, char *comp)
  * unless VFS_WALK_NOFOLLOW. A /proc/<pid>/fd/<n> at the last component stays
  * the link's node, which the system call layer opens and reports itself. The
  * walk goes on from the object as from a directory it looked up, though a
- * mount over it is not crossed, as Linux crosses none there, and no
- * component after it is excused from the search check as one on the way to
- * the working directory is (`toward_cwd`).
+ * mount over it is not crossed, as Linux crosses none there.
  *
  * The target and the path it is joined to are in two path pages, taken at
  * the first link and given back on every return; a walk that meets no link
@@ -2598,6 +2651,17 @@ static int walk_component(const char **path, char *comp)
  * for a name relative to a descriptor's directory outside the caller's
  * root, starts at the root of the root mount, and keeps the caller's root
  * for `..` and for links.
+ *
+ * The walk is bounded as Linux's is, by the links it follows: each one, a
+ * jump through a link of /proc to its object or program among them, counts
+ * toward VFS_LINK_MAX for the attempt, and the 41st is -ELOOP; a final link
+ * left unfollowed counts none. No other bound is needed: every other step
+ * uses up a component of the text, climbs from the root of a mount to the
+ * directory it covers, which ends since a mount's parent was attached
+ * before it, or moves to the root of a type that takes the rest of a path
+ * on its VFS_CLIMB or VFS_ROOT, where the ordinary step uses the component
+ * up. A hand-back at that root that uses up nothing would go round for
+ * ever, and is -EIO, a fault of the type.
  *
  * VFS_WALK_LOCK holds one namespace lock at a time and returns with the
  * final mount locked when its type sets `ns_serialised`, so an open can
@@ -2627,7 +2691,6 @@ static int resolve_full(const struct vfs_ref *start, const char *path, int flags
     const char *last_comp;
     int use_real = (flags & VFS_WALK_REAL_IDS) ? 1 : 0;
     int links;
-    int nocwd;
     int kind;
     int locked = (flags & VFS_WALK_LOCK) != 0;
     int missing = 0;
@@ -2656,13 +2719,13 @@ begin:
     p = path;
     last_comp = leaf_comp;
     links = 0;
-    nocwd = rules.scope != NULL || held_root.mnt;
     walk_name_root(&name, record ? record->real : NULL);
     walk_root(&root);
     walk_scope_begin(&rules, &root, &name, p);
     if (held_root.mnt) {
         walk_name_text(&name, spelling, path);
     }
+    walk_gate(WALK_GATE_FULL);
     rc = walk_begin(&rules, &cur, root, start, p, locked);
     if (rc != 0) {
         path_buf_put(linkpath);
@@ -2703,7 +2766,10 @@ begin:
             }
             rc = proc_walk_rest(&cur, p, rlen, &found, &left, use_real);
             if (rc == VFS_CLIMB || rc == VFS_ROOT) {
-                p = left;
+                rc = walk_rest_back(&cur, &p, left);
+                if (rc != 0) {
+                    goto out_err;
+                }
                 continue;
             }
             if (rc == VFS_STEP || rc == VFS_ENTER) {
@@ -2724,13 +2790,12 @@ begin:
             kind = walk_sys_link_kept(vp, rc, flags, p)
                        ? 0
                        : walk_rest_kind(vp, rc, cur.mnt, found, last_comp != 0, flags);
-            rc = kind ? walk_link_ok(&rules, walk_magic(vp)) : 0;
+            rc = walk_rest_follow_ok(&rules, vp, kind, &links);
             if (rc != 0) {
                 node_put(cur.mnt, found);
                 goto out_err;
             }
             if (kind == WALK_REST_OBJECT) {
-                nocwd = 1;
                 walk_name_text(&name, from, p);
                 rc = walk_object(&cur, found, p, &linkpath, &target, flags);
             } else if (kind == WALK_REST_THROUGH || kind == WALK_REST_LINK) {
@@ -2775,7 +2840,7 @@ begin:
             continue;
         }
 
-        rc = walk_may_search(&cur, use_real, !nocwd, start, path, p);
+        rc = may_search(cur.mnt, cur.node, use_real);
         if (rc != 0) {
             goto out_err;
         }
@@ -2928,18 +2993,23 @@ out_err:
  * without the big lock (`resolve_cached`) when the walk records nothing,
  * has no scope, replay or parent and makes nothing, and otherwise, or when
  * that walk cannot finish, by the full walk under the big lock
- * (`resolve_full`).
+ * (`resolve_full`). A path page that keeps its directory as a node and a
+ * prefix (`path_buf_start`) is walked from that pair by either.
  */
 static int resolve_path(const struct vfs_ref *start, const char *path, int flags,
                         struct vfs_ref *out, char *leaf, uint32_t leafcap,
                         struct walk_record *record)
 {
+    struct vfs_ref held;
+    const char *rest = path;
+    uint64_t seq;
+    int kept = start ? 0 : path_buf_start(path, &held, &rest);
     int rc;
 
-    if (path && out && !record && !(current_proc && current_proc->paths_on_mounts) &&
-        vfs_root_mounted() && !(flags & ~(VFS_WALK_NOFOLLOW | VFS_WALK_REAL_IDS | VFS_WALK_LOCK)) &&
-        !(current_proc && current_proc->walk_replay)) {
-        rc = resolve_cached(start, path, flags, out, NULL);
+    if (path && out && !record && kept >= 0 && vfs_root_mounted() &&
+        !(flags & ~(VFS_WALK_NOFOLLOW | VFS_WALK_REAL_IDS | VFS_WALK_LOCK)) &&
+        !(current_proc && current_proc->walk_replay) && vfs_seq_read(&seq)) {
+        rc = resolve_cached(kept ? &held : start, seq, kept ? rest : path, flags, out, NULL);
         if (rc != WALK_FULL) {
             return rc;
         }
@@ -2950,20 +3020,50 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     return rc;
 }
 
-int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out, struct vfs_name **entry)
+int vfs_cwd_take(char *text, struct vfs_ref *start)
 {
+    struct fs_struct *fs = current_proc->fs;
+    uint32_t flags = spin_lock_irqsave(&fs->lock);
+    const char *cwd = fs->cwd_long ? fs->cwd_long : fs->cwd;
+    int rc;
+
+    k_memcpy(text, cwd, k_strlen(cwd) + 1);
+    rc = fs->cwd_mnt ? cached_take(fs->cwd_mnt, fs->cwd_node, start) : WALK_FULL;
+    spin_unlock_irqrestore(&fs->lock, flags);
+    if (rc != 0) {
+        start->mnt = NULL;
+        start->node = NULL;
+    }
+    return rc == 0 ? 0 : -1;
+}
+
+void vfs_cached_release(struct vfs_ref *ref)
+{
+    if (ref->mnt) {
+        cached_put(ref->mnt, ref->node);
+        vfs_leave(ref->mnt);
+        ref->mnt = NULL;
+        ref->node = NULL;
+    }
+}
+
+int vfs_resolve_cached(const struct vfs_ref *start, uint64_t seq, const char *path, int flags,
+                       struct vfs_ref *out, struct vfs_name **entry)
+{
+    struct vfs_ref held;
+    const char *rest;
     int rc;
 
     if (entry) {
         *entry = NULL;
     }
-    if (!path || path[0] != '/' || !vfs_root_mounted() ||
-        (current_proc && current_proc->paths_on_mounts) ||
+    if (!path || (path[0] != '/' && !start) || !vfs_root_mounted() ||
+        path_buf_start(path, &held, &rest) != 0 ||
         (flags & ~(VFS_WALK_NOFOLLOW | VFS_WALK_REAL_IDS | VFS_WALK_LOCK)) ||
         (current_proc && current_proc->walk_replay)) {
         return VFS_CACHED_MISS;
     }
-    rc = resolve_cached(0, path, flags, out, entry);
+    rc = resolve_cached(start, seq, path, flags, out, entry);
     return rc == WALK_FULL ? VFS_CACHED_MISS : rc;
 }
 
@@ -5519,36 +5619,76 @@ static int proc_walk_parent(struct vfs_ref *cur)
     return 1;
 }
 
-/** Continue the synthetic lookup at a live proc directory. */
-static int proc_lookup_live(const struct vfs_ref *cur, struct synth_tail *tail, void **node,
-                            const char **left)
+/**
+ * Continue the synthetic lookup of `tail` at the directory `cur` holds: at
+ * its mount's root by `synth_lookup_rest`, and at any other directory from
+ * that directory's own place in the mount, the path its classification
+ * gives (`synth_vpath_dir`, a process directory by the number its kept owner
+ * was reached by), as Linux walks a relative name from the held `f_path` or
+ * `fs->pwd` (fs/namei.c `path_init` in 6.12): the directory's path is not
+ * walked again from the mount's root, so a mount made over it since, as a
+ * bind over /dev/pts, is not entered. -ENOENT for a directory made under
+ * /dev and since removed, a /sys directory whose device is gone, a process
+ * directory with no kept owner, which another process may have the number
+ * of by now, or one whose place has left the directory the mount shows;
+ * -ENOMEM; or `synth_rest`'s.
+ */
+static int synth_lookup_at(const struct vfs_ref *cur, struct synth_tail *tail, void **node,
+                           const char **left)
 {
     struct vfs_mount *mnt = cur->mnt;
     const struct vpath *vp = vfs_synth_vpath(mnt, cur->node);
-    char full[256];
+    char prefix[256];
+    char *full;
+    uint32_t plen;
     int rc;
 
-    if (!vfs_proc_dir_owner(cur))
+    if (cur->node == mnt->root || !vp)
         return synth_lookup_rest(mnt, tail->start, (uint32_t)(tail->end - tail->start), node, left,
                                  tail->use_real);
-    rc = synth_place(mnt, mnt->bind_of ? mnt->bind_root : "", full, sizeof(full));
+    if ((vp->kind == VNODE_DEV_MADE && devtree_is_dir(vp->syskey) < 0) ||
+        ((vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) && SYSFS_KEYED(vp->sysent) &&
+         !sysfs_device_exists(vp->sysent, vp->syskey)) ||
+        (synth_dir_of_proc(vp->kind) && !vfs_proc_dir_owner(cur)))
+        return -ENOENT;
+    rc = synth_place(mnt, mnt->bind_of ? mnt->bind_root : "", prefix, sizeof(prefix));
     if (rc)
         return rc;
-    tail->root_len = (uint32_t)k_strlen(full);
-    tail->dir = cur->node;
-    synth_dir_path(vp->kind, vp->pid, vp->tid, full, sizeof(full));
+    full = path_buf_get();
+    if (!full)
+        return -ENOMEM;
+    if (vfs_proc_dir_owner(cur))
+        synth_dir_path(vp->kind, vp->pid, vp->tid, full, VFS_PATH_MAX);
+    else
+        synth_vpath_dir(vp, full, VFS_PATH_MAX);
     k_memmove(full, full + 1, k_strlen(full));
-    return synth_rest(mnt, full, tail, node, left);
+    plen = 0;
+    while (prefix[plen] && full[plen] == prefix[plen])
+        plen++;
+    rc = -ENOENT;
+    if (!prefix[plen] && (full[plen] == '\0' || full[plen] == '/')) {
+        tail->root_len = plen;
+        tail->dir = cur->node;
+        rc = synth_rest(mnt, full, tail, node, left);
+    }
+    path_buf_put(full);
+    return rc;
 }
 
-/** Search the retained directory before a task-dependent child lookup. */
+/**
+ * Look up the rest `p`, its first `len` bytes, below the directory `cur`
+ * holds on a mount of a synthetic type (`synth_lookup_at`), after the search
+ * permission of a process directory, judged by its kept owner, and with
+ * -ENOENT once that process has gone. Another type that takes the rest of a
+ * path is handed it from its mount's root.
+ */
 static int proc_walk_rest(const struct vfs_ref *cur, const char *p, uint32_t len, void **node,
                           const char **left, int real)
 {
     const struct synth_owner *own;
     struct synth_tail tail;
 
-    if (cur->mnt->type != &vfs_procfs_type)
+    if (!vfs_synth_vpath(cur->mnt, cur->node))
         return cur->mnt->type->ops->lookup_rest(cur->mnt, p, len, node, left, real);
     own = vfs_proc_dir_owner(cur);
     if (own) {
@@ -5562,7 +5702,7 @@ static int proc_walk_rest(const struct vfs_ref *cur, const char *p, uint32_t len
     tail.start = p;
     tail.end = p + len;
     tail.use_real = real;
-    return proc_lookup_live(cur, &tail, node, left);
+    return synth_lookup_at(cur, &tail, node, left);
 }
 
 /** Whether the synthetic kind denotes a directory for the resolver. */
@@ -5723,9 +5863,9 @@ static int walk_exe(struct vfs_ref *cur, void *found, int locked, struct vfs_nam
  * directory of /dev, /proc or /sys, and a working directory with no node, has
  * only a path from the root, which is put in front of `rest`, the part of the
  * path after the link, in `*linkpath`, as an absolute link's target is, with
- * the walk's pages taken at its first link (`walk_pages`). The jump uses up a
- * component of the path, so a chain of them ends, and it is not counted
- * against VFS_LINK_MAX. WALK_AT_OBJECT at the node; 1 with the path in
+ * the walk's pages taken at its first link (`walk_pages`). The caller counts
+ * the jump against VFS_LINK_MAX, as Linux counts a magic link's (fs/namei.c
+ * `pick_link` in 6.12). WALK_AT_OBJECT at the node; 1 with the path in
  * `*linkpath`; or a negative errno: -ENOMEM, -ENAMETOOLONG, -EBUSY, or
  * `procfs_link_target`'s.
  */
@@ -6273,7 +6413,7 @@ int vfs_root_over_image(const struct vfs_type *type, struct block_device *dev, c
     old->parent = m;
     old->covered = 0;
     old->seq = ++mount_seq;
-    tree_seq++;
+    mounts_moved();
     k_strncpy(old->covered_path, place, sizeof(old->covered_path));
     vfs_mount_get(m);
     *host = old;
@@ -6316,26 +6456,6 @@ const struct vfs_type *vfs_type_at(int idx)
     return mount_types[idx];
 }
 
-/**
- * Whether a remount to `flags` changes the own flags of `m` while another
- * live mount namespace sees `m` too: -EBUSY then, 0 otherwise. The
- * namespaces share the record, so a change made in one would show in the
- * other, where Linux changes only the remounting namespace's copy of the
- * mount (`copy_mnt_ns`, fs/namespace.c); a namespace that is to seal what
- * it sees makes private binds and remounts those. A remount that leaves
- * the mount's own flags as they are passes. Under the big lock, with the
- * remount held (`vfs_mntns_hold`) from before this to the store of the
- * flags, so that neither another remount nor a new namespace comes
- * between them.
- */
-static int remount_shared(const struct vfs_mount *m, uint32_t flags)
-{
-    if ((flags & (VFS_MS_MOUNT | VFS_MS_RDONLY)) != vfs_mount_flags(m) && vfs_mount_shared(m)) {
-        return -EBUSY;
-    }
-    return 0;
-}
-
 /** Set only the attributes of the named mount. */
 static void set_mount_attrs(struct vfs_mount *m, uint32_t flags)
 {
@@ -6349,8 +6469,8 @@ static void set_mount_attrs(struct vfs_mount *m, uint32_t flags)
 
 /**
  * The body of `vfs_remount`, with the remount held (`vfs_mntns_hold`), so
- * that what its checks read, the flags and the namespaces that see the
- * mount, stays as they found it through the sleeps before the store.
+ * that the flags its checks read stay as they found them through the
+ * sleeps before the store.
  */
 static int remount_held(struct vfs_mount *named, uint32_t flags, const char *options)
 {
@@ -6371,8 +6491,8 @@ static int remount_held(struct vfs_mount *named, uint32_t flags, const char *opt
         ((m->dev && (m->dev->flags & BLOCK_READ_ONLY)) || m->write_error)) {
         return -EROFS;
     }
-    rc = remount_shared(named, flags);
-    if (rc == 0 && closing) {
+    rc = 0;
+    if (closing) {
         rc = fd_mount_readonly_begin(m, 0);
         if (rc == 0) {
             rc = filemap_sync_mount(m);
@@ -6421,6 +6541,36 @@ static int drained(void *arg)
 {
     struct vfs_mount *mnt = arg;
     return mnt->inprogress == 0;
+}
+
+/* The unmounts that wait for their mount's operations to drain and have not
+ * yet found whether it stays (`unmount_mount`): a mount of theirs is
+ * VFS_UNMOUNTING and may yet go back to VFS_ACTIVE. The making of a mount
+ * namespace waits on the queue until there are none (`vfs_mntns_settle`).
+ * Under the big lock; a zeroed queue needs no init. */
+static uint32_t unmounts_draining;
+static wait_queue_t unmounts_wq;
+
+/** The wait condition of `vfs_mntns_settle`: no unmount is draining. */
+static int none_draining(void *arg)
+{
+    (void)arg;
+    return unmounts_draining == 0;
+}
+
+/**
+ * Linux copies a namespace's tree under `namespace_sem`, which an unmount
+ * holds from its check of the mount's users to the mount's removal
+ * (`copy_mnt_ns` and `do_umount`, fs/namespace.c in 6.12), so the copy
+ * finds the mount either kept or gone. Here the unmount sleeps between
+ * the two, and a copy made meanwhile would leave out a mount the unmount
+ * then keeps.
+ */
+void vfs_mntns_settle(void)
+{
+    if (current_proc) {
+        wq_wait_event_nointr(&unmounts_wq, none_draining, NULL);
+    }
 }
 
 /**
@@ -6696,7 +6846,7 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
     mount_lock_init(m);
     m->claim = -1;
     m->seq = ++mount_seq;
-    tree_seq++;
+    mounts_moved();
     k_strncpy(m->covered_path, canon, sizeof(m->covered_path));
     k_strncpy(m->source, source, sizeof(m->source));
     m->source[sizeof(m->source) - 1] = '\0';
@@ -6986,6 +7136,70 @@ static struct vfs_mount *bind_child(struct vfs_mount *c, struct vfs_mount *paren
     }
     vfs_node_unlock(&cov);
     return b;
+}
+
+/**
+ * The covered node needs no lock: the mount copied covers it in its own
+ * namespace, so no `rmdir` removes it, and nothing sleeps between the
+ * reading of `c` and the store of the copy, whose namespace no process is
+ * in yet.
+ */
+struct vfs_mount *vfs_mount_copy(struct vfs_mount *c, struct vfs_mount *parent, uint32_t id)
+{
+    int i = mount_new_slot();
+    struct vfs_mount *m = i < 0 ? NULL : mounts[i];
+
+    if (!m) {
+        return NULL;
+    }
+    k_memset(m, 0, sizeof(*m));
+    if (idset_add(&m->ns_seen, id) != 0) {
+        mount_release(m);
+        return NULL;
+    }
+    m->type = c->type;
+    m->flags = vfs_mount_flags(c);
+    m->state = VFS_ACTIVE;
+    m->parent = parent;
+    m->covered = c->covered;
+    mount_lock_init(m);
+    m->claim = -1;
+    m->seq = ++mount_seq;
+    mounts_moved();
+    k_strncpy(m->covered_path, c->covered_path, sizeof(m->covered_path));
+    k_strncpy(m->source, mount_base(c)->source, sizeof(m->source));
+    m->copy_of = c;
+    m->origin = c->origin ? c->origin : c;
+    m->ns_root = c->ns_root;
+    if (parent) {
+        vfs_mount_get(parent);
+    }
+    if (c->covered && c->parent->type->ops->hold) {
+        c->parent->type->ops->hold(mount_base(c->parent), c->covered);
+    }
+    if (c->type->ops->hold) {
+        c->type->ops->hold(mount_base(c), c->root);
+    }
+    bind_fill(m, c, c->root, c->bind_of ? c->bind_root : "/");
+    return m;
+}
+
+const struct vfs_mount *vfs_mount_seen_as(const struct vfs_mount *m, int immediate)
+{
+    int i;
+
+    if (!m || vfs_mount_seen(m)) {
+        return m;
+    }
+    for (i = 0; i < mount_slots; i++) {
+        struct vfs_mount *c = mounts[i];
+
+        if (c && c->state == VFS_ACTIVE && (immediate ? c->copy_of : c->origin) == m &&
+            vfs_mount_seen(c)) {
+            return c;
+        }
+    }
+    return NULL;
 }
 
 /** The bind `made` holds for the parent of the mount `c`, of the `n` mounts
@@ -7469,7 +7683,7 @@ int vfs_remount_bind(struct vfs_mount *m, uint32_t flags, int privileged)
         return rc;
     }
     closing = (flags & VFS_MS_RDONLY) && !vfs_mount_rdonly(m);
-    rc = m->state != VFS_ACTIVE ? -EBUSY : remount_shared(m, flags);
+    rc = m->state != VFS_ACTIVE ? -EBUSY : 0;
     if (rc == 0 && closing) {
         rc = fd_mount_readonly_begin(m, 1);
     }
@@ -7509,11 +7723,12 @@ static void unmount_abandoned(struct vfs_mount *m)
  * `target`, a path from the calling process's root, as the path from the
  * root of the mount table that a mount records, into `out` of
  * VFS_COVERED_PATH_MAX bytes: the root's own path goes in front of it, so
- * the answer names a place at or below the caller's root. The root is held
- * while its path is rebuilt, since a thread that shares it may chroot
- * meanwhile. Returns 0; -EBUSY for a root on a mount being unmounted; the
- * error `vfs_node_path` gives; or -ENAMETOOLONG for a path longer than a
- * recorded one can be.
+ * the answer names a place at or below the caller's root. A root whose path
+ * is "/", the root of the mount table's or of a mount namespace's copy of
+ * it, adds nothing. The root is held while its path is rebuilt, since a
+ * thread that shares it may chroot meanwhile. Returns 0; -EBUSY for a root
+ * on a mount being unmounted; the error `vfs_node_path` gives; or
+ * -ENAMETOOLONG for a path longer than a recorded one can be.
  */
 static int unmount_target(const char *target, char *out)
 {
@@ -7540,6 +7755,7 @@ static int unmount_target(const char *target, char *out)
         if (tl == 1) {
             return 0;
         }
+        rl = rl == 1 ? 0 : rl;
     }
     if (rl + tl + 1 > VFS_COVERED_PATH_MAX) {
         return -ENAMETOOLONG;
@@ -7550,9 +7766,10 @@ static int unmount_target(const char *target, char *out)
 
 /**
  * The mount `target` names by its recorded path, for an unmount whose walk
- * met a removed device on the way: the one active mount with that path that
- * has an ancestor whose device has gone, or NULL when there is none or more
- * than one.
+ * met a removed device on the way: the one active mount the caller's mount
+ * namespace sees with that path that has an ancestor whose device has gone,
+ * or NULL when there is none or more than one. The copies other namespaces
+ * have of the mount record the same path, and are theirs to unmount.
  *
  * Without it, a child mount's reference on a parent whose device has gone
  * could never be dropped, since no lookup on the missing medium is possible.
@@ -7575,7 +7792,7 @@ static struct vfs_mount *unmount_below_gone(const char *target)
     }
     for (i = VFS_PERMANENT; i < mount_slots; i++) {
         m = mounts[i];
-        if (!m || m->state != VFS_ACTIVE || !streq(m->covered_path, want)) {
+        if (!m || m->state != VFS_ACTIVE || !vfs_mount_seen(m) || !streq(m->covered_path, want)) {
             continue;
         }
         for (parent = m->parent; parent; parent = parent->parent) {
@@ -7624,6 +7841,28 @@ static int unmount_found(struct vfs_ref *tref, int dir, struct vfs_mount **out)
 static int unmount_mount(struct vfs_mount *m);
 
 /**
+ * Whether something holds the mount `m` and every reference on it is a
+ * mount the caller's mount namespace does not see: a bind of its file
+ * system, as the copy another namespace made of it is, or a mount over one
+ * of its directories hidden already. Each such mount counts once on `m`
+ * as its base and once as its parent (`bind_fill`, `mount_place`).
+ */
+static int held_unseen(const struct vfs_mount *m)
+{
+    uint32_t n = 0;
+    int i;
+
+    for (i = 0; i < mount_slots; i++) {
+        const struct vfs_mount *c = mounts[i];
+
+        if (c && c != m && c->state != VFS_FREE && !vfs_mount_seen(c)) {
+            n += (c->bind_of == m) + (c->parent == m);
+        }
+    }
+    return m->refs > 0 && m->refs == n;
+}
+
+/**
  * vfs_do_umount, with the copy a descriptor target keeps in `*kept`. A
  * target that named a directory by its end is checked by the walk that
  * finds the mount, before the EINVAL of a name that is no mount point, as
@@ -7655,7 +7894,7 @@ static int umount_target(const char *target, int dir, struct fd_kept **kept)
     if (m->state != VFS_ACTIVE) {
         return -EBUSY;
     }
-    if (vfs_mount_shared(m)) {
+    if (held_unseen(m)) {
         vfs_mount_hide(m);
         return 0;
     }
@@ -7732,14 +7971,14 @@ static int detach_target(const char *target, int dir, struct fd_kept **kept)
     }
     if (rc >= 0) {
         rc = unmount_found(&tref, dir, &m);
-        if (rc == -EBUSY && m != mounts[0]) {
+        if (rc == -EBUSY && m->parent) {
             rc = 0;
         }
         if (rc != 0) {
             return rc;
         }
     }
-    if (m == mounts[0] || m == vfs_memfd_mount()) {
+    if (!m->parent) {
         return -EINVAL;
     }
     if (m->state != VFS_ACTIVE) {
@@ -7884,7 +8123,7 @@ static int pivot_mounts(const char *new_root, const char *put_old, struct vfs_re
         current_proc && current_proc->fs->root_mnt ? current_proc->fs->root_node : mounts[0]->root;
     int i, rc, same = 0;
 
-    tree_seq++;
+    mounts_moved();
     rc = vfs_resolve_fd(new_root, VFS_WALK_MOUNT, &nref, NULL, nkept);
     if (rc < 0) {
         return rc;
@@ -7924,6 +8163,11 @@ static int pivot_mounts(const char *new_root, const char *put_old, struct vfs_re
         vfs_ref_release(&nref);
         return rc;
     }
+    for (i = 0; i < mount_slots; i++) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE && vfs_mount_seen(mounts[i])) {
+            mounts[i]->ns_root = mounts[i] == nref.mnt;
+        }
+    }
     klog(KLOG_INFO, "vfs", "pivoted: %s", nref.mnt->covered_path);
     *out = nref;
     vfs_reap_detached();
@@ -7942,9 +8186,9 @@ int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *
 
 /**
  * The end of a bind's unmount, after its operations drained and nothing
- * holds it: its root and covered node are put back and its parent and base
- * let go; the file system it showed is not written, since its base still
- * shows it.
+ * holds it: its root and covered node are put back and its parent, if any,
+ * and base let go; the file system it showed is not written, since its base
+ * still shows it. A namespace's copy of its root has no parent.
  */
 static int unmount_bind(struct vfs_mount *m)
 {
@@ -7964,7 +8208,9 @@ static int unmount_bind(struct vfs_mount *m)
     if (cov.node) {
         vfs_ref_put(&cov);
     }
-    vfs_mount_put(m->parent);
+    if (m->parent) {
+        vfs_mount_put(m->parent);
+    }
     vfs_mount_put(m->bind_of);
     mount_release(m);
     return 0;
@@ -8040,18 +8286,25 @@ static int unmount_write(struct vfs_mount *m, const char **what)
  */
 static int unmount_mount(struct vfs_mount *m)
 {
-    int rc, dropped = 0;
+    int rc, busy, dropped = 0;
     const char *what = "sync";
     struct vfs_ref cov;
     block_device_t *dev = m->dev;
 
     arch_atomic_xchg((volatile unsigned int *)(void *)&m->state, (unsigned int)VFS_UNMOUNTING);
-    tree_seq++;
+    mounts_moved();
+    unmounts_draining++;
     while (*(volatile uint32_t *)&m->inprogress > 0) {
         wq_wait_event_nointr(&m->drain_wq, drained, m);
     }
-    if (m->refs > 0) {
+    busy = m->refs > 0;
+    if (busy) {
         m->state = VFS_ACTIVE;
+    }
+    if (--unmounts_draining == 0) {
+        wq_wake_all(&unmounts_wq);
+    }
+    if (busy) {
         return -EBUSY;
     }
     if (m->bind_of) {
@@ -8126,7 +8379,8 @@ static void hold_release(struct vfs_mount *mnt, void *node)
  * in the record stays the directory its path names. KRFFS, the boot root
  * and a mounted volume, has no `hold`: the working directory takes only the
  * mount's count, and the record keeps its node for `rmdir`, which answers
- * EBUSY for a directory that is a working directory.
+ * EBUSY for a directory that is a working directory. The store is a change
+ * of the walk sequence (`vfs_seq_begin`), as the root's is.
  */
 void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
 {
@@ -8134,19 +8388,18 @@ void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
     void *was_node = p->fs->cwd_node;
     uint32_t flags;
 
-    if (mnt && mnt == mounts[1]) {
-        mnt = 0;
-    }
     if (mnt) {
         if (mnt->type->ops->hold) {
             mnt->type->ops->hold(mount_base(mnt), node);
         }
         vfs_mount_get(mnt);
     }
+    vfs_seq_begin();
     flags = spin_lock_irqsave(&p->fs->lock);
     p->fs->cwd_mnt = mnt;
     p->fs->cwd_node = mnt ? node : 0;
     spin_unlock_irqrestore(&p->fs->lock, flags);
+    vfs_seq_end();
     hold_release(was, was_node);
 }
 
@@ -8154,7 +8407,9 @@ void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
  * The new root is stored before the old one is let go of, since the put may
  * sleep: a thread that shares the root (CLONE_FS) and resolves a path
  * meanwhile finds one of the two roots in the record, never none, which
- * would be the root of the mount table.
+ * would be the root of the mount table. The store is a change of the walk
+ * sequence (`vfs_seq_begin`), so a walk without the big lock that began
+ * before it goes again.
  */
 void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node)
 {
@@ -8171,11 +8426,12 @@ void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node)
         }
         vfs_mount_get(mnt);
     }
+    vfs_seq_begin();
     flags = spin_lock_irqsave(&p->fs->lock);
     p->fs->root_mnt = mnt;
     p->fs->root_node = mnt ? node : 0;
-    p->fs->root_seq++;
     spin_unlock_irqrestore(&p->fs->lock, flags);
+    vfs_seq_end();
     hold_release(was, was_node);
 }
 

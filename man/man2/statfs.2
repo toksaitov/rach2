@@ -66,21 +66,22 @@ Zero.
 Equal to
 .Va f_bsize .
 .It Va f_flags
-For a mounted volume,
 .Dv ST_VALID
-and the mount's flags as the caller's mount namespace sees them, as Linux
-gives them:
+and the flags of the mount the file was reached through, as Linux gives
+them:
 .Dv ST_RDONLY
 when the mount or its filesystem is read-only, and
 .Dv ST_NOSUID , ST_NODEV , ST_NOEXEC , ST_SYNCHRONOUS , ST_NOATIME ,
 .Dv ST_NODIRATIME
 and
 .Dv ST_RELATIME .
-Zero for the KRFFS boot root and the synthetic filesystems, for which a C
-library that finds no
-.Dv ST_VALID
-reads
-.Pa /proc/mounts .
+A descriptor gives those of the mount it was opened through, after that
+mount's namespace has ended too.
+A device opened through a mount of
+.Pa /dev
+gives that mount's.
+Zero for a descriptor that keeps no mount: a pipe, a socket, a device
+opened otherwise and an anonymous one.
 .El
 .Pp
 Reserved fields are zero.

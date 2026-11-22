@@ -5,6 +5,7 @@
  * host-deps: rach2/sys/lib/idset.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/walkseq_host.c
  *
  * The test includes both sources whole. Its mount table holds the boot's
  * permanent mounts and the records the rows make, and its unmount lets a
@@ -14,17 +15,18 @@
  * namespaces through `ns_fork`, as the kernel's do.
  *
  * Mount namespaces: 1000 made at once by root, each with a mount of its own,
- * each seeing the boot's mounts and its own and none of the others', the
- * first namespace seeing none of them; one made from the 500th seeing its
- * mount; a mount hidden from one namespace alone; every mount and id gone
- * with the namespaces; user.max_mnt_namespaces of the first user namespace
- * as Linux derives it from memory, refusing the namespace past it with
- * ENOSPC, and the limit of a user namespace below it counted per user, as
- * Linux's ucounts are; and two namespaces made for one place left while a
- * remount holds the making off, the second while the first waits, of which
- * only one is made; and a writable remount without privilege of a private
- * bind that another remount seals read-only while it waits, refused with
- * EPERM once the wait ends.
+ * each seeing a copy of each of the boot's mounts but the memfd mount, which
+ * it sees as it is, and its own mount, and none of the others', the first
+ * namespace seeing the boot's mounts and none of the copies; one made from
+ * the 500th seeing a copy of the 500th's mount; a copy hidden from its
+ * namespace alone; every mount and id gone with the namespaces;
+ * user.max_mnt_namespaces of the first user namespace as Linux derives it
+ * from memory, refusing the namespace past it with ENOSPC, and the limit of
+ * a user namespace below it counted per user, as Linux's ucounts are; a
+ * namespace made while a remount is under way, without a wait; and a
+ * writable remount without privilege of a private bind that another
+ * remount seals read-only while it waits, refused with EPERM once the wait
+ * ends.
  *
  * Id maps: 340 extents written in descending order, read back sorted by the
  * first id as Linux 4.15 lists a map past five extents, every id mapped both
@@ -44,10 +46,10 @@ extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *p);
 
 /* The mount namespaces the first rows make at once, and the slots of the
- * test's mount table: the permanent ones, a mount for each namespace and
- * one to spare. */
+ * test's mount table: the permanent ones, and for each namespace its copies
+ * of the seven it copies and a mount of its own, and some to spare. */
 #define SPACES 1000
-#define SLOTS  (VFS_PERMANENT + SPACES + 1)
+#define SLOTS  (VFS_PERMANENT + SPACES * VFS_PERMANENT + 64)
 
 /* The frames the test's machine has: 1 GiB. */
 #define FRAMES 262144u
@@ -55,8 +57,11 @@ extern void free(void *p);
 struct percpu cpu_table[NR_CPUS];
 process_t *proc_list;
 static struct vfs_mount *table[SLOTS];
-static int unmounts;
+static int unmounts, copies, moves;
 static int failures;
+/* The directories every process of the rows shares, which the moves of a
+ * new namespace leave as they are (`vfs_root_set`). */
+static struct fs_struct dirs;
 
 /** Count and print a failure when `condition` is false. */
 #define CHECK(condition, detail)                          \
@@ -103,11 +108,83 @@ int vfs_unmount_record(struct vfs_mount *m)
     return -EBUSY;
 }
 
+struct vfs_mount *vfs_memfd_mount(void)
+{
+    return table[4];
+}
+
+struct vfs_mount *vfs_root_mount(void)
+{
+    return table[0];
+}
+
+/** vfs.c's copy, as far as the views go: a record in the first free slot
+ * past the permanent ones, active, seen by `id` alone, with the flags of
+ * `c` and the records it copies. */
+struct vfs_mount *vfs_mount_copy(struct vfs_mount *c, struct vfs_mount *parent, uint32_t id)
+{
+    struct vfs_mount *m;
+    int i;
+
+    for (i = VFS_PERMANENT; i < SLOTS && table[i]; i++) {
+    }
+    m = i < SLOTS ? calloc(1, sizeof(*m)) : NULL;
+    if (!m || idset_add(&m->ns_seen, id) != 0) {
+        if (m) {
+            vfs_mount_view_free(m);
+        }
+        free(m);
+        return NULL;
+    }
+    m->state = VFS_ACTIVE;
+    m->flags = c->flags;
+    m->parent = parent;
+    m->copy_of = c;
+    m->origin = c->origin ? c->origin : c;
+    table[i] = m;
+    copies++;
+    return m;
+}
+
+/** The moves of a process into a new namespace, counted and not made, since
+ * the rows' processes share one record. */
+void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node)
+{
+    (void)p;
+    (void)mnt;
+    (void)node;
+    moves++;
+}
+
+void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
+{
+    (void)p;
+    (void)mnt;
+    (void)node;
+    moves++;
+}
+
+int proc_cwd_set(struct process *p, const char *path)
+{
+    (void)p;
+    (void)path;
+    return 0;
+}
+
 /** vfs.c's: a bind's own flags, the only mounts the rows remount. */
 uint32_t vfs_mount_flags(const struct vfs_mount *m)
 {
     return m->flags;
 }
+
+/** vfs.c's wait for the unmounts draining their mount; the rows unmount
+ * nothing while a namespace is made, so there is none to wait for. */
+void vfs_mntns_settle(void)
+{}
+
+/** vfs.c's generation of the mounts, which no row reads. */
+void vfs_mounts_changed(void)
+{}
 
 void vfs_reap_detached(void)
 {
@@ -148,8 +225,8 @@ process_t *get_process(uint32_t pid)
     return NULL;
 }
 
-/* What runs while a making of a namespace waits for a remount: another
- * process's call, set by a row, else the remount's end. */
+/* What runs while a remount waits for another: another process's call,
+ * set by a row, else the other remount's end. */
 static void (*while_waiting)(void);
 
 void wq_wake_all(wait_queue_t *wq)
@@ -158,7 +235,7 @@ void wq_wake_all(wait_queue_t *wq)
 }
 
 /** The wait for a remount (`vfs_mntns_wait`): a wait that would sleep runs
- * the row's other process, or ends the remount, as the wake would. */
+ * the row's other process, or ends the other remount, as the wake would. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     void (*other)(void) = while_waiting;
@@ -249,19 +326,24 @@ void proc_cred_commit(process_t *p)
     p->cred_id++;
 }
 
-/** A mount made by the current process in slot `slot`, active and seen by
- * its namespace alone, as `mount_alloc` makes one. */
-static struct vfs_mount *mount_in(int slot)
+/** A mount made by the current process in the first free slot past the
+ * permanent ones, active and seen by its namespace alone, as `mount_place`
+ * makes one; NULL when the table is full. */
+static struct vfs_mount *mount_new(void)
 {
-    struct vfs_mount *m = calloc(1, sizeof(*m));
+    struct vfs_mount *m;
+    int i;
 
+    for (i = VFS_PERMANENT; i < SLOTS && table[i]; i++) {
+    }
+    m = i < SLOTS ? calloc(1, sizeof(*m)) : NULL;
     if (!m || vfs_mount_view_new(m) != 0) {
         CHECK(0, "a record and its view");
         free(m);
         return NULL;
     }
     m->state = VFS_ACTIVE;
-    table[slot] = m;
+    table[i] = m;
     return m;
 }
 
@@ -282,6 +364,7 @@ static void boot(void)
 static void as_user(process_t *p, uint32_t uid)
 {
     memset(p, 0, sizeof(*p));
+    p->fs = &dirs;
     p->pid = 100;
     p->ruid = p->euid = p->suid = uid;
     p->rgid = p->egid = p->sgid = uid;
@@ -298,15 +381,32 @@ static int seen_past_boot(void)
     return n;
 }
 
+/** The copy the current process's namespace sees of `m`, a mount of the
+ * first namespace's or one made by mount(2), by the record its copies were
+ * first copied from; NULL when it sees none. */
+static struct vfs_mount *copy_seen(const struct vfs_mount *m)
+{
+    int i;
+
+    for (i = VFS_PERMANENT; i < SLOTS; i++) {
+        if (table[i] && table[i]->origin == m && vfs_mount_seen(table[i])) {
+            return table[i];
+        }
+    }
+    return NULL;
+}
+
 /**
  * A thousand mount namespaces made at once, a mount in each, and the view
- * of each: the boot's mounts, its own, and nothing of the others'. Then a
- * namespace made from one of them, a mount hidden from one, and the end of
- * them all.
+ * of each: its copies of the boot's mounts, the memfd mount, its own mount,
+ * and nothing of the others'. Then a namespace made from one of them, a
+ * copy hidden from its namespace, and the end of them all.
  */
 static void thousand(void)
 {
     static process_t root, kids[SPACES], copy;
+    static struct vfs_mount *own[SPACES];
+    struct vfs_mount *again, *dev;
     int i, j, ok;
     uint32_t top = 0;
 
@@ -319,45 +419,60 @@ static void thousand(void)
         }
         top = proc_mntns(&kids[i])->id > top ? proc_mntns(&kids[i])->id : top;
         current_proc = &kids[i];
-        mount_in(VFS_PERMANENT + i);
+        own[i] = mount_new();
     }
     CHECK(top == SPACES, "the ids are the lowest free, 1 to 1000");
     CHECK(mnt_ids.count == SPACES + 1, "a live id for each namespace and the first");
+    CHECK(copies == SPACES * (VFS_PERMANENT - 1),
+          "each namespace copies the boot's mounts but the memfd mount");
+    CHECK(moves == SPACES, "each new namespace moves its process's root to its copy");
     for (i = 0, ok = 1; i < SPACES; i++) {
         current_proc = &kids[i];
         for (j = 0; j < VFS_PERMANENT; j++) {
-            ok &= vfs_mount_seen(table[j]) && vfs_mount_shared(table[j]);
+            ok &= j == 4 ? vfs_mount_seen(table[j])
+                         : !vfs_mount_seen(table[j]) && copy_seen(table[j]) != NULL;
         }
-        ok &= vfs_mount_seen(table[VFS_PERMANENT + i]) && seen_past_boot() == 1 &&
-              !vfs_mount_shared(table[VFS_PERMANENT + i]);
+        ok &= own[i] && vfs_mount_seen(own[i]) && seen_past_boot() == VFS_PERMANENT;
     }
-    CHECK(ok, "each namespace sees the boot's mounts and its own alone");
+    CHECK(ok, "each namespace sees its copies of the boot's mounts, the memfd mount and its own");
     current_proc = &root;
     CHECK(seen_past_boot() == 0, "the first namespace sees no namespace's mount");
+    for (j = 0, ok = 1; j < VFS_PERMANENT; j++) {
+        ok &= vfs_mount_seen(table[j]);
+    }
+    CHECK(ok, "and the boot's mounts as they are");
 
     as_user(&copy, 0);
     current_proc = &kids[500];
+    dev = copy_seen(table[1]);
     CHECK(ns_fork(&copy, &kids[500], CLONE_NEWNS) == 0, "a namespace made from the 500th");
     current_proc = &copy;
-    CHECK(vfs_mount_seen(table[VFS_PERMANENT + 500]) && seen_past_boot() == 1,
-          "it sees what the 500th sees");
-    CHECK(vfs_mount_shared(table[VFS_PERMANENT + 500]), "the 500th's mount is shared now");
+    again = copy_seen(own[500]);
+    CHECK(again && again->copy_of == own[500] && !vfs_mount_seen(own[500]) &&
+              seen_past_boot() == VFS_PERMANENT,
+          "it sees a copy of each mount the 500th sees, and none of the 500th's records");
+    CHECK(copy_seen(table[1]) && copy_seen(table[1])->copy_of == dev,
+          "its copy of /dev is a copy of the 500th's");
 
     current_proc = &kids[700];
-    vfs_mount_hide(table[1]);
-    CHECK(!vfs_mount_seen(table[1]), "a mount hidden from the 700th");
+    dev = copy_seen(table[1]);
+    vfs_mount_hide(dev);
+    CHECK(dev && !vfs_mount_seen(dev) && copy_seen(table[1]) == NULL,
+          "a copy hidden from the 700th");
     current_proc = &kids[699];
-    CHECK(vfs_mount_seen(table[1]), "and still seen by the 699th");
+    CHECK(copy_seen(table[1]) != NULL, "and the 699th's copy still seen");
 
     for (i = 0; i < SPACES; i++) {
         current_proc = &kids[i];
         ns_release(&kids[i]);
     }
-    CHECK(unmounts == SPACES - 1, "each namespace's end unmounts what it alone saw");
-    CHECK(table[VFS_PERMANENT + 500] != NULL, "a mount another namespace sees stays");
+    CHECK(unmounts == SPACES * VFS_PERMANENT,
+          "each namespace's end unmounts its copies and its mount, and the hidden copy goes");
     current_proc = &copy;
+    CHECK(seen_past_boot() == VFS_PERMANENT, "the namespace made from the 500th keeps its own");
     ns_release(&copy);
-    CHECK(unmounts == SPACES && seen_past_boot() == 0, "the last view's end unmounts it");
+    CHECK(unmounts == (SPACES + 1) * VFS_PERMANENT && seen_past_boot() == 0,
+          "and its end unmounts them");
     for (j = 0, ok = 1; j < VFS_PERMANENT; j++) {
         ok &= table[j]->ns_seen.count == 1 && idset_has(&table[j]->ns_seen, 0);
     }
@@ -404,6 +519,7 @@ static void limits(void)
     u->max_mnt = 2;
     for (i = 0; i < 3; i++) {
         memset(&inner[i], 0, sizeof(inner[i]));
+        inner[i].fs = &dirs;
         inner[i].ruid = inner[i].euid = 1000;
         inner[i].rgid = inner[i].egid = 1000;
     }
@@ -426,39 +542,25 @@ static void limits(void)
     CHECK(mnt_ids.count == 1 && mnt_list == NULL, "every id but the first is free again");
 }
 
-static process_t waiter_parent, waiters[2];
-static int32_t waiter_rc[2];
-
-/** The second process of `remount_wait`, which makes its namespace while
- * the first waits for the remount. */
-static void second_waiter(void)
-{
-    waiter_rc[1] = ns_fork(&waiters[1], &waiter_parent, CLONE_NEWNS);
-}
+static process_t waiter_parent, waiter;
 
 /**
- * Two processes make a namespace each, with one place left under the limit,
- * while a remount holds the making off, the second while the first waits:
- * only one may be made, which fails when a making checks the limit before
- * it waits and joins the count after.
+ * A namespace made while a remount is under way is made at once: each
+ * namespace has copies of its own, whose flags no remount of another's
+ * changes, so the making need not wait. A making that waited would end the
+ * remount in the test's wait.
  */
 static void remount_wait(void)
 {
     as_user(&waiter_parent, 0);
-    as_user(&waiters[0], 0);
-    as_user(&waiters[1], 0);
+    as_user(&waiter, 0);
     current_proc = &waiter_parent;
-    ns_set_max_mnt(&init_userns, 1);
     vfs_mntns_hold();
-    while_waiting = second_waiter;
-    waiter_rc[0] = ns_fork(&waiters[0], &waiter_parent, CLONE_NEWNS);
-    CHECK(while_waiting == NULL && remounts == 0, "the second made its namespace during the wait");
-    CHECK(waiter_rc[1] == 0, "the second, which the remount's end let go first, is made");
-    CHECK(waiter_rc[0] == -ENOSPC, "the first, which waited before its check, is ENOSPC");
-    ns_release(&waiters[0]);
-    ns_release(&waiters[1]);
-    ns_set_max_mnt(&init_userns, NS_LIMIT_MAX);
-    CHECK(mnt_ids.count == 1 && mnt_list == NULL, "every id but the first is free after the wait");
+    CHECK(ns_fork(&waiter, &waiter_parent, CLONE_NEWNS) == 0 && remounts == 1,
+          "a namespace is made while a remount is under way, without a wait");
+    vfs_mntns_release();
+    ns_release(&waiter);
+    CHECK(mnt_ids.count == 1 && mnt_list == NULL, "every id but the first is free after it");
 }
 
 /* The bind `remount_locked` remounts, which its other remount seals, and
@@ -486,8 +588,7 @@ static void remount_locked(void)
 {
     as_user(&unprivileged, 1000);
     current_proc = &unprivileged;
-    CHECK(table[SLOTS - 1] == NULL, "a free slot for the bind");
-    sealed = table[SLOTS - 1] ? NULL : mount_in(SLOTS - 1);
+    sealed = mount_new();
     if (!sealed) {
         return;
     }

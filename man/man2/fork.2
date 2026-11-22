@@ -357,10 +357,17 @@ or with
 .Dv CLONE_PARENT_SETTID
 at the same address, as
 .Fn clone
-always has it; or
+always has it;
 .Dv CLONE_CLEAR_SIGHAND
 with
-.Dv CLONE_SIGHAND .
+.Dv CLONE_SIGHAND ;
+or
+.Dv CLONE_NEWNS
+or
+.Dv CLONE_NEWUSER
+with
+.Dv CLONE_FS ,
+as on Linux, since a new namespace's directories are the child's own.
 .It Bq Er EINVAL
 .Fn clone3
 was given a

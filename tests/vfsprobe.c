@@ -47,6 +47,11 @@
 
 #define AT_FDCWD (-100)
 
+#define MNT_DETACH 2 /* umount2: detach now, free when unused */
+#define WNOHANG    1
+#define CLONE_FS   0x00000200
+#define SIGCHLD    17
+
 #define EPERM     1
 #define ENOENT    2
 #define EBADF     9
@@ -179,6 +184,34 @@ static const struct row rows[] = {
     {"getcwd reports /vp/d", "getcwd", 0},
     {"a relative open in the working directory", "relative-open", 0},
     {"chdir back to the root", "relative-open", 0},
+    {"chdir to /vp/d for the lock rows", "cwd-unlocked", STATFS_MAGIC_EXT2},
+    {"read /sys/kernel/debug/bkl/calls", "cwd-unlocked", STATFS_MAGIC_EXT2},
+    {"fstatat of a name relative to the working directory", "cwd-unlocked", STATFS_MAGIC_EXT2},
+    {"a name relative to the working directory takes no hold of the big lock", "cwd-unlocked",
+     STATFS_MAGIC_EXT2},
+    {"mount a tmpfs elsewhere", "cwd-unlocked", STATFS_MAGIC_EXT2},
+    {"the relative names after a mount take no hold of the big lock", "cwd-unlocked",
+     STATFS_MAGIC_EXT2},
+    {"unmount the tmpfs elsewhere", "cwd-unlocked", STATFS_MAGIC_EXT2},
+    {"chdir back to the root after the lock rows", "cwd-unlocked", STATFS_MAGIC_EXT2},
+    {"the files of the shared-record rows", "unlocked-shared", STATFS_MAGIC_EXT2},
+    {"the child of the shared-record rows", "unlocked-shared", STATFS_MAGIC_EXT2},
+    {"arm the walk gate", "unlocked-shared", STATFS_MAGIC_EXT2},
+    {"read the walk gate", "unlocked-shared", STATFS_MAGIC_EXT2},
+    {"the child's walk stops at the walk gate", "unlocked-shared", STATFS_MAGIC_EXT2},
+    {"chroot while the child's walk is stopped", "unlocked-shared", STATFS_MAGIC_EXT2},
+    {"release the walk gate", "unlocked-shared", STATFS_MAGIC_EXT2},
+    {"a walk without the big lock that a chroot of a thread sharing the record came between "
+     "goes again in the new root",
+     "unlocked-shared", STATFS_MAGIC_EXT2},
+    {"back to the old root after the shared-record chroot", "unlocked-shared", STATFS_MAGIC_EXT2},
+    {"chdir while the child's walk is stopped", "unlocked-shared", STATFS_MAGIC_EXT2},
+    {"a walk without the big lock that a chdir of a thread sharing the record came between "
+     "goes again from the new directory",
+     "unlocked-shared", STATFS_MAGIC_EXT2},
+    {"the walk gate counts the one walk given up", "unlocked-shared", STATFS_MAGIC_EXT2},
+    {"stop the walk gate", "unlocked-shared", STATFS_MAGIC_EXT2},
+    {"remove the files of the shared-record rows", "unlocked-shared", STATFS_MAGIC_EXT2},
     {"sync", "sync", 0},
     {"cleanup", "cleanup", 0},
 };
@@ -233,10 +266,18 @@ static void report_rows(const char *why)
     report_end();
 }
 
+static void (*fail_undo)(void); /* a row's undoing, which `fail` runs, or 0 */
+
 /** Print "VFSPROBE FAIL: " and `why`, report it (`report_rows`), and exit
- * 1. */
+ * 1, once the failing row's undoing has run. */
 static void fail(const char *why)
 {
+    void (*undo)(void) = fail_undo;
+
+    fail_undo = 0;
+    if (undo != 0) {
+        undo();
+    }
     syscall3(SYS_WRITE, 1, (long)"VFSPROBE FAIL: ", 15);
     puts(why);
     report_rows(why);
@@ -303,6 +344,380 @@ static unsigned root_magic(void)
 }
 
 static unsigned char stbuf[KSTAT_SIZE];
+
+/* The fstatat calls of each round of `cwd_unlocked_rows`. */
+#define CWD_ROUNDS 64
+
+/** The holds of the big lock that system call `nr` began, by its line
+ * "syscall NR calls wall_us holds ..." in debugfs's bkl/calls, 0 when it has
+ * none. */
+static unsigned call_holds(int nr)
+{
+    static char text[16384];
+    char want[16] = "syscall ";
+    int fd = syscall3(SYS_OPEN, (long)"/sys/kernel/debug/bkl/calls", O_RDONLY, 0);
+    int n, got = 0, i, k = 8, field;
+    const char *p;
+    unsigned value = 0;
+
+    if (fd < 0) {
+        fail("read /sys/kernel/debug/bkl/calls");
+    }
+    do {
+        n = syscall3(SYS_READ, fd, (long)(text + got), (int)sizeof(text) - 1 - got);
+        got += n > 0 ? n : 0;
+    } while (n > 0 && got < (int)sizeof(text) - 1);
+    syscall1(SYS_CLOSE, fd);
+    if (n < 0 || got == (int)sizeof(text) - 1) {
+        fail("read /sys/kernel/debug/bkl/calls");
+    }
+    text[got] = '\0';
+    if (nr >= 100) {
+        want[k++] = (char)('0' + nr / 100);
+    }
+    if (nr >= 10) {
+        want[k++] = (char)('0' + nr / 10 % 10);
+    }
+    want[k++] = (char)('0' + nr % 10);
+    want[k++] = ' ';
+    want[k] = '\0';
+    for (p = text; *p; p++) {
+        for (i = 0; want[i] && p[i] == want[i]; i++) {
+        }
+        if (!want[i] && (p == text || p[-1] == '\n')) {
+            break;
+        }
+    }
+    if (!*p) {
+        return 0;
+    }
+    p += k;
+    for (field = 0; field < 3; field++) {
+        if (*p < '0' || *p > '9') {
+            fail("read /sys/kernel/debug/bkl/calls");
+        }
+        value = 0;
+        while (*p >= '0' && *p <= '9') {
+            value = value * 10 + (unsigned)(*p++ - '0');
+        }
+        while (*p == ' ') {
+            p++;
+        }
+    }
+    return value;
+}
+
+/** `rounds` fstatat calls of the name f relative to the working directory,
+ * failing at the first that does not answer 0. */
+static void stat_relative(int rounds)
+{
+    int i;
+
+    for (i = 0; i < rounds; i++) {
+        if (syscall4(SYS_FSTATAT, AT_FDCWD, (long)"f", (long)stbuf, 0) != 0) {
+            fail("fstatat of a name relative to the working directory");
+        }
+    }
+}
+
+/** Undo what `cwd_unlocked_rows` made, for `fail`: the tmpfs on /vp/m, its
+ * directory and the working directory. */
+static void cwd_unlocked_undo(void)
+{
+    syscall2(SYS_UMOUNT2, (long)"/vp/m", MNT_DETACH);
+    syscall1(SYS_RMDIR, (long)"/vp/m");
+    syscall1(SYS_CHDIR, (long)"/");
+}
+
+/**
+ * On an ext2 root, whose names the name cache keeps, a name relative to the
+ * working directory /vp/d takes no hold of the big lock, by bkl/calls's
+ * count for fstatat: its walk starts at the directory the process holds and
+ * the cache finishes it without the lock. A tmpfs mounted on /vp/m moves the
+ * walk sequence, and the names after it take no hold either, since a walk
+ * from a held directory has no path above it to check. A root of another
+ * type, `magic`, has no such rows. A failure undoes what the rows made
+ * (`cwd_unlocked_undo`).
+ */
+static void cwd_unlocked_rows(unsigned magic)
+{
+    unsigned before, after;
+
+    if (magic != STATFS_MAGIC_EXT2) {
+        return;
+    }
+    fail_undo = cwd_unlocked_undo;
+    if (syscall1(SYS_CHDIR, (long)"/vp/d") != 0) {
+        fail("chdir to /vp/d for the lock rows");
+    }
+    stat_relative(1);
+    before = call_holds(SYS_FSTATAT);
+    stat_relative(CWD_ROUNDS);
+    after = call_holds(SYS_FSTATAT);
+    if (after != before) {
+        fail("a name relative to the working directory takes no hold of the big lock");
+    }
+    if (syscall2(SYS_MKDIR, (long)"/vp/m", 0755) != 0 ||
+        syscall5(SYS_MOUNT, (long)"none", (long)"/vp/m", (long)"tmpfs", 0, 0) != 0) {
+        fail("mount a tmpfs elsewhere");
+    }
+    before = call_holds(SYS_FSTATAT);
+    stat_relative(CWD_ROUNDS);
+    after = call_holds(SYS_FSTATAT);
+    if (after != before) {
+        fail("the relative names after a mount take no hold of the big lock");
+    }
+    if (syscall2(SYS_UMOUNT2, (long)"/vp/m", 0) != 0 || syscall1(SYS_RMDIR, (long)"/vp/m") != 0) {
+        fail("unmount the tmpfs elsewhere");
+    }
+    if (syscall1(SYS_CHDIR, (long)"/") != 0) {
+        fail("chdir back to the root after the lock rows");
+    }
+    fail_undo = 0;
+}
+
+/* The walk gate of debugfs (debugfs.5), which stops a chosen thread at a
+ * walk event until a write lets it go. */
+#define WALK_GATE "/sys/kernel/debug/vfs/walk_gate"
+
+/* The descriptors the shared-record rows write and read the walk gate by,
+ * opened before a row chroots away from its path, or -1. */
+static int gate_wfd = -1, gate_rfd = -1;
+
+/** Write `text` to the walk gate, or fail `what`. */
+static void gate_write(const char *text, const char *what)
+{
+    int n = (int)strlen(text);
+
+    if (syscall3(SYS_WRITE, gate_wfd, (long)text, n) != n) {
+        fail(what);
+    }
+}
+
+/** The walk gate's count of `name`, by its line (debugfs.5), read from its
+ * start, or fail. */
+static unsigned gate_count(const char *name)
+{
+    char line[160];
+    int n = syscall3(SYS_LSEEK, gate_rfd, 0, SEEK_SET) != 0
+                ? -1
+                : syscall3(SYS_READ, gate_rfd, (long)line, (int)sizeof(line) - 1);
+    const char *p;
+    unsigned value = 0;
+    int i;
+
+    if (n <= 0) {
+        fail("read the walk gate");
+    }
+    line[n] = '\0';
+    for (p = line; *p; p++) {
+        for (i = 0; name[i] && p[i + 1] == name[i]; i++) {
+        }
+        if (p[0] == ' ' && !name[i] && p[i + 1] == ' ') {
+            break;
+        }
+    }
+    if (!*p) {
+        fail("read the walk gate");
+    }
+    for (p += i + 2; *p >= '0' && *p <= '9'; p++) {
+        value = value * 10u + (unsigned)(*p - '0');
+    }
+    return value;
+}
+
+static int shared_root = -1; /* a descriptor of the root the rows began in, or -1 */
+static int shared_child;     /* the child of a shared-record row, or 0 */
+static int shared_pipe[2] = {-1, -1};
+
+/** Undo what `shared_rows` made, for `fail`: the gate, the child, the root
+ * and working directory, the descriptors and the files. */
+static void shared_undo(void)
+{
+    int st;
+
+    syscall3(SYS_WRITE, gate_wfd, (long)"off", 3);
+    syscall1(SYS_CLOSE, gate_wfd);
+    syscall1(SYS_CLOSE, gate_rfd);
+    gate_wfd = gate_rfd = -1;
+    if (shared_child > 0) {
+        syscall2(SYS_KILL, shared_child, 9);
+        syscall4(SYS_WAIT4, shared_child, (long)&st, 0, 0);
+        shared_child = 0;
+    }
+    if (shared_root >= 0) {
+        syscall1(SYS_FCHDIR, shared_root);
+        syscall1(SYS_CHROOT, (long)".");
+        syscall1(SYS_CLOSE, shared_root);
+        shared_root = -1;
+    }
+    syscall1(SYS_CHDIR, (long)"/");
+    syscall1(SYS_CLOSE, shared_pipe[0]);
+    syscall1(SYS_CLOSE, shared_pipe[1]);
+    shared_pipe[0] = shared_pipe[1] = -1;
+    syscall1(SYS_UNLINK, (long)"/vp/s/a/f");
+    syscall1(SYS_UNLINK, (long)"/vp/s/b/f");
+    syscall1(SYS_RMDIR, (long)"/vp/s/a");
+    syscall1(SYS_RMDIR, (long)"/vp/s/b");
+    syscall1(SYS_RMDIR, (long)"/vp/s");
+}
+
+/** Make the file `path` holding the `n` bytes of `text`, or fail. */
+static void shared_file(const char *path, const char *text, int n)
+{
+    int fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+    if (fd < 0 || syscall3(SYS_WRITE, fd, (long)text, n) != n) {
+        fail("the files of the shared-record rows");
+    }
+    syscall1(SYS_CLOSE, fd);
+}
+
+/**
+ * One shared-record row: a child that shares the working directory and the
+ * root (CLONE_FS) opens f relative to the working directory /vp/s/a, whose f
+ * holds 2 bytes, and exits with the count it reads. The walk gate stops the
+ * child's walk without the big lock where it has taken its start and the
+ * walk sequence, and the parent, from the gate's own count, chroots to
+ * /vp/s/b, which moves the shared working directory there too, or with
+ * `cd` changes to it, and lets the walk go on. The walk goes again under
+ * the big lock, from the new directory, whose f holds 3 bytes, and the gate
+ * counts that one walk given up; read past the change, the old directory's
+ * pair would give 2. Returns with the working directory /vp/s/a again.
+ */
+static void shared_row(int cd)
+{
+    const char *why = cd ? "a walk without the big lock that a chdir of a thread sharing the "
+                           "record came between goes again from the new directory"
+                         : "a walk without the big lock that a chroot of a thread sharing the "
+                           "record came between goes again in the new root";
+    char text[32] = "arm ", byte = 0, digits[12];
+    int pid, st, i = 4, k = 0, n;
+
+    if (syscall1(SYS_PIPE, (long)shared_pipe) != 0) {
+        fail("the child of the shared-record rows");
+    }
+    pid = syscall5(SYS_CLONE, CLONE_FS | SIGCHLD, 0, 0, 0, 0);
+    if (pid == 0) {
+        char got[8];
+        int fd;
+
+        if (syscall3(SYS_READ, shared_pipe[0], (long)&byte, 1) != 1) {
+            sys_exit(100);
+        }
+        fd = syscall3(SYS_OPEN, (long)"f", O_RDONLY, 0);
+        sys_exit(fd < 0 ? 101 : syscall3(SYS_READ, fd, (long)got, (int)sizeof(got)));
+    }
+    if (pid < 0) {
+        fail("the child of the shared-record rows");
+    }
+    shared_child = pid;
+    n = pid;
+    do {
+        digits[k++] = (char)('0' + n % 10);
+        n /= 10;
+    } while (n > 0);
+    while (k > 0) {
+        text[i++] = digits[--k];
+    }
+    for (k = 0; " unlocked"[k]; k++) {
+        text[i++] = " unlocked"[k];
+    }
+    text[i] = '\0';
+    gate_write(text, "arm the walk gate");
+    if (syscall3(SYS_WRITE, shared_pipe[1], (long)&byte, 1) != 1) {
+        fail("the child of the shared-record rows");
+    }
+    while (gate_count("waiting") != 1) {
+        if (syscall4(SYS_WAIT4, pid, (long)&st, WNOHANG, 0) == pid) {
+            shared_child = 0;
+            fail("the child's walk stops at the walk gate");
+        }
+        syscall0(SYS_SCHED_YIELD);
+    }
+    if (cd ? syscall1(SYS_CHDIR, (long)"/vp/s/b") != 0
+           : syscall1(SYS_CHROOT, (long)"/vp/s/b") != 0) {
+        fail(cd ? "chdir while the child's walk is stopped"
+                : "chroot while the child's walk is stopped");
+    }
+    gate_write("release", "release the walk gate");
+    if (syscall4(SYS_WAIT4, pid, (long)&st, 0, 0) != pid) {
+        fail(why);
+    }
+    shared_child = 0;
+    if ((st & 0x7f) != 0 || ((st >> 8) & 0xff) != 3) {
+        fail(why);
+    }
+    if (gate_count("miss") != 1) {
+        fail("the walk gate counts the one walk given up");
+    }
+    gate_write("off", "stop the walk gate");
+    syscall1(SYS_CLOSE, shared_pipe[0]);
+    syscall1(SYS_CLOSE, shared_pipe[1]);
+    shared_pipe[0] = shared_pipe[1] = -1;
+    if (!cd && (syscall1(SYS_FCHDIR, shared_root) != 0 || syscall1(SYS_CHROOT, (long)".") != 0)) {
+        fail("back to the old root after the shared-record chroot");
+    }
+    if (syscall1(SYS_CHDIR, (long)"/vp/s/a") != 0) {
+        fail(cd ? "chdir while the child's walk is stopped"
+                : "back to the old root after the shared-record chroot");
+    }
+}
+
+/**
+ * On an ext2 root, whose names a walk without the big lock finishes, a chroot
+ * and a chdir by a thread that shares the record (CLONE_FS) between the
+ * start of such a walk and its end send the walk again, under the big lock
+ * (`shared_row`), as Linux's walk restarts when `fs->seq` or the mount
+ * sequence moved (fs/namei.c `try_to_unlazy` in 6.12). A root of another
+ * type, `magic`, has no such rows. A failure undoes what the rows made
+ * (`shared_undo`).
+ */
+static void shared_rows(unsigned magic)
+{
+    if (magic != STATFS_MAGIC_EXT2) {
+        return;
+    }
+    fail_undo = shared_undo;
+    if (syscall2(SYS_MKDIR, (long)"/vp/s", 0755) != 0 ||
+        syscall2(SYS_MKDIR, (long)"/vp/s/a", 0755) != 0 ||
+        syscall2(SYS_MKDIR, (long)"/vp/s/b", 0755) != 0) {
+        fail("the files of the shared-record rows");
+    }
+    shared_file("/vp/s/a/f", "aa", 2);
+    shared_file("/vp/s/b/f", "bbb", 3);
+    gate_wfd = syscall3(SYS_OPEN, (long)WALK_GATE, O_WRONLY, 0);
+    gate_rfd = syscall3(SYS_OPEN, (long)WALK_GATE, O_RDONLY, 0);
+    if (gate_wfd < 0 || gate_rfd < 0) {
+        fail("read the walk gate");
+    }
+    shared_root = syscall3(SYS_OPEN, (long)"/", O_RDONLY | O_DIRECTORY, 0);
+    if (shared_root < 0 || syscall1(SYS_CHDIR, (long)"/vp/s/a") != 0) {
+        fail("the files of the shared-record rows");
+    }
+    stat_relative(2);
+    shared_row(0);
+    shared_row(1);
+    syscall1(SYS_CLOSE, shared_root);
+    syscall1(SYS_CLOSE, gate_wfd);
+    syscall1(SYS_CLOSE, gate_rfd);
+    shared_root = gate_wfd = gate_rfd = -1;
+    if (syscall1(SYS_CHDIR, (long)"/") != 0 || syscall1(SYS_UNLINK, (long)"/vp/s/a/f") != 0 ||
+        syscall1(SYS_UNLINK, (long)"/vp/s/b/f") != 0 || syscall1(SYS_RMDIR, (long)"/vp/s/a") != 0 ||
+        syscall1(SYS_RMDIR, (long)"/vp/s/b") != 0 || syscall1(SYS_RMDIR, (long)"/vp/s") != 0) {
+        fail("remove the files of the shared-record rows");
+    }
+    fail_undo = 0;
+}
+
+/** The rows of walks without the big lock on an ext2 root, the root `magic`
+ * names: its holds (`cwd_unlocked_rows`) and the changes that send it again
+ * (`shared_rows`). */
+static void unlocked_rows(unsigned magic)
+{
+    cwd_unlocked_rows(magic);
+    shared_rows(magic);
+}
 
 /** stat(2) of `path` into `stbuf`: 0, or a negated errno. */
 static int xstat(const char *path)
@@ -534,8 +949,9 @@ PROBE_SP_ENTRY;
  * Make /vp/d/f and run the rows in order, failing at the first with its
  * name: what a path answers, open and openat, the description across unlink
  * and rename, offsets and sizes, a relocated file, directories, attributes,
- * the hard link and the blocks, statfs and the working directory; then
- * remove what it made. A relocated file keeps every description: a second
+ * the hard link and the blocks, statfs and the working directory, with, on
+ * an ext2 root, the big lock a name relative to it takes; then remove what
+ * it made. A relocated file keeps every description: a second
  * description on a file that grows past a neighbour made right after it,
  * so that it cannot grow in place, reads the grown size and the moved bytes.
  */
@@ -802,6 +1218,7 @@ void probe_main(unsigned long *sp)
     if (syscall1(SYS_CHDIR, (long)"/") != 0) {
         fail("chdir back to the root");
     }
+    unlocked_rows(magic);
 
     if (syscall1(SYS_SYNC, 0) != 0) {
         fail("sync");

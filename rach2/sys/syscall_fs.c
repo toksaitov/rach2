@@ -59,6 +59,7 @@
 #include "fs/sysfs.h"
 #include "fs/vfs.h"
 #include "fs/name.h"
+#include "fs/walkseq.h"
 #include "block/usbdisk.h"
 #include "fs/procfs.h"
 #include "fs/tmpfs.h"
@@ -2741,6 +2742,40 @@ static void path_drop_dot(char *path, int end)
 }
 
 /**
+ * Join the relative path in `pathbuf`, `len` bytes in a page of `size`, to
+ * the directory the descriptor `dirfd` is open on, for `copy_path_at`: the
+ * new length, or a negative errno, -EBADF for a descriptor that is not
+ * open, -ENOMEM with no path page, or `fd_dir_path`'s or `path_prepend`'s.
+ * `*outside` says whether the directory is outside the process's root. The
+ * page keeps the directory as the walk's start (`path_buf_set_dir`).
+ */
+static int join_fd_dir(char *pathbuf, uint32_t size, int len, int dirfd, int *outside)
+{
+    fd_entry_t *entry = fd_get(current_proc->fds, dirfd);
+    char *dirpath;
+    int r;
+
+    if (!entry) {
+        return -EBADF;
+    }
+    dirpath = path_buf_get();
+    if (!dirpath) {
+        return -ENOMEM;
+    }
+    r = fd_dir_path(entry, dirpath, VFS_PATH_MAX, outside);
+    if (r == 0 && entry->type == FD_TYPE_SYNTH_DIR && entry->ofd) {
+        path_buf_set_dir(pathbuf, entry->ofd->synth_mnt, entry->ofd->synth_node, dirpath);
+    } else if (r == 0 && entry->ofd && entry->ofd->vmnt) {
+        path_buf_set_dir(pathbuf, entry->ofd->vmnt, entry->ofd->vnode, dirpath);
+    }
+    if (r == 0) {
+        r = path_prepend(pathbuf, size, (uint32_t)len, dirpath);
+    }
+    path_buf_put(dirpath);
+    return r;
+}
+
+/**
  * Copy a user path into `pathbuf` as an absolute, canonical path, a
  * relative one joined to the directory `dirfd` is open on, or to the working
  * directory for `AT_FDCWD`, and say in `*dir`, when `dir` is not NULL, how
@@ -2748,9 +2783,14 @@ static void path_drop_dot(char *path, int end)
  * the canonical path no longer shows, or 0; a last "." is then put back
  * (`path_put_dot`).
  *
- * The join is what lets the resolver, which walks from the root, walk the
- * right tree. `size` is at most `VFS_PATH_MAX`: the path the caller gives may
- * be that long with its terminator, and so may the joined one. Returns the
+ * The directory a relative path names is kept in the path page as the
+ * walk's start (`path_buf_set_dir`), as Linux walks from the descriptor's
+ * own mount and directory or the working directory's (fs/namei.c
+ * `path_init` in 6.12), so that a mount made since over the directory or
+ * over one above it is not entered, and another namespace's directory is
+ * walked in its own tree; the joined path is the name the calls report.
+ * `size` is at most `VFS_PATH_MAX`: the path the caller gives may be that
+ * long with its terminator, and so may the joined one. Returns the
  * length, or a negative errno: -EFAULT for a pointer outside the caller's
  * memory, -ENOENT for the empty path, which names no file (a call that takes
  * AT_EMPTY_PATH looks for it before copying), -ENAMETOOLONG for either path
@@ -2758,6 +2798,10 @@ static void path_drop_dot(char *path, int end)
  * one does not read `dirfd`, -EBADF for a descriptor that is not open,
  * -ENOTDIR for one that is not a directory, -ENOMEM when the heap has no
  * path page, or another error of `fd_dir_path`.
+ *
+ * A removed working directory is not kept for a path that begins with `..`,
+ * whose parents are taken off its path instead (`removed_cwd_parents`),
+ * since a removed directory has no `..` to look up.
  *
  * A relative path joined to a directory outside the process's root, which
  * a descriptor opened before a chroot or a pivot_root may be on, and so the
@@ -2770,9 +2814,7 @@ static void path_drop_dot(char *path, int end)
  */
 static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __user *upath, int *dir)
 {
-    fd_entry_t *entry;
-    char *dirpath;
-    int len, r = 0, outside = 0, task = 0;
+    int len, r = 0, outside = 0;
 
     len = strncpy_from_user(pathbuf, upath, size);
     if (len < 0) {
@@ -2785,38 +2827,23 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
         *dir = path_names_dir(pathbuf, len);
     }
     if (pathbuf[0] != '/' && dirfd == AT_FDCWD) {
-        int dotdot = pathbuf[0] == '.' && pathbuf[1] == '.';
+        int removed = pathbuf[0] == '.' && pathbuf[1] == '.' && cwd_removed();
 
+        if (!removed) {
+            path_buf_set_cwd(pathbuf);
+        }
         outside = cwd_outside(proc_cwd(current_proc));
-        task = path_buf_set_dir(pathbuf, current_proc->fs->cwd_mnt, current_proc->fs->cwd_node,
-                                proc_cwd(current_proc));
         r = path_prepend(pathbuf, size, (uint32_t)len, proc_cwd(current_proc));
-        if (r >= 0 && !task && dotdot && cwd_removed()) {
+        if (r >= 0 && removed) {
             removed_cwd_parents(pathbuf, (uint32_t)(r - len - 1));
         }
     } else if (pathbuf[0] != '/') {
-        entry = fd_get(current_proc->fds, dirfd);
-        if (!entry) {
-            return -EBADF;
-        }
-        dirpath = path_buf_get();
-        if (!dirpath) {
-            return -ENOMEM;
-        }
-        r = fd_dir_path(entry, dirpath, VFS_PATH_MAX, &outside);
-        if (r == 0 && entry->type == FD_TYPE_SYNTH_DIR && entry->ofd) {
-            task =
-                path_buf_set_dir(pathbuf, entry->ofd->synth_mnt, entry->ofd->synth_node, dirpath);
-        }
-        if (r == 0) {
-            r = path_prepend(pathbuf, size, (uint32_t)len, dirpath);
-        }
-        path_buf_put(dirpath);
+        r = join_fd_dir(pathbuf, size, len, dirfd, &outside);
     }
     if (r < 0) {
         return r;
     }
-    len = task ? r : canonicalize_abs(pathbuf);
+    len = canonicalize_abs(pathbuf);
     if (outside) {
         if ((uint32_t)len + 4 > size) {
             return -ENAMETOOLONG;
@@ -2825,7 +2852,7 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
         pathbuf[1] = '/';
         len += 2;
     }
-    return (!task && dir && *dir == PATH_END_DOT) ? path_put_dot(pathbuf, len) : len;
+    return (dir && *dir == PATH_END_DOT) ? path_put_dot(pathbuf, len) : len;
 }
 
 /**
@@ -2862,35 +2889,50 @@ static int path_from_user_dir(int dirfd, const char __user *upath, char **out, i
  * Linux's do_sys_openat2 returns the one it installs (fs/open.c:1419-1430). */
 #define CALL_LOCKED (-4095 - 1)
 
+/* A path for a call without the big lock (`path_from_user_unlocked`): the
+ * walk sequence read before anything was taken, and for a name relative to
+ * the working directory that directory, entered and held, and the offset of
+ * the name in the joined path, which the call reports; 0 and NULL for an
+ * absolute path. */
+struct unlocked_path {
+    uint64_t seq;
+    struct vfs_ref start;
+    uint32_t rel;
+};
+
 /**
  * The path a caller named, as `path_from_user_dir` makes it, for a call
  * without the big lock: an absolute path, or one relative to the working
- * directory, whose path is copied under its `fs_struct`'s lock
- * (`proc_cwd_read`). 0 with the page in `*out`; a negative errno of
- * `copy_path_at`'s; or CALL_LOCKED with nothing taken, for a path relative
- * to a descriptor, whose path the type gives, one that begins with "..",
- * which a removed working directory answers, or a working directory
- * outside the process's root.
+ * directory, whose path and pair are read together under its `fs_struct`'s
+ * lock (`vfs_cwd_take`) once the walk sequence is read with no change under
+ * way, into `*up`. 0 with the page in `*out`; a negative errno of
+ * `copy_path_at`'s; or CALL_LOCKED with nothing taken, for a change under
+ * way, a path relative to a descriptor, one that begins with "..", which a
+ * removed working directory answers, or a working directory outside the
+ * process's root or on a type the cached walk does not stand on.
  */
-static int path_from_user_unlocked(int dirfd, const char __user *upath, char **out, int *dir)
+static int path_from_user_unlocked(int dirfd, const char __user *upath, char **out, int *dir,
+                                   struct unlocked_path *up)
 {
     char *buf = path_buf_get(), *cwd = NULL;
-    int len, locked = 0;
+    int len, locked;
 
+    up->start.mnt = NULL;
+    up->start.node = NULL;
+    up->rel = 0;
     if (!buf) {
         return -ENOMEM;
     }
-    len = strncpy_from_user(buf, upath, VFS_PATH_MAX);
-    if (len >= 0 && dir) {
+    locked = !vfs_seq_read(&up->seq);
+    len = locked ? 0 : strncpy_from_user(buf, upath, VFS_PATH_MAX);
+    if (len >= 0 && dir && !locked) {
         *dir = path_names_dir(buf, len);
     }
     if (len > 0 && buf[0] != '/') {
         cwd = dirfd == AT_FDCWD && !(buf[0] == '.' && buf[1] == '.') ? path_buf_get() : NULL;
-        if (cwd) {
-            locked = proc_cwd_read(current_proc, cwd);
-        }
-        locked = locked || !cwd || cwd_outside(cwd);
+        locked = !cwd || vfs_cwd_take(cwd, &up->start) != 0 || cwd_outside(cwd);
         if (!locked) {
+            up->rel = cwd[1] != '\0' ? (uint32_t)k_strlen(cwd) + 1 : 1;
             len = path_prepend(buf, VFS_PATH_MAX, (uint32_t)len, cwd);
         }
         path_buf_put(cwd);
@@ -2902,11 +2944,47 @@ static int path_from_user_unlocked(int dirfd, const char __user *upath, char **o
         }
     }
     if (len <= 0 || locked) {
+        vfs_cached_release(&up->start);
         path_buf_put(buf);
         return locked ? CALL_LOCKED : len == 0 ? -ENOENT : len;
     }
     *out = buf;
     return 0;
+}
+
+/** Give back what `path_from_user_unlocked` took, for a call that goes no
+ * further without the big lock. */
+static void unlocked_path_drop(char *path, struct unlocked_path *up)
+{
+    vfs_cached_release(&up->start);
+    path_buf_put(path);
+}
+
+/**
+ * `vfs_resolve_cached` of `path`, which `path_from_user_unlocked` made with
+ * `*up`: an absolute path from the caller's root, and a relative one's name
+ * from the working directory's pair, which this gives back. Its answer, or
+ * VFS_CACHED_MISS with nothing held when anything changed what a path names
+ * since the walk sequence was read, a mount, a rename, a chroot or a chdir of
+ * a thread that shares the caller's record among them. The walk gate's
+ * WALK_GATE_UNLOCKED comes before the walk and WALK_GATE_MISS after a miss.
+ */
+static int resolve_unlocked(const char *path, struct unlocked_path *up, int flags,
+                            struct vfs_ref *out, struct vfs_name **entry)
+{
+    const char *walk = path;
+    int rc;
+
+    if (up->start.mnt) {
+        walk = up->rel < (uint32_t)k_strlen(path) ? path + up->rel : ".";
+    }
+    walk_gate(WALK_GATE_UNLOCKED);
+    rc = vfs_resolve_cached(up->start.mnt ? &up->start : NULL, up->seq, walk, flags, out, entry);
+    vfs_cached_release(&up->start);
+    if (rc == VFS_CACHED_MISS) {
+        walk_gate(WALK_GATE_MISS);
+    }
+    return rc;
 }
 
 /** `path_from_user_dir` for a caller that does not ask how the path ends. */
@@ -4425,13 +4503,76 @@ static int open_device_name(const char *name, int flags, int *result)
 }
 
 /**
+ * Write into `through` the absolute path a retry of `open_link_target` walks
+ * for the link at `name`, whose target `target` is `tlen` bytes: the target,
+ * after the link's directory for a relative one, which the page keeps as the
+ * walk's start where `path_buf_set_dir` would. `tlen`, or ENAMETOOLONG, or
+ * the error of the walk to the link's directory.
+ */
+static int link_through(const char *name, const char *target, uint32_t tlen, char *through,
+                        uint32_t through_size)
+{
+    struct vfs_ref dir;
+    char leaf[VFS_NAME_MAX + 1];
+    uint32_t dlen = (uint32_t)k_strlen(name), cut;
+    int kept = 0;
+    char was;
+
+    if (target[0] == '/') {
+        k_memcpy(through, target, tlen + 1);
+        path_buf_set_dir(through, NULL, NULL, NULL);
+        return (int)tlen;
+    }
+    while (dlen > 0 && name[dlen - 1] != '/') {
+        dlen--;
+    }
+    if (1 + dlen + tlen + 1 > through_size) {
+        return -ENAMETOOLONG;
+    }
+    dir.mnt = NULL;
+    dir.node = NULL;
+    if (current_proc->paths_on_mounts) {
+        kept = vfs_resolve(0, name, VFS_WALK_PARENT | VFS_WALK_NOFOLLOW, &dir, leaf, sizeof(leaf));
+        if (kept < 0) {
+            return kept;
+        }
+        kept = 1;
+    }
+    k_memmove(through + 1, name, dlen);
+    through[0] = '/';
+    k_memcpy(through + 1 + dlen, target, tlen + 1);
+    /* the directory's path alone, "/" for the start's own */
+    cut = dlen > 0 ? dlen : 1;
+    was = through[cut];
+    through[cut] = '\0';
+    path_buf_set_dir(through, dir.mnt, dir.node, kept ? through : NULL);
+    through[cut] = was;
+    if (kept) {
+        vfs_ref_release(&dir);
+    }
+    return (int)tlen;
+}
+
+/**
  * The target of a symbolic link at `name` whose own target is missing, for
- * O_CREAT to create: as on Linux, the target is what is created. Returns 1
- * with the target's path in `through`, the link's directory in front of a
- * relative one; 0 when `name` is not a link; or a negative errno: ELOOP once
- * `followed` passes the resolver's bound of forty links, ENOENT for an empty
- * target, which names nothing, as the resolver answers, ENOMEM, or
- * ENAMETOOLONG. `name` may be in `through`, from the link before.
+ * O_CREAT to create: as on Linux, the target is what is created. `name` is
+ * a path as `do_open` takes it, without its first slash. Returns 1 with the
+ * target's absolute path in `through`, the link's directory in front of a
+ * relative one, for the retry to take from `through + 1`; 0 when `name` is
+ * not a link; or a negative errno: ELOOP once `followed` passes the
+ * resolver's bound of forty links, ENOENT for an empty target, which names
+ * nothing, as the resolver answers, ENOMEM, ENAMETOOLONG, or the error of
+ * the walk to the link's directory. `name` may be `through + 1`, from the
+ * link before.
+ *
+ * A relative target is walked from the link's directory: `through` keeps
+ * that directory as the walk's start when the caller's namespace does not
+ * see its mount, or its path no longer leads there (`path_buf_set_dir`), as
+ * the walk to the link started from a descriptor's or working directory's
+ * pair, so that the retry does not walk the link's directory's path in the
+ * caller's own tree; the start's own directory, for a link right below it,
+ * among them. A walk to the directory that fails fails the open, which
+ * would otherwise walk that path. An absolute target keeps no start.
  */
 static int open_link_target(const char *name, char *through, uint32_t through_size, int *followed)
 {
@@ -4460,24 +4601,16 @@ static int open_link_target(const char *name, char *through, uint32_t through_si
     vfs_ref_release(&linkref);
     if (tlen == 0) {
         tlen = -ENOENT;
+    } else if (tlen >= VFS_PATH_MAX) {
+        tlen = -ENAMETOOLONG;
+    } else if (tlen > 0) {
+        target[tlen] = '\0'; /* `readlink` gives the text without one */
     }
     if (tlen >= 0 && ++*followed > VFS_LINK_MAX) {
         tlen = -ELOOP;
     }
-    if (tlen >= 0 && target[0] != '/') {
-        uint32_t dlen = (uint32_t)k_strlen(name);
-
-        while (dlen > 0 && name[dlen - 1] != '/') {
-            dlen--;
-        }
-        if (dlen + (uint32_t)tlen + 1 > through_size) {
-            tlen = -ENAMETOOLONG;
-        } else {
-            k_memmove(through, name, dlen);
-            k_memcpy(through + dlen, target, (uint32_t)tlen + 1);
-        }
-    } else if (tlen >= 0) {
-        k_memcpy(through, target + 1, (uint32_t)tlen);
+    if (tlen >= 0) {
+        tlen = link_through(name, target, (uint32_t)tlen, through, through_size);
     }
     path_buf_put(target);
     return tlen < 0 ? tlen : 1;
@@ -4500,16 +4633,17 @@ static uint32_t mode_strip_umask(struct vfs_mount *mnt, uint32_t mode)
  * caller holds: a regular file for a `mode` with no type bits or S_IFREG's,
  * and a FIFO, a socket or a device node with the number `rdev` for theirs.
  * The permission bits are masked by the umask (`mode_strip_umask`) and the
- * owner is the caller;
- * the KRFFS root takes both from the stamp after the node is made. Returns
+ * owner is the caller; the KRFFS root, through any mount of it, a bind or a
+ * mount namespace's copy among them, takes both from the stamp after the
+ * node is made, since its type ignores the mode it is given. Returns
  * 0 with the new node held in `*made`, or the type's errno.
  */
 static int node_make(const struct vfs_ref *parent, const char *leaf, uint32_t mode, uint32_t rdev,
                      void **made)
 {
     uint32_t type = mode & S_IFMT;
-    uint32_t perm =
-        mnt_is_root(parent->mnt) ? (mode & 07777u) : mode_strip_umask(parent->mnt, mode);
+    int root = mnt_is_root(vfs_mount_base(parent->mnt));
+    uint32_t perm = root ? (mode & 07777u) : mode_strip_umask(parent->mnt, mode);
     int rc;
 
     if (type == 0 || type == S_IFREG) {
@@ -4517,7 +4651,7 @@ static int node_make(const struct vfs_ref *parent, const char *leaf, uint32_t mo
     } else {
         rc = vfs_mknod(parent->mnt, parent->node, leaf, type | perm, rdev, made);
     }
-    if (rc == 0 && mnt_is_root(parent->mnt)) {
+    if (rc == 0 && root) {
         rc = krffs_stamp_new_node((krffs_node_t *)*made, (krffs_node_t *)parent->node, mode);
     }
     return rc;
@@ -5345,7 +5479,7 @@ again:
             goto out;
         }
         if (rc > 0) {
-            name = through;
+            name = through + 1;
             goto again;
         }
         rc = open_create(name, flags, mode & 07777u, &ref, &entry);
@@ -5468,9 +5602,9 @@ static int mount_privileged(const char *type)
  * `data` (`vfs_remount`). A mount made read-only must have no descriptor
  * open for writing through what the change makes read-only, -EBUSY, as on
  * Linux. A caller without privilege, which `sys_mount` let through as
- * privileged over its mount namespace, may change only a bind that no other
- * live namespace sees, and may not clear VFS_MS_LOCKED there, -EPERM,
- * which `vfs_remount_bind` judges again after its wait for another remount.
+ * privileged over its mount namespace, may change only one mount, with
+ * MS_BIND, and may not clear VFS_MS_LOCKED there, -EPERM, which
+ * `vfs_remount_bind` judges again after its wait for another remount.
  * With `keep_atime`, for a call that named no atime flag, the mount keeps
  * its noatime, nodiratime and relatime, as Linux's `path_mount` keeps them
  * for a remount.
@@ -5495,8 +5629,7 @@ static int32_t remount_at(const char *path, uint32_t flags, int bind, const char
     }
     if (ref.node != m->root || !vfs_mount_seen(m)) {
         rc = -EINVAL;
-    } else if (!privileged &&
-               (!bind || vfs_mount_shared(m) || (vfs_mount_flags(m) & VFS_MS_LOCKED & ~flags))) {
+    } else if (!privileged && (!bind || (vfs_mount_flags(m) & VFS_MS_LOCKED & ~flags))) {
         rc = -EPERM;
     } else {
         rc = bind ? vfs_remount_bind(m, flags, privileged) : vfs_remount(m, flags, data);
@@ -5738,6 +5871,7 @@ static void pivot_one(process_t *q, const struct vfs_ref *nref, const char *oldr
             k_memmove(buf + 1, buf, cl + 1);
         }
     }
+    vfs_seq_begin();
     if (home || proc_cwd_set(q, buf) != 0) {
         home = 1;
         (void)proc_cwd_set(q, "/");
@@ -5746,6 +5880,7 @@ static void pivot_one(process_t *q, const struct vfs_ref *nref, const char *oldr
     if (home) {
         vfs_cwd_set(q, nref->mnt, nref->node);
     }
+    vfs_seq_end();
 }
 
 /** The first process of the mount namespace `ns` whose root is still the
@@ -6107,12 +6242,13 @@ static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
     const char *name;
     char *path;
     int end = 0, fd;
+    struct unlocked_path up;
     int32_t rc;
 
     if (flags & OPEN_LOCKED_FLAGS) {
         return CALL_LOCKED;
     }
-    rc = path_from_user_unlocked(dirfd, upath, &path, &end);
+    rc = path_from_user_unlocked(dirfd, upath, &path, &end, &up);
     if (rc != 0) {
         return rc;
     }
@@ -6122,16 +6258,16 @@ static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
     name = path_name(path);
     if (device_name(name, "fb") || device_name(name, "mouse") || path_starts(name, "proc/") ||
         path_starts(name, "dev/")) {
-        path_buf_put(path);
+        unlocked_path_drop(path, &up);
         return CALL_LOCKED;
     }
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
-        path_buf_put(path);
+        unlocked_path_drop(path, &up);
         return fd;
     }
-    rc = vfs_resolve_cached(path, VFS_WALK_LOCK | ((flags & O_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0),
-                            &ref, &entry);
+    rc = resolve_unlocked(path, &up, VFS_WALK_LOCK | ((flags & O_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0),
+                          &ref, &entry);
     if (rc != 0) {
         fd_free(current_proc->fds, fd);
         path_buf_put(path);
@@ -6349,14 +6485,15 @@ static int32_t openat2_dir(int dirfd, char *out, int *outside)
 
     *outside = 0;
     if (dirfd == AT_FDCWD) {
-        const char *cwd = proc_cwd(current_proc);
+        const char *cwd;
 
+        path_buf_set_cwd(out);
+        cwd = proc_cwd(current_proc);
         if (k_strlen(cwd) + 1 > VFS_PATH_MAX) {
             return -ENAMETOOLONG;
         }
         *outside = cwd_outside(cwd);
         k_memcpy(out, cwd, k_strlen(cwd) + 1);
-        path_buf_set_dir(out, current_proc->fs->cwd_mnt, current_proc->fs->cwd_node, out);
     } else {
         entry = fd_get(current_proc->fds, dirfd);
         if (!entry) {
@@ -6368,6 +6505,8 @@ static int32_t openat2_dir(int dirfd, char *out, int *outside)
         }
         if (entry->type == FD_TYPE_SYNTH_DIR && entry->ofd) {
             path_buf_set_dir(out, entry->ofd->synth_mnt, entry->ofd->synth_node, out);
+        } else if (entry->ofd && entry->ofd->vmnt) {
+            path_buf_set_dir(out, entry->ofd->vmnt, entry->ofd->vnode, out);
         }
     }
     len = canonicalize_abs(out);
@@ -6420,21 +6559,23 @@ static int32_t openat2_real(char *real, uint32_t len, int rc, const char *leaf, 
  * `anchor`: the directory `dirfd` names for a relative path or under
  * IN_ROOT, `*outside` set as `openat2_dir` sets it, and the caller's root
  * for any other absolute path. An absolute path under BENEATH is -EXDEV
- * before `dirfd` is read, as Linux's path_init answers it. The scope's
- * sequence is read before the anchor's walk, which may sleep, so that a
- * rename during that walk or the scoped walk after it trips the replay.
+ * before `dirfd` is read, as Linux's path_init answers it. The walk
+ * sequence is read once no change is under way (`vfs_seq_wait`), before the
+ * anchor's walk, which may sleep, so that a change during that walk or the
+ * scoped walk after it trips the replay.
  * 0 with the anchor held, or an error.
  */
 static int32_t openat2_anchor(int dirfd, const char *name, uint32_t resolve,
                               struct vfs_scope *scope, char *anchor, int *outside)
 {
-    uint32_t seq = vfs_tree_seq();
+    uint64_t seq;
     char *dir;
     int32_t rc;
 
     if (name[0] == '/' && (resolve & VFS_RESOLVE_BENEATH)) {
         return -EXDEV;
     }
+    vfs_seq_wait(&seq);
     dir = path_buf_get();
     rc = dir ? 0 : -ENOMEM;
     if (rc == 0 && (name[0] != '/' || (resolve & OPENAT2_RESOLVE_ROOT))) {
@@ -6495,7 +6636,7 @@ static int openat2_magic(const struct vpath *vp, struct vfs_mount *mnt, uint32_t
 
 /* What the checked walk keeps for the ordinary open's replay. */
 struct openat2_checked {
-    uint32_t seq;
+    uint64_t seq;
     struct vfs_ref xdev; /* held mount root under NO_XDEV, otherwise NULL */
 };
 
@@ -6503,7 +6644,7 @@ struct openat2_checked {
  * The walk of an openat2 path `name` under `resolve` (`vfs_resolve_scoped`),
  * from the directory `dirfd` names: the path it reaches, from the caller's
  * root, into `real`, with the last name it may create after it, and in
- * `checked->seq` the tree's sequence from before the walk began, which the
+ * `checked->seq` the walk sequence from before the walk began, which the
  * replay compares. `walk` has the walk's
  * VFS_WALK_ flags. A link of /proc to an object at the end of the path,
  * /proc/PID/fd/N or a namespace's, which the system call layer follows
@@ -9323,22 +9464,24 @@ static int32_t synth_dev_remove(const struct vfs_ref *parent, const char *leaf, 
 
 /**
  * Make `path`, the canonical path of the directory at (`mnt`, `node`), the
- * working directory and hold its mount. The permanent /dev and a directory
- * passed without a mount take no hold. The path and hold are stored together
- * with no intervening operation
- * that sleeps, and the old hold is let go after both, so a thread that shares
- * them (CLONE_FS) finds the path and the hold of one directory. Returns 0, or
- * -ENOMEM with nothing changed.
+ * working directory and hold it and its mount; a directory passed without a
+ * mount takes no hold. The path and the pair are stored inside one change of
+ * the walk sequence (`vfs_seq_begin`), so a walk without the big lock that
+ * read either before the change goes again, and the old hold is let go after
+ * both, so a thread that shares them (CLONE_FS) finds the path and the hold
+ * of one directory. Returns 0, or -ENOMEM with nothing changed.
  */
 static int32_t cwd_enter(const char *path, struct vfs_mount *mnt, void *node)
 {
-    int32_t rc = proc_cwd_set(current_proc, path);
+    int32_t rc;
 
-    if (rc != 0) {
-        return rc;
+    vfs_seq_begin();
+    rc = proc_cwd_set(current_proc, path);
+    if (rc == 0) {
+        vfs_cwd_set(current_proc, mnt, node);
     }
-    vfs_cwd_set(current_proc, mnt, node);
-    return 0;
+    vfs_seq_end();
+    return rc;
 }
 
 /** Mark the spelling of a working directory outside the process root. */
@@ -9420,10 +9563,7 @@ static int32_t chdir_mounted(const struct vfs_ref *ref, char *path, int via_fd)
 static int32_t synth_chdir_path(const struct vpath *vp, char *path)
 {
     int id = -1;
-    int at = vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent
-             : vp->kind == VNODE_DEV_SUBDIR ? vp->devdir
-             : vp->kind == VNODE_DEV_MADE   ? vp->syskey
-                                            : 0;
+    int at = 0;
 
     if (synth_dir_of_proc(vp->kind)) {
         id = procfs_resolve_id(vp);
@@ -9446,13 +9586,14 @@ static int32_t synth_chdir_path(const struct vpath *vp, char *path)
             return rc;
         }
     }
-    if (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) {
-        if (SYSFS_KEYED(vp->sysent) && !sysfs_device_exists(vp->sysent, vp->syskey)) {
-            return -ENOENT;
-        }
-        synth_sys_path(vp->sysent, vp->syskey, path, VFS_PATH_MAX);
-    } else {
+    if ((vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) && SYSFS_KEYED(vp->sysent) &&
+        !sysfs_device_exists(vp->sysent, vp->syskey)) {
+        return -ENOENT;
+    }
+    if (synth_dir_of_proc(vp->kind)) {
         synth_dir_path(vp->kind, at, vp->tid, path, VFS_PATH_MAX);
+    } else {
+        synth_vpath_dir(vp, path, VFS_PATH_MAX);
     }
     return 0;
 }
@@ -9471,7 +9612,7 @@ static int chdir_synth(const struct vfs_ref *ref, const struct vpath *vp, char *
     }
 
     if (rc != 0 || !vp->pidns_ino) {
-        return rc != 0 ? rc : cwd_enter(path, NULL, NULL);
+        return rc != 0 ? rc : cwd_enter(path, ref->mnt, ref->node);
     }
     rc = procfs_dir_name(ref->mnt, path, VFS_PATH_MAX);
     if (rc == 0) {
@@ -9701,7 +9842,9 @@ long sys_fchdir(isr_params_t *params)
             rc = procfs_dir_coords(sd, &pid, &tid);
             if (rc == 0) {
                 synth_dir_path(sd->kind, pid, tid, path, VFS_PATH_MAX);
-                rc = cwd_enter(path, NULL, NULL);
+                rc = entry->ofd && entry->ofd->synth_mnt
+                         ? cwd_enter(path, entry->ofd->synth_mnt, entry->ofd->synth_node)
+                         : cwd_enter(path, NULL, NULL);
             }
         }
         path_buf_put(path);
@@ -9859,6 +10002,7 @@ static int32_t root_enter(const struct vfs_ref *ref, char *buf)
         rc = path_strip(buf, root);
     }
     path_buf_put(root);
+    vfs_seq_begin();
     if (rc == 0) {
         rc = proc_cwd_set(current_proc, buf);
     }
@@ -9869,6 +10013,7 @@ static int32_t root_enter(const struct vfs_ref *ref, char *buf)
     if (rc != 0) {
         vfs_cwd_set(current_proc, ref->mnt, ref->node);
     }
+    vfs_seq_end();
     return 0;
 }
 
@@ -11027,6 +11172,7 @@ static int32_t resolve_cwd(int walk, struct vfs_ref *ref)
     path = path_buf_get();
     if (!path)
         return -ENOMEM;
+    path_buf_set_cwd(path);
     k_strncpy(path, proc_cwd(current_proc), VFS_PATH_MAX);
     rc = vfs_resolve(NULL, path, walk, ref, NULL, 0);
     path_buf_put(path);
@@ -11634,20 +11780,21 @@ static int32_t readlink_unlocked(int dirfd, const char __user *upath, char __use
     struct vfs_ref ref;
     char *path, *link;
     int dir = 0, n;
+    struct unlocked_path up;
     int32_t rc;
 
     if (!ubuf || bufsiz == 0) {
         return -EINVAL;
     }
-    rc = path_from_user_unlocked(dirfd, upath, &path, &dir);
+    rc = path_from_user_unlocked(dirfd, upath, &path, &dir, &up);
     if (rc != 0) {
         return rc;
     }
     if (dir) {
-        path_buf_put(path);
+        unlocked_path_drop(path, &up);
         return CALL_LOCKED;
     }
-    rc = vfs_resolve_cached(path, VFS_WALK_NOFOLLOW, &ref, NULL);
+    rc = resolve_unlocked(path, &up, VFS_WALK_NOFOLLOW, &ref, NULL);
     path_buf_put(path);
     if (rc != 0) {
         return rc == VFS_CACHED_MISS ? CALL_LOCKED : rc;
@@ -11959,9 +12106,10 @@ long sys_lstat64(isr_params_t *params)
  * and for pipefs, sockfs, nsfs and the anonymous inode file system.
  * `f_files` and `f_ffree` are 0, which a reader takes as not counted, since
  * KRFFS keeps no count of inodes, and `f_namelen` is KRFFS's longest name
- * for all of them.
+ * for all of them. `f_flags` is `flags`, what `statfs_flags` gives for the
+ * mount the caller reached the node through, or 0 for none.
  */
-static int32_t statfs_fill(struct user_statfs __user *out, uint32_t magic)
+static int32_t statfs_fill(struct user_statfs __user *out, uint32_t magic, uint32_t flags)
 {
     struct user_statfs st;
     uint32_t total = krffs_total_bytes();
@@ -11980,6 +12128,7 @@ static int32_t statfs_fill(struct user_statfs __user *out, uint32_t magic)
     st.f_files = 0;
     st.f_ffree = 0;
     st.f_namelen = KRFFS_FILE_NAME_BUFFER_SIZE - 1;
+    st.f_flags = flags;
     for (i = 0; i < 4; i++) {
         st.f_spare[i] = 0;
     }
@@ -12099,7 +12248,7 @@ long ksys_statfs(const char __user *upath, struct user_statfs __user *out)
     {
         struct vfs_ref ref;
         const struct vpath *svp;
-        uint32_t magic = STATFS_MAGIC_KRFFS;
+        uint32_t magic = STATFS_MAGIC_KRFFS, flags;
         int rc = resolve_named(pathbuf, 0, dir, &ref);
 
         path_buf_put(pathbuf);
@@ -12115,8 +12264,9 @@ long ksys_statfs(const char __user *upath, struct user_statfs __user *out)
             vfs_ref_release(&ref);
             return statfs_fill_mount(out, m);
         }
+        flags = statfs_flags(ref.mnt);
         vfs_ref_release(&ref);
-        return statfs_fill(out, magic);
+        return statfs_fill(out, magic, flags);
     }
 }
 
@@ -12139,36 +12289,39 @@ long ksys_fstatfs(int fd, struct user_statfs __user *out)
             return statfs_fill_mount(out, ofd->vmnt);
         }
         if (e->type == FD_TYPE_PIPE && !(ofd && ofd->vmnt)) {
-            return statfs_fill(out, STATFS_MAGIC_PIPEFS);
+            return statfs_fill(out, STATFS_MAGIC_PIPEFS, 0);
         }
-        return statfs_fill(out, STATFS_MAGIC_KRFFS);
+        return statfs_fill(out, STATFS_MAGIC_KRFFS, statfs_flags(ofd ? ofd->vmnt : NULL));
     case FD_TYPE_PROC:
-        return statfs_fill(out, procfs_fd_is_sys(e) ? STATFS_MAGIC_SYSFS : STATFS_MAGIC_PROC);
+        return statfs_fill(out, procfs_fd_is_sys(e) ? STATFS_MAGIC_SYSFS : STATFS_MAGIC_PROC,
+                           statfs_flags(ofd ? ofd->synth_mnt : NULL));
     case FD_TYPE_SYNTH_DIR: {
         const struct synth_dir *sd = (const struct synth_dir *)e->priv;
 
-        return statfs_fill(out, sd ? statfs_magic_for_kind(sd->kind) : STATFS_MAGIC_DEVFS);
+        return statfs_fill(out, sd ? statfs_magic_for_kind(sd->kind) : STATFS_MAGIC_DEVFS,
+                           statfs_flags(ofd ? ofd->synth_mnt : NULL));
     }
     case FD_TYPE_SYNTH_PATH: {
         const struct vpath *vp = (const struct vpath *)e->priv;
 
-        return statfs_fill(out, vp ? statfs_magic_for_kind(vp->kind) : STATFS_MAGIC_PROC);
+        return statfs_fill(out, vp ? statfs_magic_for_kind(vp->kind) : STATFS_MAGIC_PROC,
+                           statfs_flags(ofd ? ofd->synth_mnt : NULL));
     }
     case FD_TYPE_SOCKET:
     case FD_TYPE_UNIX:
-        return statfs_fill(out, STATFS_MAGIC_SOCKFS);
+        return statfs_fill(out, STATFS_MAGIC_SOCKFS, 0);
     case FD_TYPE_ANON:
         if (mq_fd_statfs(e, &vs)) {
             return statfs_put(out, &vs, NULL);
         }
-        return statfs_fill(out, nsfs_ns(e) ? STATFS_MAGIC_NSFS : STATFS_MAGIC_ANON);
+        return statfs_fill(out, nsfs_ns(e) ? STATFS_MAGIC_NSFS : STATFS_MAGIC_ANON, 0);
     case FD_TYPE_CONSOLE:
     case FD_TYPE_FRAMEBUFFER:
     case FD_TYPE_MOUSE:
     case FD_TYPE_DEVICE:
     case FD_TYPE_PTM:
     case FD_TYPE_PTS:
-        return statfs_fill(out, STATFS_MAGIC_DEVFS);
+        return statfs_fill(out, STATFS_MAGIC_DEVFS, statfs_flags(ofd ? ofd->synth_mnt : NULL));
     case FD_TYPE_NONE:
     default:
         return -EBADF;
@@ -12888,6 +13041,7 @@ static int32_t stat_at_unlocked(int dirfd, const char __user *upath, int flags, 
     struct vfs_ref ref;
     char *pathbuf;
     int empty = 0, dir = 0;
+    struct unlocked_path up;
     int32_t rc;
 
     if (flags & AT_EMPTY_PATH) {
@@ -12907,12 +13061,12 @@ static int32_t stat_at_unlocked(int dirfd, const char __user *upath, int flags, 
     if (!upath) {
         return -EFAULT;
     }
-    rc = path_from_user_unlocked(dirfd, upath, &pathbuf, &dir);
+    rc = path_from_user_unlocked(dirfd, upath, &pathbuf, &dir, &up);
     if (rc != 0) {
         return rc;
     }
-    rc = vfs_resolve_cached(pathbuf, VFS_WALK_LOCK | (follow || dir ? 0 : VFS_WALK_NOFOLLOW), &ref,
-                            NULL);
+    rc = resolve_unlocked(pathbuf, &up, VFS_WALK_LOCK | (follow || dir ? 0 : VFS_WALK_NOFOLLOW),
+                          &ref, NULL);
     path_buf_put(pathbuf);
     if (rc != 0) {
         return rc == VFS_CACHED_MISS ? CALL_LOCKED : rc;
@@ -13664,19 +13818,20 @@ static int32_t access_unlocked(int dirfd, const char __user *upath, int mode, in
     struct vfs_stat st;
     char *path;
     int dir = 0;
+    struct unlocked_path up;
     int32_t rc;
 
     if (mode & ~(R_OK | W_OK | X_OK)) {
         return CALL_LOCKED;
     }
-    rc = path_from_user_unlocked(dirfd, upath, &path, &dir);
+    rc = path_from_user_unlocked(dirfd, upath, &path, &dir, &up);
     if (rc != 0) {
         return rc;
     }
-    rc = vfs_resolve_cached(path,
-                            (real ? VFS_WALK_REAL_IDS : 0) | VFS_WALK_LOCK |
-                                (follow || dir ? 0 : VFS_WALK_NOFOLLOW),
-                            &ref, NULL);
+    rc = resolve_unlocked(path, &up,
+                          (real ? VFS_WALK_REAL_IDS : 0) | VFS_WALK_LOCK |
+                              (follow || dir ? 0 : VFS_WALK_NOFOLLOW),
+                          &ref, NULL);
     path_buf_put(path);
     if (rc != 0) {
         return rc == VFS_CACHED_MISS ? CALL_LOCKED : rc;
@@ -19354,6 +19509,7 @@ int32_t fs_core_file(int signo, unsigned long limit)
         goto out;
     }
     k_memcpy(path, "core", 5);
+    path_buf_set_cwd(path);
     len = path_prepend(path, VFS_PATH_MAX, 4, proc_cwd(current_proc));
     if (len >= 0) {
         len = canonicalize_abs(path);
@@ -19405,7 +19561,10 @@ out:
  * (`synth_dev_make`). On a type that sets `file_locked` the walk holds
  * nothing, and the directory's own lock covers the creation alone, with the
  * permission and the mounts checked again under it (`dir_lock`), so a name
- * made meanwhile is the type's -EEXIST. Returns 0 or a negative errno.
+ * made meanwhile is the type's -EEXIST. The KRFFS root, through any mount
+ * of it, a bind or a mount namespace's copy among them, takes the new
+ * directory's owner, group and mode from the stamp after it is made
+ * (`krffs_stamp_new_node`). Returns 0 or a negative errno.
  */
 static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t mode,
                         const char *path)
@@ -19420,7 +19579,7 @@ static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t
     if (vfs_synth_vpath(parent->mnt, parent->node)) {
         return synth_dev_make(parent, leaf, mode & 07777u & ~current_proc->fs->umask, NULL);
     }
-    if (!mnt_is_root(parent->mnt)) {
+    if (!mnt_is_root(vfs_mount_base(parent->mnt))) {
         rc = cred_access_ref(parent, CRED_W, 0);
         if (rc == 0) {
             rc = dir_lock(parent, leaf, RECHECK_WRITE | RECHECK_NEW);
@@ -19672,9 +19831,11 @@ long sys_mknodat(isr_params_t *params)
 /**
  * Whether the directory `dir` of the KRFFS root on `mnt` is in use: a
  * description has it, an O_PATH descriptor's or one in flight on a socket
- * among them, or it is a process's working directory. A descriptor of the
- * root finds its directory by the node's place, which the allocator gives
- * the next node it makes once the directory is freed, so `rmdir` answers
+ * among them, it is a process's working directory, or a path page keeps it
+ * as a walk's start (`path_bufs_hold`), through any mount of the root, a
+ * bind or a mount namespace's copy among them. A descriptor of the root
+ * finds its directory by the node's place, which the allocator gives the
+ * next node it makes once the directory is freed, so `rmdir` answers
  * -EBUSY for a directory in use, as a KRFFS volume does (`kv_rmdir`); ext2
  * removes one and keeps its inode for the holders.
  */
@@ -19682,11 +19843,12 @@ static int root_dir_in_use(const struct vfs_mount *mnt, const krffs_node_t *dir)
 {
     process_t *pr;
 
-    if (fd_ofd_holders(mnt, dir, NULL) > 0) {
+    if (fd_ofd_holders(mnt, dir, NULL) > 0 || path_bufs_hold(mnt, dir)) {
         return 1;
     }
     for (pr = proc_list; pr; pr = pr->next) {
-        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {
+        if (pr->fs && pr->fs->cwd_mnt && vfs_mount_base(pr->fs->cwd_mnt) == vfs_mount_base(mnt) &&
+            pr->fs->cwd_node == dir) {
             return 1;
         }
     }
@@ -19744,12 +19906,12 @@ static int32_t rmdir_root_name(const struct vfs_ref *parent, const char *leaf)
  * system is mounted.
  *
  * The walk keeps the parent's namespace lock, where its type takes one,
- * until the directory is gone: on the KRFFS root the use `rmdir_root_name`
- * finds is right only under that lock. On a type that sets `file_locked`
- * the removal holds the parent's lock and then the victim's
- * (`vfs_child_lock`), under which it looks again for a mount on the victim,
- * which a mount places under the victim's lock too, and for a root there
- * (`dir_recheck`).
+ * until the directory is gone: on the KRFFS root, through any mount of it,
+ * the use `rmdir_root_name` finds is right only under that lock. On a type
+ * that sets `file_locked` the removal holds the parent's lock and then the
+ * victim's (`vfs_child_lock`), under which it looks again for a mount on
+ * the victim, which a mount places under the victim's lock too, and for a
+ * root there (`dir_recheck`).
  */
 static int32_t do_rmdir(const char *pathbuf)
 {
@@ -19774,7 +19936,7 @@ static int32_t do_rmdir(const char *pathbuf)
     } else if (vfs_leaf_mount(parent.mnt, parent.node, leaf) ||
                vfs_leaf_root(parent.mnt, parent.node, leaf)) {
         rc = -EBUSY;
-    } else if (mnt_is_root(parent.mnt)) {
+    } else if (mnt_is_root(vfs_mount_base(parent.mnt))) {
         rc = rmdir_root_name(&parent, leaf);
     } else {
         struct vfs_ref victim;
@@ -20235,7 +20397,7 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
                  : -EBUSY;
         goto out;
     }
-    vfs_tree_changed();
+    vfs_seq_begin();
     if (!mnt_is_root(vfs_mount_base(opar.mnt))) {
         vfs_name_lock_changes(opar.mnt);
         rc = rename_mounted_names(&opar, oleaf, &npar, nleaf, flags, slash);
@@ -20245,7 +20407,7 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
         rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);
         vfs_ns_unlock(opar.mnt);
     }
-    vfs_tree_changed();
+    vfs_seq_end();
 out:
     vfs_ref_release(&npar);
     vfs_ref_release(&opar);
@@ -21453,20 +21615,22 @@ static int synth_sysvipc_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype
 }
 
 /** The `n`th entry of /dev past "." and "..", as `synth_dirent_at` lists
- * it: the named mounts, `log`, the descriptors' links, the directories of
- * synthfs's table present now and the devices of devfs. */
+ * it: the named mounts on the caller's mount namespace's /dev, the system's
+ * or its copy, `log`, the descriptors' links, the directories of synthfs's
+ * table present now and the devices of devfs. */
 static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
 {
+    const struct vfs_mount *dev = vfs_mount_seen_as(vfs_mount_at(1), 0);
     const char *dn = NULL;
     uint32_t dino = 0;
     uint32_t dmode = 0;
     uint64_t mino = 0;
     int i, named = 0;
 
-    while (vfs_named_mount(vfs_mount_at(1), named, &dn, &mino)) {
+    while (dev && vfs_named_mount(dev, named, &dn, &mino)) {
         named++;
     }
-    if (n < named && vfs_named_mount(vfs_mount_at(1), n, &dn, &mino)) {
+    if (n < named && vfs_named_mount(dev, n, &dn, &mino)) {
         synth_name_put(name, dn);
         *ino = mino;
         *dtype = DT_DIR;
@@ -22134,6 +22298,7 @@ static int kernel_path_cwd(char *buf, const char *path, int *end)
     *end = path_names_dir(path, (int)len);
     k_memcpy(buf, path, len + 1u);
     if (buf[0] != '/') {
+        path_buf_set_cwd(buf);
         r = path_prepend(buf, VFS_PATH_MAX, len, proc_cwd(current_proc));
         if (r < 0) {
             return r;

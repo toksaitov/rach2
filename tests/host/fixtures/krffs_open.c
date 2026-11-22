@@ -18,6 +18,7 @@
 #include "fs/synthfs.h"
 #include "fs/procfs.h"
 #include "fs/name.h"
+#include "fs/walkseq.h"
 #include "proc/smp.h"
 #include "block/loop.h"
 #include "panic.h"
@@ -50,9 +51,9 @@ static int opened_fd, publication_seen, lock_waits, opening_flags, before_public
  * reads without the big lock, and whose links hold their targets when
  * `fast`, as ext2's fast links do. Its nodes are one table, each named in
  * its parent; `refs` counts the walk's holds, which every row gives back.
- * Reading the link `moving` moves the walker's root, as a chroot by a
- * thread that shares it (CLONE_FS) would during the walk, and reading
- * `renaming` counts a change of names, as a rename by another thread would.
+ * Reading the link `moving` moves the walk sequence, as a chroot by a
+ * thread that shares the root (CLONE_FS) would during the walk, and reading
+ * `d:` moves it as a rename by another thread would.
  */
 struct cnode {
     struct cnode *parent;
@@ -106,8 +107,8 @@ static struct cnode cn[C_NODES];
 static struct vfs_mount croot, cother, cunseen, cunsure, cbind, cnamed, cdcover, cdbind, crcover;
 static struct vfs_mount *cache_table[C_MOUNTS] = {&croot,  &cother,  &cunseen, &cunsure, &cbind,
                                                   &cnamed, &cdcover, &cdbind,  &crcover};
-/* The model's count of changes of names, which reading `renaming` moves. */
-static uint32_t names_changed;
+/* The model's walk sequence, which reading `moving` or `d:` moves. */
+static uint64_t walk_seq;
 /* The record the cached walk captures for a regular file's last name, and
  * the counts of those captured and dropped. */
 static int name_record, names_taken, names_put;
@@ -183,7 +184,8 @@ static int cache_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t
 }
 
 /** A link's target without its lock, for the cached walk: a fast link only,
- * -1 for any other. Reading `moving` moves the walker's root. */
+ * -1 for any other. Reading `moving` or `d:` moves the walk sequence, as a
+ * change of the root or of a name would. */
 static int cache_readlink_cached(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     struct cnode *n = node;
@@ -192,11 +194,8 @@ static int cache_readlink_cached(struct vfs_mount *mnt, void *node, char *buf, u
     if (!n->target || !n->fast) {
         return -1;
     }
-    if (n == &cn[C_MOVING]) {
-        dirs.root_seq++;
-    }
-    if (n == &cn[C_DLINK]) {
-        names_changed++;
+    if (n == &cn[C_MOVING] || n == &cn[C_DLINK]) {
+        walk_seq++;
     }
     return cache_target(n, buf, cap);
 }
@@ -333,8 +332,8 @@ int wq_active(const wait_queue_t *wq)
 struct synth_tail;
 static int proc_live;
 static int synth_take(const struct vpath *vp, void **node);
-static int proc_lookup_live(const struct vfs_ref *cur, struct synth_tail *tail, void **node,
-                            const char **left);
+static int synth_lookup_at(const struct vfs_ref *cur, struct synth_tail *tail, void **node,
+                           const char **left);
 
 /* The loop devices, which `loop_backs` of rach2/sys/block/loop.c reads
  * through this pointer, since the structure is complete only in
@@ -361,6 +360,25 @@ static struct vfs_mount *path_buf_mount(const char **path, void **node)
 static void path_buf_put(char *buf)
 {
     free(buf);
+}
+
+/** No page keeps a walk's start, every mount being the caller's. */
+static int path_buf_set_dir(char *buf, struct vfs_mount *mnt, void *node, const char *base)
+{
+    (void)buf;
+    (void)mnt;
+    (void)node;
+    (void)base;
+    return 0;
+}
+
+/** No page keeps a start the walk without the big lock could take. */
+static int path_buf_start(const char *path, struct vfs_ref *start, const char **rest)
+{
+    (void)path;
+    (void)start;
+    (void)rest;
+    return 0;
 }
 
 /** No model node is a process descriptor directory. */
@@ -544,10 +562,8 @@ static void dcache_count_hits(uint32_t n)
     (void)n;
 }
 
-/* The lock the cached walk reads the table under, and the tree's sequence,
- * which no row moves. */
+/* The lock the cached walk reads the table under. */
 static struct spinlock mount_table_lock = SPINLOCK_INIT;
-static uint32_t tree_seq;
 
 /* The lock over the sleeping locks' records, which sleeplock.c defines. */
 static struct spinlock records_lock = SPINLOCK_INIT;
@@ -567,23 +583,42 @@ static void reap_if_detached(const struct vfs_mount *mnt, uint32_t left)
     (void)left;
 }
 
-/** The count of changes of names, of which none is ever under way. */
-int vfs_name_seq(uint32_t *seq)
+/** Begin a change of what a path names: the walk sequence moves. No row's
+ * change is under way while a walk reads the sequence. */
+void vfs_seq_begin(void)
 {
-    *seq = names_changed;
+    walk_seq++;
+}
+
+/** End a change: the walk sequence moves again. */
+void vfs_seq_end(void)
+{
+    walk_seq++;
+}
+
+/** The walk sequence into `*seq`, with no change ever under way. */
+int vfs_seq_read(uint64_t *seq)
+{
+    *seq = walk_seq;
     return 1;
 }
 
-/** The same count, read as the cached walk reads it at its start. */
-int vfs_name_seq_peek(uint32_t *seq)
+/** Whether the walk sequence is still `seq`. */
+int vfs_seq_still(uint64_t seq)
 {
-    return vfs_name_seq(seq);
+    return walk_seq == seq;
 }
 
-/** Whether the count is still `seq`. */
-int vfs_name_seq_still(uint32_t seq)
+/** The walk sequence into `*seq`, for which nothing waits. */
+void vfs_seq_wait(uint64_t *seq)
 {
-    return names_changed == seq;
+    *seq = walk_seq;
+}
+
+/** The walk gate, which no row arms. */
+void walk_gate(int event)
+{
+    (void)event;
 }
 
 /** Start a description's cursor into its file's write-back error sequence at
@@ -597,7 +632,7 @@ uint32_t vfs_ino_err_sample(struct vfs_mount *mnt, uint64_t ino)
 
 /** Capture a regular file's last name for the cached walk: the model's one
  * record, counted. */
-int vfs_name_capture_at(const struct vfs_ref *parent, const char *leaf, uint32_t seq,
+int vfs_name_capture_at(const struct vfs_ref *parent, const char *leaf, uint64_t seq,
                         struct vfs_name **out)
 {
     (void)parent;
@@ -658,8 +693,8 @@ static int synth_take(const struct vpath *vp, void **node)
 }
 
 /** Look up a name in the fixture's live process tree. */
-static int proc_lookup_live(const struct vfs_ref *cur, struct synth_tail *tail, void **node,
-                            const char **left)
+static int synth_lookup_at(const struct vfs_ref *cur, struct synth_tail *tail, void **node,
+                           const char **left)
 {
     const char *p = tail->start;
     const char *full = p[0] == '7' ? "proc/7" : "proc/7/ns";
@@ -1366,7 +1401,7 @@ static void cache_layout(void)
     cnode_set(C_VSECRET, C_VROOT, "secret", 0100644u, NULL, 0);
     cnode_set(C_SRC, C_ROOT, "src", 0040755u, NULL, 0);
     cnode_set(C_SSECRET, C_SRC, "secret", 0100644u, NULL, 0);
-    names_changed = 0;
+    walk_seq = 0;
     for (i = 0; i < C_MOUNTS; i++) {
         k_memset(cache_table[i], 0, sizeof(*cache_table[i]));
         cache_table[i]->type = &cache_type;
@@ -1405,7 +1440,11 @@ static void cache_layout(void)
 static int cached_at(const char *path, struct vfs_name **entry, struct vfs_mount *mnt, int node)
 {
     struct vfs_ref out = {NULL, NULL};
-    int rc = vfs_resolve_cached(path, 0, &out, entry);
+    uint64_t seq;
+    int rc;
+
+    vfs_seq_read(&seq);
+    rc = vfs_resolve_cached(NULL, seq, path, 0, &out, entry);
 
     if (rc == 0) {
         rc = out.mnt == mnt && out.node == &cn[node] ? 0 : -1;
@@ -1596,7 +1635,7 @@ static void departed_proc_walks(void)
         struct vfs_scope scope = {.anchor = start, .anchor_real = "/proc/7/ns", .anchor_len = 10};
         struct walk_record record = {.scope = &scope};
 
-        scope.seq = vfs_tree_seq();
+        vfs_seq_read(&scope.seq);
         scope.resolve = VFS_RESOLVE_BENEATH;
         check(resolve_full(NULL, "..", 0, &found, NULL, 0, &record) == -EXDEV,
               "BENEATH refuses the parent of the held directory");

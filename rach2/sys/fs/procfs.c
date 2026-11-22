@@ -1517,31 +1517,13 @@ int procfs_readlink_dir(int pid, int root, char *buf, int cap)
     return exe_put(buf, cap, 0, root ? "/" : proc_cwd(p));
 }
 
-/** Return the mount and remaining path for a jump through a cwd link. */
+/** The working directory of `p` for a jump through its cwd link: 0 with its
+ * mount and node in `out`, as a walk goes on from a held directory of any
+ * type, or the length of its path in `buf` for one with no mount. */
 static int procfs_cwd_target(process_t *p, struct vfs_ref *out, char *buf, int cap)
 {
     if (!p->fs->cwd_mnt) {
         return exe_put(buf, cap, 0, proc_cwd(p));
-    }
-    if (p->fs->cwd_mnt->type == &vfs_procfs_type) {
-        const char *cwd = proc_cwd(p);
-        const char *prefix = p->fs->cwd_mnt->covered_path;
-
-        out->mnt = p->fs->cwd_mnt;
-        out->node = p->fs->cwd_node;
-        if (vfs_proc_dir_owner(out))
-            return 0;
-        while (*prefix && *prefix == *cwd) {
-            prefix++;
-            cwd++;
-        }
-        if (!*prefix && (!*cwd || *cwd == '/')) {
-            while (*cwd == '/') {
-                cwd++;
-            }
-            out->mnt = p->fs->cwd_mnt;
-            return exe_put(buf, cap, 0, *cwd ? cwd : ".");
-        }
     }
     out->mnt = p->fs->cwd_mnt;
     out->node = p->fs->cwd_node;
@@ -1565,8 +1547,10 @@ static int procfs_dir_target(const struct synth_dir *sd, const struct vfs_mount 
     return exe_put(buf, cap, 0, path);
 }
 
-/** Get the object of a descriptor link under the table lock. Return one
- * for a synthetic directory that the caller must name after unlocking. */
+/** Get the object of a descriptor link under the table lock: 0 with its
+ * mount and node in `out`, that of a synthetic directory among them when its
+ * description holds one, or 1 for a synthetic directory with none, which the
+ * caller names after unlocking. */
 static int procfs_fd_target(const fd_entry_t *e, struct vfs_ref *out, struct synth_dir *sd)
 {
     if (!e || !fd_entry_open(e))
@@ -1581,12 +1565,14 @@ static int procfs_fd_target(const fd_entry_t *e, struct vfs_ref *out, struct syn
     if (e->type != FD_TYPE_SYNTH_DIR || !e->priv)
         return -ENOTDIR;
     *sd = *(const struct synth_dir *)e->priv;
+    if (e->ofd && e->ofd->synth_mnt && e->ofd->synth_node &&
+        (sd->own.kept || !synth_dir_of_proc(sd->kind))) {
+        out->mnt = e->ofd->synth_mnt;
+        out->node = e->ofd->synth_node;
+        return 0;
+    }
     if (sd->pidns_ino && e->ofd) {
         out->mnt = e->ofd->synth_mnt;
-        if (sd->own.kept && e->ofd->synth_node) {
-            out->node = e->ofd->synth_node;
-            return 0;
-        }
     }
     return 1;
 }
@@ -5239,15 +5225,15 @@ static int procfs_gen_usb(struct procfs_text *t)
 }
 
 /** Whether entry `i` of the mount table, `m`, is listed in /proc/mounts:
- * the root, /dev and /proc always, and every other mount that is active,
- * whose device is present, that has a place in the tree, which the memfd
- * mount lacks, and that the reader's mount namespace sees. */
+ * a mount the reader's mount namespace sees but the memfd mount, which has
+ * no place in the tree; the root, /dev and /proc as they are, and every
+ * other mount while it is active and its device is present. */
 static int procfs_mount_listed(int i, const struct vfs_mount *m)
 {
-    if (i < 3) {
-        return m != NULL;
+    if (!m || m == vfs_memfd_mount() || !vfs_mount_seen(m)) {
+        return 0;
     }
-    return m && m->state == VFS_ACTIVE && !vfs_mount_gone(m) && m->parent && vfs_mount_seen(m);
+    return i < 3 || (m->state == VFS_ACTIVE && !vfs_mount_gone(m));
 }
 
 /** The path of the reader's root from the root of the mount table into
@@ -5592,7 +5578,10 @@ uint32_t procfs_synth_mount_id(uint64_t dev, const struct vfs_mount *hint)
  * the root of the mount within its file system, its mount point, its
  * options, a hyphen where Linux puts its propagation fields, its type, its
  * source and the file system's options. The id is the entry's index plus
- * one, and the root is its own parent. A bind mount has the device of the
+ * one, and a mount with no parent, the root or a namespace's copy of it, is
+ * its own parent; one whose parent is hidden, as after pivot_root, gives
+ * the hidden parent's id, as Linux gives the id of a parent outside the
+ * reader's view. A bind mount has the device of the
  * mount it shows and the path of its root within that file system. The
  * table is the reader's, whatever process the file is of: it leaves out the
  * mounts the reader's mount namespace does not see (`procfs_mount_listed`).
@@ -5607,13 +5596,13 @@ static int procfs_gen_mountinfo(struct procfs_text *t)
         struct vfs_mount *m = vfs_mount_at(i);
         const char *point = mount_point_seen(m, prefix);
         uint32_t dev;
-        int parent = 1, base = i;
+        int parent = i + 1, base = i;
 
         if (!point) {
             continue;
         }
         for (j = 0; j < vfs_mount_slots(); j++) {
-            if (i >= 3 && vfs_mount_at(j) == m->parent) {
+            if (m->parent && vfs_mount_at(j) == m->parent) {
                 parent = j + 1;
             }
             if (vfs_mount_at(j) == vfs_mount_base(m)) {
@@ -5623,7 +5612,7 @@ static int procfs_gen_mountinfo(struct procfs_text *t)
         dev = procfs_mount_dev(base, vfs_mount_base(m));
         ap_u32(t, (uint32_t)i + 1);
         ap_ch(t, ' ');
-        ap_u32(t, i == 0 ? 1 : (uint32_t)parent);
+        ap_u32(t, (uint32_t)parent);
         ap_ch(t, ' ');
         ap_u32(t, (dev >> 8) & 0xfff);
         ap_ch(t, ':');

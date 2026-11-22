@@ -14,6 +14,8 @@
  * heap.
  */
 
+#include "../lib/kint.h"
+
 struct process;
 struct vfs_mount;
 struct vfs_ref;
@@ -29,13 +31,47 @@ char *path_buf_get(void);
 /** Keep a relative proc pathname on its directory's mount until buf is put. */
 void path_buf_set_mount(char *buf, struct vfs_mount *mnt);
 
-/** Keep a proc task directory and its name as the start of a copied path.
- * For other proc directories keep the mount root. Return 1 for a task. */
+/**
+ * Keep the directory (`mnt`, `node`), whose path is `base`, as the start of
+ * the walk of the path in `buf`, which is `base` joined to a relative name,
+ * until the page is put, as Linux walks a relative name from the
+ * descriptor's or the working directory's own pair (fs/namei.c `path_init`
+ * in 6.12): the walk starts at the node, of any type, /dev, /proc and /sys
+ * among them, with `base` the prefix it skips. A mount of /proc passed with
+ * no node is kept as its root, and the walk skips only the mount's place.
+ * Return 1 when the walk starts at the node kept, and 0 otherwise, for a
+ * directory with no mount, node or path, whose name is walked from the root
+ * by the joined path.
+ */
 int path_buf_set_dir(char *buf, struct vfs_mount *mnt, void *node, const char *base);
+
+/** `path_buf_set_dir` for the caller's working directory, its pair and its
+ * path. Under the big lock, under which they change. */
+int path_buf_set_cwd(char *buf);
+
+/**
+ * Whether a path page of any process keeps the directory `node`, on a mount
+ * of the file system of `mnt`, as the start of a walk (`path_buf_set_dir`):
+ * one the walk of a name relative to a descriptor or a working directory
+ * on another namespace's mount stands on, which no description or working
+ * directory may hold by then. A type that counts no holds on its nodes, the
+ * KRFFS root and a KRFFS volume, refuses to remove a directory so kept, as
+ * it refuses one a descriptor holds. The caller holds the big lock.
+ */
+int path_bufs_hold(const struct vfs_mount *mnt, const void *node);
 
 /** Return the held mount for a spelling in a path page and skip its prefix.
  * A path outside such a page or prefix gives NULL and leaves *path alone. */
 struct vfs_mount *path_buf_mount(const char **path, void **node);
+
+/**
+ * The start the page `path` keeps as a node and a prefix (`path_buf_set_dir`),
+ * for a walk without the big lock: 1 with the pair, which the page holds, in
+ * `*start` and the path after the prefix in `*rest`, "." for none; -1 for a
+ * page that keeps another start, whose walk needs the big lock; or 0 for a
+ * path that is no kept page. Nothing here sleeps or takes a lock.
+ */
+int path_buf_start(const char *path, struct vfs_ref *start, const char **rest);
 
 /** Give back a page `path_buf_get` returned; NULL is ignored. */
 void path_buf_put(char *buf);
@@ -45,17 +81,20 @@ void path_buf_put(char *buf);
 const char *proc_cwd(const struct process *p);
 
 /** Copy the working directory's path into `out`, a path page, under the
- * lock of `p`'s `fs_struct`. Return nonzero for a directory on procfs. */
-int proc_cwd_read(const struct process *p, char *out);
+ * lock of `p`'s `fs_struct`, for a caller without the big lock. */
+void proc_cwd_read(const struct process *p, char *out);
 
 /**
  * Make `path` the working directory's path: 0, `-ENAMETOOLONG` past
  * `VFS_PATH_MAX`, or `-ENOMEM`, when the old path is kept. `path` may be the
- * current one.
+ * current one. A caller that changes the directory too brackets both with
+ * the walk sequence (`vfs_seq_begin`), so that a walk without the big lock
+ * never takes the new path with the old directory.
  */
 int proc_cwd_set(struct process *p, const char *path);
 
-/** Give `to` the working directory path of `from`, for fork: 0 or -ENOMEM. */
+/** Give `to` the working directory path of `from`, for fork: 0 or
+ * -ENOMEM. */
 int proc_cwd_copy(struct process *to, const struct process *from);
 
 /** Free a record's path pages. The working directory's path, a long one in

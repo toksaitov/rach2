@@ -1047,17 +1047,28 @@ static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
 
 /**
  * Whether the node at `at` is some process's working directory, which the
- * process record keeps as the mount and the node's handle (`vfs_cwd_set`).
- * This type counts no handles, so the working directory takes no hold on
- * the node, and a removal looks for it in the records themselves.
+ * process record keeps as the mount and the node's handle (`vfs_cwd_set`),
+ * or the start a path page of the process keeps for a walk from another
+ * namespace's mount (`path_buf_set_dir`), through any mount of the volume,
+ * a bind or a mount namespace's copy among them. This type counts no
+ * handles, so neither takes a hold on the node, and a removal looks for it
+ * in the records themselves.
  */
 static int cwd_at(struct vfs_mount *mnt, uint64_t at)
 {
     const process_t *pr;
+    int i;
 
     for (pr = proc_list; pr; pr = pr->next) {
-        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == handle_of(at)) {
+        if (pr->fs && pr->fs->cwd_mnt && vfs_mount_base(pr->fs->cwd_mnt) == vfs_mount_base(mnt) &&
+            pr->fs->cwd_node == handle_of(at)) {
             return 1;
+        }
+        for (i = 0; pr->paths_on_mounts && i < PATH_BUFS; i++) {
+            if (pr->path_mount[i] && pr->path_node[i] == handle_of(at) &&
+                vfs_mount_base(pr->path_mount[i]) == vfs_mount_base(mnt)) {
+                return 1;
+            }
         }
     }
     return 0;
@@ -1068,10 +1079,11 @@ static int cwd_at(struct vfs_mount *mnt, uint64_t at)
  * (`rmdir_root_name`): -ENOENT for a name that is not there, -ENOTDIR for
  * one that is not a directory, then -EBUSY and -ENOTEMPTY.
  *
- * A directory a descriptor has open or pinned, or that is a process's
- * working directory, stays, with -EBUSY: this file system has no name for a
- * directory nobody can reach, and freeing it would leave its offset in the
- * allocator's hands while the holder still refers to it. Otherwise 0,
+ * A directory a descriptor has open or pinned, that is a process's working
+ * directory, or that a path page keeps as a walk's start (`cwd_at`), stays,
+ * with -EBUSY: this file system has no name for a directory nobody can
+ * reach, and freeing it would leave its offset in the allocator's hands
+ * while the holder still refers to it. Otherwise 0,
  * -EROFS on a read-only mount, -ENAMETOOLONG, -EIO for a header that cannot
  * be read, or -ENOTEMPTY for any removal that fails in the core.
  */

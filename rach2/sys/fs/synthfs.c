@@ -709,6 +709,24 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
     out[pos] = '\0';
 }
 
+void synth_vpath_dir(const struct vpath *vp, char *out, int cap)
+{
+    int at = vp->pid;
+
+    if (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) {
+        synth_sys_path(vp->sysent, vp->syskey, out, cap);
+        return;
+    }
+    if (vp->kind == VNODE_PROC_SYS_DIR) {
+        at = vp->sysent;
+    } else if (vp->kind == VNODE_DEV_SUBDIR) {
+        at = vp->devdir;
+    } else if (vp->kind == VNODE_DEV_MADE) {
+        at = vp->syskey;
+    }
+    synth_dir_path(vp->kind, at, vp->tid, out, cap);
+}
+
 /** The kind of the /proc/<pid> file `name`, or 0; `task` is 0 in a
  * thread's directory under `task`, which alone has `children`, as on
  * Linux. */

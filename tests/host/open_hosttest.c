@@ -608,6 +608,21 @@ int path_buf_set_dir(char *buf, struct vfs_mount *mnt, void *node, const char *b
     return mnt && vfs_proc_dir_owner(&ref) != NULL;
 }
 
+/** No path page of the model keeps a walk's start. */
+int path_bufs_hold(const struct vfs_mount *mnt, const void *node)
+{
+    (void)mnt;
+    (void)node;
+    return 0;
+}
+
+/** The working directory's start, which the model's mounts never cover. */
+int path_buf_set_cwd(char *buf)
+{
+    return path_buf_set_dir(buf, current_proc->fs->cwd_mnt, current_proc->fs->cwd_node,
+                            proc_cwd(current_proc));
+}
+
 /** Give back a path page `path_buf_get` took. */
 void path_buf_put(char *buf)
 {
@@ -1224,9 +1239,39 @@ int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size, int stamp_times
     return truncate_error;
 }
 
-/** Count nothing: no walk here runs scoped. */
-void vfs_tree_changed(void)
+/** The walk sequence, which no other thread of the model moves: a change
+ * counts nothing, and a reading always holds. */
+void vfs_seq_begin(void)
 {}
+
+/** The end of a change, which counts nothing. */
+void vfs_seq_end(void)
+{}
+
+/** A reading of the sequence, taken while no change is under way. */
+int vfs_seq_read(uint64_t *seq)
+{
+    *seq = 1;
+    return 1;
+}
+
+/** Whether a reading still holds, which it always does. */
+int vfs_seq_still(uint64_t seq)
+{
+    return seq == 1;
+}
+
+/** A reading of the sequence, for which nothing waits. */
+void vfs_seq_wait(uint64_t *seq)
+{
+    *seq = 1;
+}
+
+/** The walk gate, which no row arms. */
+void walk_gate(int event)
+{
+    (void)event;
+}
 
 /** Release a successfully opened handle, never more than were opened. */
 void vfs_release(struct vfs_mount *mnt, void *at)
@@ -2356,8 +2401,11 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
 
 /** The name cache's walk: in the unlocked open's row, `node` on `mount`
  * with no name recorded; otherwise a walk it cannot finish. */
-int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out, struct vfs_name **entry)
+int vfs_resolve_cached(const struct vfs_ref *start, uint64_t seq, const char *path, int flags,
+                       struct vfs_ref *out, struct vfs_name **entry)
 {
+    (void)start;
+    (void)seq;
     (void)path;
     (void)flags;
     *entry = NULL;
@@ -2371,12 +2419,29 @@ int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out, struct 
 
 /** The working directory's path, which no unlocked row asks for, since the
  * unlocked open's row names an absolute path: "/". */
-int proc_cwd_read(const struct process *p, char *out)
+void proc_cwd_read(const struct process *p, char *out)
 {
     (void)p;
     out[0] = '/';
     out[1] = '\0';
-    return 0;
+}
+
+/** The working directory's path and no pair to walk from, which no unlocked
+ * row asks for: "/" and -1. */
+int vfs_cwd_take(char *text, struct vfs_ref *start)
+{
+    text[0] = '/';
+    text[1] = '\0';
+    start->mnt = NULL;
+    start->node = NULL;
+    return -1;
+}
+
+/** Let go of a start `vfs_cwd_take` took, which it never takes here. */
+void vfs_cached_release(struct vfs_ref *ref)
+{
+    ref->mnt = NULL;
+    ref->node = NULL;
 }
 
 /** The walk with its path recorded, which the model does not record. */
@@ -2854,6 +2919,15 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
     (void)kind;
     (void)pid;
     (void)tid;
+    (void)out;
+    (void)cap;
+    check(0, "unexpected synthetic directory path");
+}
+
+/** Fail the row: no row names a synthetic directory by its path page. */
+void synth_vpath_dir(const struct vpath *vp, char *out, int cap)
+{
+    (void)vp;
     (void)out;
     (void)cap;
     check(0, "unexpected synthetic directory path");

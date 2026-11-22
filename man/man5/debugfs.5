@@ -540,6 +540,31 @@ from the node A to B, and PID is the process that made the call; then
 .Ql lost N ,
 the events past the 64.
 A node of a mounted KRFFS volume is its inode number.
+.It Pa vfs/walk_gate
+Mode 0600; a Rach2 file with no Linux counterpart, with which the suites'
+rows on path lookup change the tree at a known point of a walk.
+A write of
+.Ql arm PID EVENT
+counts from zero the walk events the thread PID reaches, and stops it in
+the kernel the first time it reaches EVENT:
+.Ql full ,
+where a walk under the big lock begins, its start and root taken;
+.Ql unlocked ,
+where a walk without the big lock has taken its start and the walk sequence;
+or
+.Ql miss ,
+where such a walk gives up for the walk under the big lock.
+.Ql release
+lets the stopped thread go on, as a signal does, and
+.Ql off
+does too and ends the counting.
+Reads one line:
+.Ql pid P stop EVENT waiting W full N unlocked N miss N ,
+EVENT being
+.Ql -
+once the stop is used or released, and W 1 while the thread sleeps there.
+Another text fails with
+.Er EINVAL .
 .It Pa sched/base_slice_ns
 Mode 0644, as on Linux: the base slice in nanoseconds, the time ahead of
 its eligible time at which an ordinary thread without a slice of its own

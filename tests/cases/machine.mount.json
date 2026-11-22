@@ -175,7 +175,7 @@
     },
     {
       "case_id": "machine.mount.mountprobe",
-      "behavior": "mount(2) and umount2(2) on the FAT32 partition: the lifetime of a mount, the refused flags and targets, the claims, a busy mount point and the /proc files, with every unmount recording as many opens as releases",
+      "behavior": "mount(2) and umount2(2) on the FAT32 partition: the lifetime of a mount, the refused flags and targets, the claims, a busy mount point, the /proc files and the copies a mount namespace makes of its mounts, each remounted, held open and unmounted on its own, with every unmount recording as many opens as releases",
       "units": ["mount"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],

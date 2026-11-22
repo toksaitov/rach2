@@ -55,12 +55,11 @@
  * atexit handler unmounts the tmpfs and removes the directory instead.
  *
  * The private binds' rows use /tmp/sbxr, a tmpfs holding a file the probe
- * keeps open for writing. A child in a mount namespace of its own, which
- * shares the tmpfs's mount record with the probe's, finds every remount
- * that would change its flags, read-only or noexec with MS_BIND, read-only
- * or nosuid without, refused with EBUSY, and one with the flags it has
- * accepted; the mount stays writable on both sides. A child that binds the
- * tmpfs over itself and remounts the bind read-only finds a create, a
+ * keeps open for writing. A child in a mount namespace of its own, whose
+ * tmpfs is the namespace's copy of the probe's mount, remounts the copy
+ * read-only with MS_BIND and finds it read-only there, then writable again
+ * with MS_BIND alone; the probe's mount stays writable. A child that binds
+ * the tmpfs over itself and remounts the bind read-only finds a create, a
  * mkdir and an open for writing refused with EROFS, statvfs ST_RDONLY and
  * mountinfo "ro", while the probe still writes there; made writable again,
  * a file it opens for writing holds the bind's read-only remount off with
@@ -784,20 +783,16 @@ static int private_bind(unsigned long flags)
            (!flags || mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | flags, NULL) == 0);
 }
 
-/** The child of the shared row: in a mount namespace of its own, whose
- * VIEWED is the record the probe's namespace sees too, each remount that
- * would change the mount's flags fails with EBUSY, with MS_BIND and
- * without, and one with the flags it has succeeds; VIEWED is then as
- * writable as before. 0, or 1. */
+/** The child of the copy row: in a mount namespace of its own, whose
+ * VIEWED is the copy the namespace made of the probe's mount, a remount of
+ * the copy read-only succeeds while the probe holds a file of the tmpfs
+ * open for writing through its own mount, and the copy is then read-only
+ * there; a remount with MS_BIND alone makes it as writable as before. 0,
+ * or 1. */
 static int shared_child(void)
 {
-    return own_ns() &&
-                   refused(mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL),
-                           EBUSY) &&
-                   refused(mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_NOEXEC, NULL),
-                           EBUSY) &&
-                   refused(mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_RDONLY, NULL), EBUSY) &&
-                   refused(mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_NOSUID, NULL), EBUSY) &&
+    return own_ns() && mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) == 0 &&
+                   viewed_read_only() &&
                    mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND, NULL) == 0 && viewed_writable()
                ? 0
                : 1;
@@ -844,8 +839,8 @@ static void view_cleanup(void)
     }
 }
 
-/** Run the rows of a remount of a mount another namespace sees, of a
- * private bind sealed read-only while the probe writes through the mount
+/** Run the rows of a remount of a namespace's copy of the probe's mount, of
+ * a private bind sealed read-only while the probe writes through the mount
  * it shows, and of that bind's own writer: remount-shared, private-bind and
  * writer-exclusion. Returns 0, or 1 after the failure is reported. */
 static int seal_rows(int held)
@@ -855,8 +850,8 @@ static int seal_rows(int held)
     char c = 0;
 
     if (in_child(shared_child) != 0 || !viewed_writable()) {
-        return fail("a remount of a mount another namespace sees did not fail with EBUSY, or "
-                    "changed its flags");
+        return fail("a namespace's copy of a mount did not remount read-only and back on its "
+                    "own, or the remount changed the mount it was copied from");
     }
     report_held();
     if (pipe(go) != 0 || pipe(said) != 0) {

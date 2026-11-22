@@ -401,10 +401,16 @@ const char *proc_cwd(const struct process *p)
 }
 
 /** Copy the working directory of the model's ordinary mount. */
-int proc_cwd_read(const struct process *p, char *out)
+void proc_cwd_read(const struct process *p, char *out)
 {
     k_strncpy(out, proc_cwd(p), VFS_PATH_MAX);
-    return 0;
+}
+
+/** The working directory's start, which no model mount covers. */
+int path_buf_set_cwd(char *buf)
+{
+    return path_buf_set_dir(buf, current_proc->fs->cwd_mnt, current_proc->fs->cwd_node,
+                            proc_cwd(current_proc));
 }
 
 /** The model mount is the root mount. Its type is not KRFFS's, so its nodes

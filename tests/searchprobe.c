@@ -27,8 +27,11 @@
  * unlink, rename and mkdir, and are not called. A name that does not exist
  * under the denied directory is -EACCES and not -ENOENT, or a caller could
  * test for existence through a directory it may not search. An openat through
- * a directory descriptor opened while the ancestor was searchable is refused
- * too: the descriptor grants no search of its own.
+ * a descriptor on /sp_denied, opened while it was searchable, is refused, since
+ * the walk charges the directory it starts at. One through a descriptor on
+ * /sp_denied/shared, which stays 0777, succeeds, as on Linux, whose walk
+ * starts at the descriptor's directory and charges only the directories it
+ * enters (fs/namei.c `path_init` and `may_lookup` in 6.12).
  *
  * Its changes run in two rounds, which charge different directories. The
  * first aims inside /sp_denied/shared, which stays 0777 and grants write to
@@ -314,7 +317,7 @@ static const struct step {
     {"denied: access a missing name", "denied-access-missing-name"},
     {"denied: faccessat the two-level leaf", "denied-faccessat-two-level-leaf"},
     {"denied: openat through the denied dirfd", "denied-openat-through-denied-dirfd"},
-    {"denied: openat through the shared dirfd", "denied-openat-through-shared-dirfd"},
+    {"denied: openat through the shared dirfd succeeds", "denied-openat-through-shared-dirfd"},
     {"denied: chdir one level", "denied-chdir-one-level"},
     {"denied: chdir two levels", "denied-chdir-two-levels"},
     {"denied: chdir into the 0777 directory", "denied-chdir-into-0777-directory"},
@@ -755,7 +758,7 @@ static void denied_child(void)
 
     /* Directory descriptors opened while the ancestor was searchable. */
     want_eq("denied: openat through the denied dirfd", openat_ro(dfd_denied, "leaf.txt"), -EACCES);
-    want_eq("denied: openat through the shared dirfd", openat_ro(dfd_shared, "victim"), -EACCES);
+    want_ok("denied: openat through the shared dirfd succeeds", openat_ro(dfd_shared, "victim"));
 
     /* chdir's own check on its target refuses the one-level chdir. */
     want_eq("denied: chdir one level", syscall3(SYS_CHDIR, (long)DENIED, 0, 0), -EACCES);

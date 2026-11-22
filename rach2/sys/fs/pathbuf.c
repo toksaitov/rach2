@@ -73,28 +73,60 @@ static void path_mount_put(process_t *p, int i)
     }
 }
 
+/* The answers of `path_start`. */
+#define START_KEEP 1 /* the page keeps a mount and node */
+#define START_TASK 2 /* the walk starts at the node, past the directory's path */
+
+/**
+ * What a path page keeps for the directory `node` of `mnt`, whose path is
+ * `base`: START_KEEP with the node the walk starts at in `ref`, and
+ * START_TASK as well when the walk starts at that node with `base` as the
+ * prefix it skips; 0 when the page keeps nothing, for a directory with no
+ * mount.
+ *
+ * Every directory a name is relative to is kept as its node, as Linux walks
+ * from the descriptor's `f_path` or the working directory's `fs->pwd`
+ * (fs/namei.c `path_init` in 6.12): a mount made since over the directory,
+ * or over one above it, is not entered, and the walk does not depend on the
+ * directory's path still leading there, nor on the caller's namespace seeing
+ * its mount. A directory of /dev, /proc or /sys is kept so too, and its type
+ * looks the rest up from the directory's own place in the mount
+ * (`synth_lookup_at` in vfs.c). A mount of /proc passed with no node, the
+ * anchor of a scoped walk, is kept as its root, with no prefix, so that the
+ * walk skips only the mount's place (`mount_prefix`).
+ */
+static int path_start(struct vfs_mount *mnt, void *node, const char *base, struct vfs_ref *ref)
+{
+    ref->mnt = mnt;
+    ref->node = node;
+    if (mnt && node && base)
+        return START_KEEP | START_TASK;
+    ref->node = mnt ? mnt->root : NULL;
+    return mnt && mnt->type == &vfs_procfs_type ? START_KEEP : 0;
+}
+
 int path_buf_set_dir(char *buf, struct vfs_mount *mnt, void *node, const char *base)
 {
     process_t *p = current_proc;
     struct vfs_ref ref;
-    int i, task;
+    int i, how, task, keep;
 
-    if (!p || (!p->paths_on_mounts && (!mnt || mnt->type != &vfs_procfs_type)))
+    if (!p)
+        return 0;
+    how = path_start(mnt, node, base, &ref);
+    keep = (how & START_KEEP) != 0;
+    task = (how & START_TASK) != 0;
+    if (!p->paths_on_mounts && !keep)
         return 0;
     for (i = 0; i < PATH_BUFS; i++) {
         if (p->path_bufs[i] != buf)
             continue;
-        ref.mnt = mnt;
-        ref.node = node;
-        task = mnt && node && base && vfs_proc_dir_owner(&ref);
-        if (mnt && !task)
-            ref.node = mnt->root;
-        if (mnt && mnt->type == &vfs_procfs_type) {
+        if (keep) {
             vfs_ref_hold(&ref);
             vfs_desc_open(mnt);
         }
         path_mount_put(p, i);
-        if (!mnt || mnt->type != &vfs_procfs_type)
+        if (!keep)
             return 0;
         p->path_mount[i] = mnt;
         p->path_node[i] = ref.node;
@@ -105,6 +137,29 @@ int path_buf_set_dir(char *buf, struct vfs_mount *mnt, void *node, const char *b
         }
         p->paths_on_mounts++;
         return task;
+    }
+    return 0;
+}
+
+int path_buf_set_cwd(char *buf)
+{
+    struct fs_struct *fs = current_proc->fs;
+
+    return path_buf_set_dir(buf, fs->cwd_mnt, fs->cwd_node, proc_cwd(current_proc));
+}
+
+int path_bufs_hold(const struct vfs_mount *mnt, const void *node)
+{
+    const process_t *pr;
+    int i;
+
+    for (pr = proc_list; pr; pr = pr->next) {
+        for (i = 0; pr->paths_on_mounts && i < PATH_BUFS; i++) {
+            if (pr->path_mount[i] && pr->path_node[i] == node &&
+                vfs_mount_base(pr->path_mount[i]) == vfs_mount_base(mnt)) {
+                return 1;
+            }
+        }
     }
     return 0;
 }
@@ -208,6 +263,40 @@ struct vfs_mount *path_buf_mount(const char **path, void **node)
     return NULL;
 }
 
+int path_buf_start(const char *path, struct vfs_ref *start, const char **rest)
+{
+    process_t *p = current_proc;
+    int i;
+
+    if (!p || !p->paths_on_mounts || !path) {
+        return 0;
+    }
+    for (i = 0; i < PATH_BUFS; i++) {
+        const char *s = path;
+        uint32_t len;
+
+        if (!p->path_mount[i] || (s != p->path_bufs[i] && s != p->path_bufs[i] + 1)) {
+            continue;
+        }
+        if (!p->path_prefix[i]) {
+            return -1;
+        }
+        len = p->path_prefix[i] - 1;
+        while (*s == '/')
+            s++;
+        if (k_strlen(s) < len || (len && s[len] && s[len] != '/'))
+            return -1;
+        s += len;
+        while (*s == '/')
+            s++;
+        start->mnt = p->path_mount[i];
+        start->node = p->path_node[i];
+        *rest = *s ? s : ".";
+        return 1;
+    }
+    return 0;
+}
+
 void path_buf_put(char *buf)
 {
     process_t *p = current_proc;
@@ -233,15 +322,13 @@ const char *proc_cwd(const struct process *p)
     return p->fs->cwd_long ? p->fs->cwd_long : p->fs->cwd;
 }
 
-int proc_cwd_read(const struct process *p, char *out)
+void proc_cwd_read(const struct process *p, char *out)
 {
     uint32_t flags = spin_lock_irqsave(&p->fs->lock);
     const char *cwd = proc_cwd(p);
-    int proc = p->fs->cwd_mnt && p->fs->cwd_mnt->type == &vfs_procfs_type;
 
     k_memcpy(out, cwd, k_strlen(cwd) + 1);
     spin_unlock_irqrestore(&p->fs->lock, flags);
-    return proc;
 }
 
 /**

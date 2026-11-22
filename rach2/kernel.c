@@ -38,6 +38,7 @@
 #include "sys/fs/devfs.h"
 #include "sys/fs/procfs.h"
 #include "sys/fs/vfs.h"
+#include "sys/fs/walkseq.h"
 #include "sys/fs/writeback.h"
 #include "sys/fs/ext2.h"
 #include "sys/proc/process.h"
@@ -4903,8 +4904,9 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
  * (`watchdog_init`), the grace-period thread (`rcu_init`), the flusher
  * (`writeback_init`) and khugepaged (`thp_init`), then register bkl/calls,
  * bkl/profile, bkl/long, bkl/tick, cputime_test, the scheduler's files
- * (`sched_debugfs_init`), vfs/bind_trace and, with the checker,
- * lockdep/inject in debugfs; a failure there is logged. */
+ * (`sched_debugfs_init`), vfs/bind_trace, vfs/walk_gate (`walk_gate_init`)
+ * and, with the checker, lockdep/inject in debugfs; a failure there is
+ * logged. */
 static void start_processors(void)
 {
     smp_start();
@@ -4926,6 +4928,7 @@ static void start_processors(void)
     }
     sched_debugfs_init();
     vfs_bind_trace_init();
+    walk_gate_init();
 #ifdef RACH2_LOCKDEP
     if (debugfs_create_text("lockdep/inject", 0600u, &lockdep_inject_ops, NULL) != 0) {
         klog(KLOG_WARN, "lockdep", "debugfs: inject not registered");
