@@ -5944,19 +5944,74 @@ static int proc_walk_parent(struct vfs_ref *cur)
     return 1;
 }
 
+/** Whether the directory `cur` holds on a synthetic mount, of class `vp`,
+ * is gone: a directory made under /dev and since removed, a /sys directory
+ * whose device is gone, or a process directory with no kept owner or whose
+ * process has gone, which another process may have the number of by now. */
+static int synth_held_gone(const struct vfs_ref *cur, const struct vpath *vp)
+{
+    const struct synth_owner *own = vfs_proc_dir_owner(cur);
+
+    return (vp->kind == VNODE_DEV_MADE && devtree_is_dir(vp->syskey) < 0) ||
+           ((vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) && SYSFS_KEYED(vp->sysent) &&
+            !sysfs_device_exists(vp->sysent, vp->syskey)) ||
+           (synth_dir_of_proc(vp->kind) && (!own || procfs_held_pid(own) < 0));
+}
+
+/** Put in `out`, a path page, the path of the directory `cur` holds, of
+ * class `vp`, as `synth_classify` takes it, with no leading '/': a process
+ * directory by the number its kept owner was reached by, any other by its
+ * class (`synth_vpath_dir`), a /sys directory of a device by its key. */
+static void synth_held_text(const struct vfs_ref *cur, const struct vpath *vp, char *out)
+{
+    if (vfs_proc_dir_owner(cur))
+        synth_dir_path(vp->kind, vp->pid, vp->tid, out, VFS_PATH_MAX);
+    else
+        synth_vpath_dir(vp, out, VFS_PATH_MAX);
+    k_memmove(out, out + 1, k_strlen(out));
+}
+
+/** Whether the directory `cur` holds, of class `vp`, is still there and
+ * still has the path `was` (`synth_held_text`), with nothing between the
+ * two checks that sleeps: 1 or 0, or -ENOMEM when no path page is left for
+ * the second path. */
+static int synth_held_same(const struct vfs_ref *cur, const struct vpath *vp, const char *was)
+{
+    char *now = path_buf_get();
+    int same;
+
+    if (!now)
+        return -ENOMEM;
+    same = !synth_held_gone(cur, vp);
+    if (same) {
+        synth_held_text(cur, vp, now);
+        same = streq(now, was);
+    }
+    path_buf_put(now);
+    return same;
+}
+
 /**
  * Continue the synthetic lookup of `tail` at the directory `cur` holds: at
  * its mount's root by `synth_lookup_rest`, and at any other directory from
  * that directory's own place in the mount, the path its classification
- * gives (`synth_vpath_dir`, a process directory by the number its kept owner
- * was reached by), as Linux walks a relative name from the held `f_path` or
- * `fs->pwd` (fs/namei.c `path_init` in 6.12): the directory's path is not
- * walked again from the mount's root, so a mount made over it since, as a
- * bind over /dev/pts, is not entered. -ENOENT for a directory made under
- * /dev and since removed, a /sys directory whose device is gone, a process
- * directory with no kept owner, which another process may have the number
- * of by now, or one whose place has left the directory the mount shows;
- * -ENOMEM; or `synth_rest`'s.
+ * gives (`synth_held_text`), as Linux walks a relative name from the held
+ * `f_path` or `fs->pwd` (fs/namei.c `path_init` in 6.12): the directory's
+ * path is not walked again from the mount's root, so a mount made over it
+ * since, as a bind over /dev/pts, is not entered. -ENOENT for a directory
+ * that is gone (`synth_held_gone`) or whose place has left the directory
+ * the mount shows; -ENOMEM; or `synth_rest`'s.
+ *
+ * The rest is classified by text below the directory's path, and the
+ * classification may sleep, in its page's allocation among others, while a
+ * device or a process goes and another comes, unseen by the walk sequence.
+ * So the directory is checked to be there and its path built with no sleep
+ * between, and checked again, its path rebuilt and compared, once the
+ * classification has answered; a change sends the lookup round again. A
+ * device's key, a network interface's index and a process's kept owner, is
+ * never given to another, and a device's name stays its own while it is
+ * there, so a directory there both times with the same path had that path
+ * all through, and no other directory could have it meanwhile.
  */
 static int synth_lookup_at(const struct vfs_ref *cur, struct synth_tail *tail, void **node,
                            const char **left)
@@ -5966,35 +6021,42 @@ static int synth_lookup_at(const struct vfs_ref *cur, struct synth_tail *tail, v
     char prefix[256];
     char *full;
     uint32_t plen;
-    int rc;
+    int rc, same;
 
     if (cur->node == mnt->root || !vp)
         return synth_lookup_rest(mnt, tail->start, (uint32_t)(tail->end - tail->start), node, left,
                                  tail->use_real);
-    if ((vp->kind == VNODE_DEV_MADE && devtree_is_dir(vp->syskey) < 0) ||
-        ((vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) && SYSFS_KEYED(vp->sysent) &&
-         !sysfs_device_exists(vp->sysent, vp->syskey)) ||
-        (synth_dir_of_proc(vp->kind) && !vfs_proc_dir_owner(cur)))
-        return -ENOENT;
     rc = synth_place(mnt, mnt->bind_of ? mnt->bind_root : "", prefix, sizeof(prefix));
     if (rc)
         return rc;
     full = path_buf_get();
     if (!full)
         return -ENOMEM;
-    if (vfs_proc_dir_owner(cur))
-        synth_dir_path(vp->kind, vp->pid, vp->tid, full, VFS_PATH_MAX);
-    else
-        synth_vpath_dir(vp, full, VFS_PATH_MAX);
-    k_memmove(full, full + 1, k_strlen(full));
-    plen = 0;
-    while (prefix[plen] && full[plen] == prefix[plen])
-        plen++;
-    rc = -ENOENT;
-    if (!prefix[plen] && (full[plen] == '\0' || full[plen] == '/')) {
+    for (;;) {
+        if (synth_held_gone(cur, vp)) {
+            rc = -ENOENT;
+            break;
+        }
+        synth_held_text(cur, vp, full);
+        plen = 0;
+        while (prefix[plen] && full[plen] == prefix[plen])
+            plen++;
+        if (prefix[plen] || (full[plen] != '\0' && full[plen] != '/')) {
+            rc = -ENOENT;
+            break;
+        }
         tail->root_len = plen;
         tail->dir = cur->node;
         rc = synth_rest(mnt, full, tail, node, left);
+        same = synth_held_same(cur, vp, full);
+        if (same == 1)
+            break;
+        if (rc == 0 || rc == VFS_STEP || rc == VFS_LINK)
+            node_put(mnt, *node);
+        if (same < 0) {
+            rc = same;
+            break;
+        }
     }
     path_buf_put(full);
     return rc;
@@ -6021,8 +6083,6 @@ static int proc_walk_rest(const struct vfs_ref *cur, const char *p, uint32_t len
         int rc = proc_held_dir_permission(vp, own, 1, real);
         if (rc)
             return rc;
-        if (procfs_held_pid(own) < 0)
-            return -ENOENT;
     }
     tail.start = p;
     tail.end = p + len;
