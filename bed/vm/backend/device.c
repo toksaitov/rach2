@@ -1249,6 +1249,18 @@ static void complete(struct vd *d, uint32_t qi, uint32_t head, uint32_t put)
     d->n.completed++;
 }
 
+static struct vd_profile_row *profile_row(struct vd *d);
+
+/** Count a held command's time from its fence call to its completion in its
+ * profile row, under -T. d->lock held. */
+static void profile_held(struct vd *d, const struct vd_pending *p)
+{
+    if (d->profile && p->held_ns) {
+        d->profile->row[p->row].held++;
+        d->profile->row[p->row].fence_ns += vd_profile_now() - p->held_ns;
+    }
+}
+
 /**
  * Hold a fenced command until its fence retires. Returns its slot, or 0
  * when every pending slot is taken, which the caller answers at once.
@@ -1274,6 +1286,7 @@ static struct vd_pending *hold(struct vd *d, uint32_t qi, uint32_t head, const s
         p->fence_id = h->fence_id;
         p->unfenced = 0;
         p->rlen = sizeof(struct vd_hdr);
+        p->held_ns = 0;
         memcpy(p->resp, resp, sizeof(struct vd_hdr));
         p->chain = *c;
         d->npend++;
@@ -1392,6 +1405,10 @@ static void answer(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_ch
             (!per_ctx || ctx_live(d, h.ctx_id))) {
             pthread_mutex_lock(&d->lock);
             p = hold(d, qi, head, c, &h, d->resp);
+            if (p && d->profile) {
+                p->row = (uint32_t)(profile_row(d) - d->profile->row);
+                p->held_ns = vd_profile_now();
+            }
             pthread_mutex_unlock(&d->lock);
         }
         if (p) {
@@ -1426,9 +1443,11 @@ static void answer(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_ch
     }
 }
 
-/** Answer a held command with the response it keeps and free its slot. */
+/** Answer a held command with the response it keeps, count its time under
+ * -T and free its slot. d->lock held. */
 static void release(struct vd *d, struct vd_pending *p)
 {
+    profile_held(d, p);
     complete(d, p->queue, p->head, put_response(d, &p->chain, p->resp, p->rlen));
     if (p->unfenced) {
         p->unfenced = 0;
@@ -1545,7 +1564,7 @@ void vd_beat(struct vd *d)
     }
 }
 
-/** Return the profiling row for a control command's type. */
+/** Return the profiling row for the type of the control command in d->cmd. */
 static struct vd_profile_row *profile_row(struct vd *d)
 {
     uint32_t type, i = VD_PROFILE_OTHER;
@@ -1583,18 +1602,20 @@ static int cmd_grow(struct vd *d, uint32_t need)
 
 /**
  * Read, execute and answer the chain at `head` of queue qi, counting it in
- * the profile. Returns VGS_OK, or the transport fault of a chain that
- * breaks the transport's rules.
+ * the profile, with its wait since the look-ahead read it from d->read_ns,
+ * which the call clears. Returns VGS_OK, or the transport fault of a chain
+ * that breaks the transport's rules.
  */
 static int serve_chain(struct vd *d, uint32_t qi, uint32_t head)
 {
     const struct vgs_queue *q = &d->drv.queue[qi];
     struct vd_profile_row *row = NULL;
-    uint64_t start = 0, copied = 0, executed = 0;
+    uint64_t start = 0, copied = 0, executed = 0, read = d->read_ns;
     uint32_t i, off = 0, type, len, want;
     struct vgs_chain c;
     int err, short_of_memory;
 
+    d->read_ns = 0;
     if ((err = vgs_chain_read(d->base, &d->l, q, &d->me.limits, head, &c)) != VGS_OK) {
         return err;
     }
@@ -1659,6 +1680,16 @@ static int serve_chain(struct vd *d, uint32_t qi, uint32_t head)
         row->copy_ns += copied - start;
         row->execute_ns += executed - copied;
         row->answer_ns += vd_profile_now() - executed;
+        if (read != 0 && start > read) {
+            row->queue_ns += start - read;
+        }
+        if (executed - copied >= VD_PROFILE_SLOW_NS) {
+            row->slow++;
+            row->slow_ns += executed - copied;
+        }
+        if (executed - copied > row->max_ns) {
+            row->max_ns = executed - copied;
+        }
     }
     return VGS_OK;
 }
@@ -1791,10 +1822,12 @@ static int ahead_backing(struct vd *d, uint16_t pos)
         return VGS_OK;
     }
     ahead_count(d, VD_AHEAD_SERVED);
+    d->read_ns = d->ahead[create & mask].read_ns;
     if ((err = serve_chain(d, VGS_QUEUE_CONTROL, d->ahead[create & mask].head)) != VGS_OK) {
         return err;
     }
     d->ahead[create & mask].done = 1;
+    d->read_ns = d->ahead[pos & mask].read_ns;
     if ((err = serve_chain(d, VGS_QUEUE_CONTROL, d->ahead[pos & mask].head)) != VGS_OK) {
         return err;
     }
@@ -1823,6 +1856,7 @@ static int ahead(struct vd *d, uint16_t idx)
     for (; d->seen != idx && (uint16_t)(d->seen - last) < q->size; d->seen++) {
         a = &d->ahead[d->seen & (q->size - 1)];
         ahead_read(d, vgs_avail_head(d->base, q, d->seen), a);
+        a->read_ns = d->profile ? vd_profile_now() : 0;
         if (a->type == VGS_CMD_BACKING && d->seen == last) {
             ahead_count(d, VD_AHEAD_TURN);
         } else if (a->type == VGS_CMD_BACKING && (err = ahead_backing(d, d->seen)) != VGS_OK) {
@@ -1856,6 +1890,7 @@ static int serve_control(struct vd *d)
         a = &d->ahead[pos & (q->size - 1)];
         done = a->done;
         head = a->head;
+        d->read_ns = a->read_ns;
         memset(a, 0, sizeof(*a));
         if (done) {
             continue;

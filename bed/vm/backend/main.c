@@ -481,15 +481,20 @@ static void write_profile(const struct vd_profile *p, const char *path)
     fp = fd < 0 ? NULL : fdopen(fd, "w");
     if (fp) {
         fprintf(fp, "monotonic_ns %llu\n", (unsigned long long)vd_profile_now());
-        fputs("type count bytes copy_ns execute_ns answer_ns\n", fp);
+        fputs("type count bytes copy_ns execute_ns answer_ns queue_ns slow slow_ns max_ns held "
+              "fence_ns\n",
+              fp);
         for (i = 0; i <= VD_PROFILE_OTHER; i++) {
             const struct vd_profile_row *row = &p->row[i];
 
             if (row->count) {
-                fprintf(fp, "%u %llu %llu %llu %llu %llu\n", row->type,
-                        (unsigned long long)row->count, (unsigned long long)row->bytes,
+                fprintf(fp, "%u %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu\n",
+                        row->type, (unsigned long long)row->count, (unsigned long long)row->bytes,
                         (unsigned long long)row->copy_ns, (unsigned long long)row->execute_ns,
-                        (unsigned long long)row->answer_ns);
+                        (unsigned long long)row->answer_ns, (unsigned long long)row->queue_ns,
+                        (unsigned long long)row->slow, (unsigned long long)row->slow_ns,
+                        (unsigned long long)row->max_ns, (unsigned long long)row->held,
+                        (unsigned long long)row->fence_ns);
             }
         }
         fputs("crc bytes read_ns crc_ns log_ns\n", fp);

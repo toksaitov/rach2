@@ -175,10 +175,18 @@ struct vd_counts {
 };
 
 /* Command totals in the serving thread. Times are monotonic nanoseconds. */
-#define VD_PROFILE_OTHER 49u
+#define VD_PROFILE_OTHER   49u
+/* An execution at least this long counts in a row's `slow` and `slow_ns`. */
+#define VD_PROFILE_SLOW_NS 4000000u
+
+/* One command type's counts under -T. `queue_ns` is the time from the
+   look-ahead's read of each chain to the start of its service; `fence_ns`
+   the time from a held command's fence call to its completion, over
+   `held` commands. */
 struct vd_profile_row {
     uint32_t type;
     uint64_t count, bytes, copy_ns, execute_ns, answer_ns;
+    uint64_t queue_ns, slow, slow_ns, max_ns, held, fence_ns;
 };
 
 /* What the look-ahead did with each backing ask it consumed: served ahead,
@@ -225,6 +233,8 @@ struct vd_pending {
     uint64_t fence_id; /* the command's fence */
     uint32_t unfenced; /* 1 while the renderer holds no fence of its own for it */
     uint32_t rlen;     /* response bytes in resp */
+    uint32_t row;      /* its profile row, under -T */
+    uint64_t held_ns;  /* when it was held, under -T */
     uint8_t resp[24];  /* a fenced command's response is a bare header */
     struct vgs_chain chain;
 };
@@ -236,20 +246,21 @@ struct vd_pending {
  * for entries served ahead may reuse their descriptors and ring places.
  */
 struct vd_ahead {
-    uint32_t head;  /* the chain's head, as the avail ring gave it */
-    uint32_t type;  /* the command's type, 0 for a chain too short */
-    uint32_t flags; /* its header's flags */
-    uint32_t id;    /* the resource its body names first, 0 for none */
-    uint32_t bad;   /* 1 for a chain that breaks the rules: the in-order pass judges it */
-    uint32_t done;  /* 1 once it was served ahead of its turn */
+    uint32_t head;    /* the chain's head, as the avail ring gave it */
+    uint32_t type;    /* the command's type, 0 for a chain too short */
+    uint32_t flags;   /* its header's flags */
+    uint32_t id;      /* the resource its body names first, 0 for none */
+    uint32_t bad;     /* 1 for a chain that breaks the rules: the in-order pass judges it */
+    uint32_t done;    /* 1 once it was served ahead of its turn */
+    uint64_t read_ns; /* when the look-ahead read it, under -T */
 };
 
 /*
  * The device: its region, its copy of each block and its tables. `lock`
- * is over `pend`, `npend`, `used`, `kick`, the queues' used rings and the
- * driver's block in `drv`, which the renderer's fence threads reach through
- * vd_fence_retired and vd_kick; the serving thread holds it only between
- * calls to the renderer, never across one.
+ * is over `pend`, `npend`, `nunfenced`, `used`, `kick`, the queues' used
+ * rings and the driver's block in `drv`, which the renderer's fence threads
+ * reach through vd_fence_retired and vd_kick; the serving thread holds it
+ * only between calls to the renderer, never across one.
  */
 struct vd {
     volatile uint8_t *base;
@@ -274,6 +285,7 @@ struct vd {
     uint8_t *cmd;       /* a chain's readable part, cmd_cap bytes, grown to a chain's */
     uint32_t cmd_cap;   /* at most offer.limits.max_cmd */
     uint32_t room;      /* the writable bytes of the chain being served */
+    uint64_t read_ns;   /* when the look-ahead read the chain being served, 0 for none */
     /* The stream a SUBMIT_3D with VGS_FLAG_JOINED takes, joined from its
      * VGS_CMD_PART chains (vgpushm.h): join_total bytes allocated at the
      * first part, join_len of them come; join_err is the refusal of a part
