@@ -109,11 +109,16 @@ flyby)
 	rm -f $B $G/Game.log
 	sampler_start $O/samples.txt
 	say "crysis: flyby $r $n" | tee $O/run.log
-	# Record the dump's length at the load mark, the first sight of Game.log's
-	# "loading time" line, and as each loop ends; end the game after loop 4.
-	( k=0; i=0; l=0; while [ $i -lt 3000 ]; do sleep 0.5; i=$((i + 1))
-		if [ $l = 0 ] && grep -q "loading time" $G/Game.log 2>/dev/null; then l=1
-			echo "$(cut -d' ' -f1 /proc/uptime) load $(wc -l < "$O/hud/frametime_(ms)" 2>/dev/null)" >> $O/frames.txt
+	# Record the dump's length as each loop ends, and at the load mark, the
+	# first sight of Game.log's "loading time" line, read after the log, with
+	# the uptime of the last look that found none (crysis-frames.py); end
+	# the game after loop 4.
+	( k=0; i=0; l=0; u=-; while [ $i -lt 3000 ]; do sleep 0.5; i=$((i + 1))
+		if [ $l = 0 ]; then t=$(cut -d' ' -f1 /proc/uptime)
+			if grep -q "loading time" $G/Game.log 2>/dev/null; then l=1
+				f=$(wc -l < "$O/hud/frametime_(ms)" 2>/dev/null)
+				echo "$(cut -d' ' -f1 /proc/uptime) load ${f:-0} $u" >> $O/frames.txt
+			else u=$t; fi
 		fi
 		c=$(grep -c "Finished" $B 2>/dev/null); c=${c:-0}
 		if [ "$c" -gt "$k" ]; then k=$c
