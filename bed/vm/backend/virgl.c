@@ -66,12 +66,19 @@ struct vr_pin {
  * most, vrend's, Mesa's and GBM's; the backend has three or four. */
 #define OWN_CLIENTS 16
 
-/* A create that the account admitted (`op_create`), held at its bound from
- * the admission to its UNREF or the epoch's end; id 0 is a free place,
- * since virtio-gpu has no resource 0. */
+/* The most bytes the account judges for one create, blob or backing, 256
+ * TiB: past any VM's memory, and small enough that the ledger's VD_OBJS
+ * entries and the readings sum in 64 bits without wrapping. */
+#define VR_BYTES_MAX ((uint64_t)1 << 48)
+
+/* A create or a blob of a context's memory that the account admitted
+ * (`op_create`, `op_blob`), held at its bound from the admission to its
+ * UNREF or the epoch's end; id 0 is a free place, since virtio-gpu has no
+ * resource 0. */
 struct vr_admit {
     uint32_t id;
-    uint32_t gen; /* the reading it was admitted under (`vr.gen`) */
+    uint32_t gen;  /* the reading it was admitted under (`vr.gen`) */
+    uint32_t blob; /* a blob, which every reading counts (`ledger_held`) */
     uint64_t bytes;
 };
 
@@ -93,11 +100,13 @@ struct vr {
     int async_fence; /* fences retire on virglrenderer's threads */
     int flags;       /* VIRGL_RENDERER_* given to each start, but the fences' */
     int native;      /* the DRM renderer runs native contexts */
-    /* The account's ledger of creates (`ledger_held`): open addressing by
-     * resource id, with the sum of the bounds it holds. */
+    /* The account's ledger of creates and blobs (`ledger_held`): open
+     * addressing by resource id, with the sum of the bounds it holds and
+     * the sum of the blobs' among them. */
     struct vr_admit admit[ADMIT_SLOTS];
     uint32_t nadmit;
     uint64_t admitted;
+    uint64_t blobs;
     /* The account's last reading of the GPU objects (`mem_room`): the bytes
      * it counted, the ledger's among them when it missed a client, its
      * generation, and the bounds of the creates admitted since, which it
@@ -366,7 +375,7 @@ static int resp(int err)
 }
 
 static int mem_room(struct vr *r, uint64_t size);
-static int admit_add(struct vr *r, uint32_t id, uint64_t bytes);
+static int admit_add(struct vr *r, uint32_t id, uint64_t bytes, int blob);
 static void admit_drop(struct vr *r, uint32_t id);
 
 /* Gallium's targets of a 3D texture, whose depth halves at each level, and
@@ -464,7 +473,7 @@ static int op_create(void *c, const struct vd_create *a)
     if ((err = virgl_renderer_resource_create(&args, 0, 0)) != 0) {
         return resp(err);
     }
-    if (admit_add(r, a->id, bytes) != 0) {
+    if (admit_add(r, a->id, bytes, 0) != 0) {
         virgl_renderer_resource_unref(a->id);
         fprintf(stderr, "backend: create: resource %u: refused: the account's ledger is full\n",
                 (unsigned)a->id);
@@ -524,22 +533,33 @@ static int op_transfer(void *c, const struct vd_transfer *t)
 
 /**
  * Create a blob resource: guest memory in the region, or a context's. A
- * blob of a context's memory is charged to the account at its size,
- * rounded up to a page, as a create is (`admit_add`), so that the
- * judgments until the account's next reading count it: the context made
- * its storage at a submission or in Venus's workers, after that reading
- * perhaps, and it may have no pages yet. It is not judged, since the
- * storage exists already and a refusal would free none of it. One the
- * ledger has no place for is refused with ERR_OUT_OF_MEMORY, as a create
- * is.
+ * blob of a context's memory is judged at its size, rounded up to a page,
+ * as a create is (`mem_room`), before the renderer makes it, since the
+ * create may allocate its storage, as Venus's mappable blob of blob_id 0
+ * does in shared memory; past the room it is refused with
+ * ERR_OUT_OF_MEMORY. A blob made is held in the ledger at that size
+ * (`admit_add`) until its UNREF, and every reading counts it besides
+ * (`ledger_held`), since its storage may be shared memory, which has no
+ * DRM figure, or a client's that no reading names. One the ledger has no
+ * place for is refused the same way.
  */
 static int op_blob(void *c, const struct vd_blob *a, struct iovec *iov, uint32_t n)
 {
     struct virgl_renderer_resource_create_blob_args args;
     struct vr *r = c;
-    uint64_t bytes;
+    uint64_t bytes = 0;
     int err;
 
+    if (a->mem != VIRGL_RENDERER_BLOB_MEM_GUEST) {
+        bytes = a->size > VR_BYTES_MAX ? UINT64_MAX : (a->size + 4095u) & ~(uint64_t)4095u;
+        if (!mem_room(r, bytes)) {
+            fprintf(stderr,
+                    "backend: blob: resource %u: refused: %llu bytes: no room in the VM's "
+                    "counts\n",
+                    (unsigned)a->id, (unsigned long long)bytes);
+            return VD_RESP_ERR_OUT_OF_MEMORY;
+        }
+    }
     memset(&args, 0, sizeof(args));
     args.res_handle = a->id;
     args.ctx_id = a->ctx;
@@ -555,8 +575,7 @@ static int op_blob(void *c, const struct vd_blob *a, struct iovec *iov, uint32_t
     if (a->mem == VIRGL_RENDERER_BLOB_MEM_GUEST) {
         return 0;
     }
-    bytes = a->size > UINT64_MAX - 4095u ? UINT64_MAX : (a->size + 4095u) & ~(uint64_t)4095u;
-    if (admit_add(r, a->id, bytes) != 0) {
+    if (admit_add(r, a->id, bytes, 1) != 0) {
         virgl_renderer_resource_unref(a->id);
         fprintf(stderr, "backend: blob: resource %u: refused: the account's ledger is full\n",
                 (unsigned)a->id);
@@ -1345,13 +1364,16 @@ static void own_learn(struct vr *r, const struct gpu_scan *s)
 }
 
 /**
- * The bytes the account's ledger adds to a reading s: none when s read
- * every client of this process that the epoch's start named (`own_clients`),
- * whose figures then hold every admitted create's object that has no pages
- * yet; else the bounds of every create admitted and not yet unreferenced,
- * which counts an object with pages twice, here and in MemAvailable, and
- * refuses early, but never admits memory twice. A reading misses a client
- * when another thread moves its descriptor across the walk.
+ * The bytes the account's ledger adds to a reading s: the live blobs' sizes
+ * when s read every client of this process that the epoch's start named
+ * (`own_clients`), whose figures then hold every admitted create's object
+ * that has no pages yet, while a blob's storage may be shared memory, with
+ * no DRM figure, or a client's that no reading names, a Venus worker's or
+ * a native context's; else the bounds of every create and blob admitted
+ * and not yet unreferenced. Either counts an object with pages twice, here
+ * and in MemAvailable or a figure, and refuses early, but never admits
+ * memory twice. A reading misses a client when another thread moves its
+ * descriptor across the walk.
  */
 static uint64_t ledger_held(const struct vr *r, const struct gpu_scan *s)
 {
@@ -1368,7 +1390,7 @@ static uint64_t ledger_held(const struct vr *r, const struct gpu_scan *s)
             return r->admitted;
         }
     }
-    return 0;
+    return r->blobs;
 }
 
 /** The ledger's home place of resource id, by Knuth's multiplicative hash. */
@@ -1389,17 +1411,21 @@ static uint32_t admit_slot(const struct vr *r, uint32_t id)
 }
 
 /**
- * Hold resource id's create in the ledger at `bytes`, its bound, which
- * counts in `since` until the account's next reading. Returns 0,
- * or -1 when the ledger holds VD_OBJS creates already, which the device's
- * table of resources keeps from happening.
+ * Hold resource id's create, or its blob when blob is set, in the ledger at
+ * `bytes`, its bound, at most VR_BYTES_MAX as `mem_room` judged it, which
+ * counts in `since` until the account's next reading. Returns 0, or -1
+ * when the ledger holds VD_OBJS creates already, which the device's table
+ * of resources keeps from happening.
  */
-static int admit_add(struct vr *r, uint32_t id, uint64_t bytes)
+static int admit_add(struct vr *r, uint32_t id, uint64_t bytes, int blob)
 {
     uint32_t i = admit_slot(r, id);
 
     if (r->admit[i].id == id) {
         r->admitted -= r->admit[i].bytes;
+        if (r->admit[i].blob) {
+            r->blobs -= r->admit[i].bytes;
+        }
         if (r->admit[i].gen == r->gen) {
             r->since -= r->admit[i].bytes;
         }
@@ -1410,8 +1436,12 @@ static int admit_add(struct vr *r, uint32_t id, uint64_t bytes)
     }
     r->admit[i].id = id;
     r->admit[i].gen = r->gen;
+    r->admit[i].blob = blob != 0;
     r->admit[i].bytes = bytes;
     r->admitted += bytes;
+    if (blob) {
+        r->blobs += bytes;
+    }
     r->since += bytes;
     return 0;
 }
@@ -1431,6 +1461,9 @@ static void admit_drop(struct vr *r, uint32_t id)
         return;
     }
     r->admitted -= r->admit[i].bytes;
+    if (r->admit[i].blob) {
+        r->blobs -= r->admit[i].bytes;
+    }
     if (r->admit[i].gen == r->gen) {
         r->since -= r->admit[i].bytes;
     }
@@ -1452,9 +1485,9 @@ static void admit_drop(struct vr *r, uint32_t id)
 
 /**
  * Read the GPU objects afresh for the account (`gpu_unbacked`): their
- * bytes, and the ledger's when the reading missed a client of the
- * renderer's (`ledger_held`), become r->read_sum, and the creates admitted
- * from now on count in r->since until the next reading. Returns 0, or -1
+ * bytes, and the ledger's blobs, or all of it when the reading missed a
+ * client of the renderer's (`ledger_held`), become r->read_sum, and the
+ * creates admitted from now on count in r->since until the next reading. Returns 0, or -1
  * with `backend: counts: PATH: ERROR` when the objects cannot be read,
  * which leaves no reading.
  */
@@ -1493,8 +1526,9 @@ static int mem_read(struct vr *r)
  * bounds of the creates admitted since (`since`), which the reading does
  * not hold; MemAvailable is read at each judgment, after the objects, so
  * that one made resident since the reading is counted twice, which refuses
- * early, and never not at all; a blob of a context's memory is charged to
- * `since` at its creation too (`op_blob`). A judgment that would leave
+ * early, and never not at all; a blob of a context's memory is judged and
+ * charged so too, and every reading counts it until its UNREF (`op_blob`).
+ * A size past VR_BYTES_MAX is refused at once. A judgment that would leave
  * less room than another eighth of the VM's memory, the margin, or would
  * refuse, reads the objects afresh and judges again, since the renderer
  * also makes GPU objects that no command it serves names, at submissions
@@ -1517,6 +1551,9 @@ static int mem_room(struct vr *r, uint64_t size)
     char line[128];
     FILE *f;
 
+    if (size > VR_BYTES_MAX) {
+        return 0;
+    }
     if (!r->have_reading) {
         if (mem_read(r) != 0) {
             return 0;
@@ -1714,6 +1751,7 @@ static void op_reset(void *c)
     memset(r->admit, 0, sizeof(r->admit));
     r->nadmit = 0;
     r->admitted = 0;
+    r->blobs = 0;
     r->have_reading = 0;
     r->since = 0;
     if (r->kms) {
