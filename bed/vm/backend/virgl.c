@@ -58,6 +58,22 @@ struct vr_pin {
     struct iovec *back; /* a backing's mapping and length, or 0 for a blob */
 };
 
+/* The places of the account's ledger of creates, twice the resources the
+ * device's table holds, a power of two for the hash. */
+#define ADMIT_SLOTS (2u * VD_OBJS)
+
+/* The DRM clients of this process that the epoch's first reading names at
+ * most, vrend's, Mesa's and GBM's; the backend has three or four. */
+#define OWN_CLIENTS 16
+
+/* A create that the account admitted (`op_create`), held at its bound from
+ * the admission to its UNREF or the epoch's end; id 0 is a free place,
+ * since virtio-gpu has no resource 0. */
+struct vr_admit {
+    uint32_t id;
+    uint64_t bytes;
+};
+
 struct vr {
     struct vd *dev;
     struct kms *kms;
@@ -76,7 +92,20 @@ struct vr {
     int async_fence; /* fences retire on virglrenderer's threads */
     int flags;       /* VIRGL_RENDERER_* given to each start, but the fences' */
     int native;      /* the DRM renderer runs native contexts */
+    /* The account's ledger of creates (`ledger_held`): open addressing by
+     * resource id, with the sum of the bounds it holds. */
+    struct vr_admit admit[ADMIT_SLOTS];
+    uint32_t nadmit;
+    uint64_t admitted;
+    /* The DRM clients of this process that the epoch's start read, by
+     * "drm-pdev drm-client-id", and whether that reading could not name
+     * them all, which makes every judgment count the ledger. */
+    char own[OWN_CLIENTS][80];
+    uint32_t nown;
+    int own_unknown;
 };
+
+static void own_clients(struct vr *r);
 
 /* virglrenderer calls back with the cookie vr_init passed. */
 static struct virgl_renderer_callbacks callbacks;
@@ -136,7 +165,8 @@ static void log_line(enum virgl_log_level_flags level, const char *message, void
  * not start, and an asynchronous fence of vrend's would never retire
  * (vrend_renderer_use_threaded_sync), so the renderer starts again without
  * the thread and its fences are polled. A native context has no way but
- * the asynchronous one. Returns 0, or virglrenderer's error.
+ * the asynchronous one. Then the DRM clients the renderer opened are read
+ * for the account (`own_clients`). Returns 0, or virglrenderer's error.
  */
 static int start(struct vr *r)
 {
@@ -159,6 +189,7 @@ static int start(struct vr *r)
     } else if (r->poll_fd < 0) {
         fprintf(stderr, "backend: fences: no sync thread; vrend's fences will not retire\n");
     }
+    own_clients(r);
     return 0;
 }
 
@@ -319,7 +350,9 @@ static int resp(int err)
     return VD_RESP_ERR_UNSPEC;
 }
 
-static int mem_room(uint64_t size);
+static int mem_room(struct vr *r, uint64_t size);
+static int admit_add(struct vr *r, uint32_t id, uint64_t bytes);
+static void admit_drop(struct vr *r, uint32_t id);
 
 /* Gallium's targets of a 3D texture, whose depth halves at each level, and
  * of a cube map, which has six faces. */
@@ -342,7 +375,8 @@ static int mem_room(uint64_t size);
  * the driver's size: it judges only this create, since once the renderer
  * has the resource the VM's counts and i915's hold its storage
  * (`gpu_unbacked`), and an error of one create lies within the eighth of
- * the VM that `mem_room` keeps.
+ * the VM that `mem_room` keeps; the ledger holds it at this bound only
+ * when a reading missed a client (`ledger_held`).
  */
 static uint64_t create_bytes(const struct vd_create *a)
 {
@@ -384,15 +418,18 @@ static uint64_t create_bytes(const struct vd_create *a)
  * ERR_OUT_OF_MEMORY, as the backing of one is, since the renderer takes
  * the storage from the VM's memory, which a GPU's driver fills and does
  * not give back while the resource lives: past the room the VM's OOM
- * killer ends the process that maps the most, this one.
+ * killer ends the process that maps the most, this one. A create made is
+ * held in the account's ledger at its bound (`admit_add`) until its UNREF,
+ * and one the ledger has no place for is refused the same way.
  */
 static int op_create(void *c, const struct vd_create *a)
 {
     struct virgl_renderer_resource_create_args args;
+    struct vr *r = c;
     uint64_t bytes = create_bytes(a);
+    int err;
 
-    (void)c;
-    if (!mem_room(bytes)) {
+    if (!mem_room(r, bytes)) {
         fprintf(stderr,
                 "backend: create: resource %u: refused: %llu bytes: no room in the VM's counts\n",
                 (unsigned)a->id, (unsigned long long)bytes);
@@ -409,10 +446,20 @@ static int op_create(void *c, const struct vd_create *a)
     args.last_level = a->last_level;
     args.nr_samples = a->nr_samples;
     args.flags = a->flags;
-    return resp(virgl_renderer_resource_create(&args, 0, 0));
+    if ((err = virgl_renderer_resource_create(&args, 0, 0)) != 0) {
+        return resp(err);
+    }
+    if (admit_add(r, a->id, bytes) != 0) {
+        virgl_renderer_resource_unref(a->id);
+        fprintf(stderr, "backend: create: resource %u: refused: the account's ledger is full\n",
+                (unsigned)a->id);
+        return VD_RESP_ERR_OUT_OF_MEMORY;
+    }
+    return 0;
 }
 
-/** Drop a resource, and its framebuffer on the display. */
+/** Drop a resource, its framebuffer on the display and its place in the
+ * account's ledger. */
 static void op_unref(void *c, uint32_t id)
 {
     struct vr *r = c;
@@ -421,6 +468,7 @@ static void op_unref(void *c, uint32_t id)
         kms_forget(r->kms, id);
     }
     virgl_renderer_resource_unref(id);
+    admit_drop(r, id);
 }
 
 /** Attach backing in the region; device.c keeps the list. */
@@ -839,6 +887,8 @@ struct gpu_scan {
     uint64_t sum;            /* bytes of the objects counted */
     struct gpu_client *seen; /* each client with an ID read so far */
     size_t nseen, cap;
+    size_t nown;     /* the first of seen, those of this process */
+    size_t anon;     /* figures read with no client ID to name them */
     int failed;      /* the errno that stopped the scan, or 0 */
     char where[512]; /* the file or directory the scan failed on */
 };
@@ -901,8 +951,10 @@ static void client_count(struct gpu_scan *s, const char *path, const char *key, 
  * pages at its first use, not at its creation, so these are bytes the VM's
  * counts do not hold yet and the renderer will take. A client that
  * drm-client-id and drm-pdev name is counted once however many descriptors
- * share it, at the largest figure they give (`client_count`). A file of any
- * other kind adds nothing, nor does one whose descriptor or process ended
+ * share it, at the largest figure they give (`client_count`), and named in
+ * s even with no figure; a figure with no ID is added and counted in
+ * s->anon. A file of any other kind adds nothing, nor does one whose
+ * descriptor or process ended
  * before it was read (ENOENT, ESRCH); any other failure to open or read it
  * fails the scan.
  */
@@ -958,12 +1010,12 @@ static void unbacked_of(const char *path, struct gpu_scan *s)
         }
         return;
     }
-    if (!has_total) {
-        return;
-    }
-    bytes = has_resident ? (total > resident ? total - resident : 0) : total;
+    bytes = !has_total ? 0 : has_resident ? (total > resident ? total - resident : 0) : total;
     if (!has_id) {
-        s->sum += bytes;
+        if (has_total) {
+            s->sum += bytes;
+            s->anon++;
+        }
         return;
     }
     snprintf(key, sizeof(key), "%s %llu", pdev, id);
@@ -1062,26 +1114,26 @@ static void scan_fds(struct gpu_scan *s, long pid)
 /**
  * Read into s->sum the bytes of the VM's memory that the renderer's GPU
  * objects will take and the VM's counts do not hold yet (`unbacked_of`),
- * over every DRM descriptor (`scan_fds`) of every process of the backend's
- * cgroup, the service's (`cgroup_procs`), which holds virglrenderer's
- * render server and its workers too; of this process alone where the
- * kernel has no cgroup v2 to name. 0 with no GPU: llvmpipe fills a texture's memory at
- * its create. A process that ends during the scan adds nothing. Returns 0,
- * or -1 with s->failed and s->where when a file or directory of the scan
+ * over every DRM descriptor (`scan_fds`) of this process, then of every
+ * other process of the backend's cgroup, the service's (`cgroup_procs`),
+ * which holds virglrenderer's render server and its workers too. The
+ * clients of this process are the first s->nown of s->seen, which the
+ * caller frees. 0 with no GPU: llvmpipe fills a texture's memory at its
+ * create. A process that ends during the scan adds nothing. Returns 0, or
+ * -1 with s->failed and s->where when a file or directory of the scan
  * cannot be opened or read for any other cause, ENOMEM or EMFILE among
  * them, since a scan that skipped a client would count its objects as 0.
  */
 static int gpu_unbacked(struct gpu_scan *s)
 {
     char path[512];
+    long pid, self = (long)getpid();
     FILE *procs;
-    long pid;
 
     memset(s, 0, sizeof(*s));
-    procs = cgroup_procs(s, path, sizeof(path));
-    if (procs == 0 && s->failed == 0) {
-        scan_fds(s, (long)getpid());
-    }
+    scan_fds(s, self);
+    s->nown = s->nseen;
+    procs = s->failed ? 0 : cgroup_procs(s, path, sizeof(path));
     while (procs && s->failed == 0) {
         if (fscanf(procs, "%ld", &pid) != 1) {
             if (ferror(procs)) {
@@ -1089,14 +1141,141 @@ static int gpu_unbacked(struct gpu_scan *s)
             }
             break;
         }
-        scan_fds(s, pid);
+        if (pid != self) {
+            scan_fds(s, pid);
+        }
     }
     if (procs) {
         fclose(procs);
     }
-    free(s->seen);
-    s->seen = 0;
     return s->failed ? -1 : 0;
+}
+
+/**
+ * Name in r->own the DRM clients of this process that the renderer just
+ * started holds: vrend's and Mesa's, which virgl_renderer_init opens and
+ * which stay open until virgl_renderer_cleanup, and GBM's, open for the
+ * backend's life. Every resource a create makes takes its storage through
+ * one of them. Clients opened later, a native context's or the probe's
+ * Vulkan, are not named, since none holds a create's storage and one that
+ * closes would make every later reading count the ledger. A reading that
+ * fails, names more than OWN_CLIENTS or reads a figure with no client ID
+ * sets r->own_unknown, so that every judgment of the epoch counts the
+ * ledger (`ledger_held`).
+ */
+static void own_clients(struct vr *r)
+{
+    struct gpu_scan s;
+    size_t i;
+
+    memset(&s, 0, sizeof(s));
+    scan_fds(&s, (long)getpid());
+    r->own_unknown = s.failed != 0 || s.anon != 0 || s.nseen > OWN_CLIENTS;
+    r->nown = 0;
+    for (i = 0; i < s.nseen && i < OWN_CLIENTS; i++) {
+        snprintf(r->own[r->nown++], sizeof(r->own[0]), "%s", s.seen[i].key);
+    }
+    free(s.seen);
+    if (r->own_unknown) {
+        fprintf(stderr, "backend: counts: the renderer's clients are not all named: "
+                        "every create is counted at its bound\n");
+    }
+}
+
+/**
+ * The bytes the account's ledger adds to a reading s: none when s read
+ * every client of this process that the epoch's start named (`own_clients`),
+ * whose figures then hold every admitted create's object that has no pages
+ * yet; else the bounds of every create admitted and not yet unreferenced,
+ * which counts an object with pages twice, here and in MemAvailable, and
+ * refuses early, but never admits memory twice. A reading misses a client
+ * when another thread moves its descriptor across the walk.
+ */
+static uint64_t ledger_held(const struct vr *r, const struct gpu_scan *s)
+{
+    uint32_t i;
+    size_t j;
+
+    if (r->own_unknown) {
+        return r->admitted;
+    }
+    for (i = 0; i < r->nown; i++) {
+        for (j = 0; j < s->nown && strcmp(r->own[i], s->seen[j].key) != 0; j++) {
+        }
+        if (j == s->nown) {
+            return r->admitted;
+        }
+    }
+    return 0;
+}
+
+/** The ledger's home place of resource id, by Knuth's multiplicative hash. */
+static uint32_t admit_home(uint32_t id)
+{
+    return (id * 2654435761u) & (ADMIT_SLOTS - 1u);
+}
+
+/** The ledger's place of resource id, or the free place it would take. */
+static uint32_t admit_slot(const struct vr *r, uint32_t id)
+{
+    uint32_t i = admit_home(id);
+
+    while (r->admit[i].id != 0 && r->admit[i].id != id) {
+        i = (i + 1u) & (ADMIT_SLOTS - 1u);
+    }
+    return i;
+}
+
+/**
+ * Hold resource id's create in the ledger at `bytes`, its bound. Returns 0,
+ * or -1 when the ledger holds VD_OBJS creates already, which the device's
+ * table of resources keeps from happening.
+ */
+static int admit_add(struct vr *r, uint32_t id, uint64_t bytes)
+{
+    uint32_t i = admit_slot(r, id);
+
+    if (r->admit[i].id == id) {
+        r->admitted -= r->admit[i].bytes;
+    } else if (r->nadmit == VD_OBJS) {
+        return -1;
+    } else {
+        r->nadmit++;
+    }
+    r->admit[i].id = id;
+    r->admit[i].bytes = bytes;
+    r->admitted += bytes;
+    return 0;
+}
+
+/**
+ * Drop resource id's create from the ledger, if it holds it, moving each
+ * later entry of its run back into the free place when its home allows,
+ * so that every entry stays reachable from its home (Knuth's algorithm R,
+ * TAOCP 6.4).
+ */
+static void admit_drop(struct vr *r, uint32_t id)
+{
+    uint32_t i = admit_slot(r, id), j, k;
+
+    if (r->admit[i].id != id) {
+        return;
+    }
+    r->admitted -= r->admit[i].bytes;
+    r->nadmit--;
+    for (;;) {
+        r->admit[i].id = 0;
+        j = i;
+        do {
+            j = (j + 1u) & (ADMIT_SLOTS - 1u);
+            if (r->admit[j].id == 0) {
+                return;
+            }
+            k = admit_home(r->admit[j].id);
+        } while (i <= j ? (i < k && k <= j) : (i < k || k <= j));
+        r->admit[i] = r->admit[j];
+        i = j;
+    }
 }
 
 /**
@@ -1114,27 +1293,32 @@ static int gpu_unbacked(struct gpu_scan *s)
  * the two readings is counted twice, which refuses early, and never not at
  * all. Each judgment reads them afresh, since the renderer makes GPU
  * objects by other paths too, at submissions, blob creates and in Venus's
- * workers, which only a new reading counts. main has the C library give
- * back at once what llvmpipe frees. 0,
- * with `backend: counts: PATH: ERROR`, when the objects cannot be read; 1
+ * workers, which only a new reading counts; a reading that missed a client
+ * of the renderer's adds every admitted create at its bound (`ledger_held`),
+ * so that a miss cannot admit a create's memory twice. main has the C
+ * library give back at once what llvmpipe frees. 0, with
+ * `backend: counts: PATH: ERROR`, when the objects cannot be read; 1
  * when the VM has no /proc/meminfo or it lacks either count; 0 when it
  * cannot be opened for want of memory or its read fails, as seq_file's
  * does when it cannot allocate its buffer. MemAvailable reads 0, not less,
  * when the free pages are down to the watermarks, which is no room.
  */
-static int mem_room(uint64_t size)
+static int mem_room(struct vr *r, uint64_t size)
 {
     unsigned long long total = 0, avail = 0, kib;
     int has_total = 0, has_avail = 0, failed;
     struct gpu_scan scan;
-    uint64_t need;
+    uint64_t need, held;
     char line[128];
     FILE *f;
 
     if (gpu_unbacked(&scan) != 0) {
         fprintf(stderr, "backend: counts: %s: %s\n", scan.where, strerror(scan.failed));
+        free(scan.seen);
         return 0;
     }
+    held = ledger_held(r, &scan);
+    free(scan.seen);
     if ((f = fopen("/proc/meminfo", "r")) == 0) {
         return errno != ENOMEM && errno != ENFILE && errno != EMFILE;
     }
@@ -1155,7 +1339,7 @@ static int mem_room(uint64_t size)
     if (!has_total || !has_avail) {
         return 1;
     }
-    need = total / 8u + scan.sum;
+    need = total / 8u + scan.sum + held;
     return need <= avail && size <= avail - need;
 }
 
@@ -1213,7 +1397,7 @@ static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
         err = ENOSPC;
         step = "no pin";
     }
-    if (err == 0 && !mem_room(q->size)) {
+    if (err == 0 && !mem_room(r, q->size)) {
         err = ENOMEM;
         step = "no room in the VM's counts";
     }
@@ -1297,11 +1481,12 @@ static void op_unpin(void *c, uint32_t id)
 }
 
 /**
- * End every context, resource and pin for a new epoch: virglrenderer stops
- * and starts again (`start`), since virgl_renderer_reset in 1.1.0 joins
- * vrend's sync thread and starts none, after which no asynchronous fence of
- * vrend's retires (vrend_renderer_prepare_reset and vrend_renderer_reset).
- * A renderer that fails to start ends the backend.
+ * End every context, resource, pin and the account's ledger for a new
+ * epoch: virglrenderer stops and starts again (`start`), since
+ * virgl_renderer_reset in 1.1.0 joins vrend's sync thread and starts none,
+ * after which no asynchronous fence of vrend's retires
+ * (vrend_renderer_prepare_reset and vrend_renderer_reset). A renderer that
+ * fails to start ends the backend.
  */
 static void op_reset(void *c)
 {
@@ -1311,6 +1496,9 @@ static void op_reset(void *c)
     while (r->npins) {
         pin_drop(r, &r->pins[0]);
     }
+    memset(r->admit, 0, sizeof(r->admit));
+    r->nadmit = 0;
+    r->admitted = 0;
     if (r->kms) {
         kms_reset(r->kms);
     }
