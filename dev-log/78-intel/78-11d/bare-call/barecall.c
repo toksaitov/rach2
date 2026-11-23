@@ -33,6 +33,9 @@
  * and the ext2 volume on /dev/vda at /mnt by the ext4 driver, which takes
  * extra_isize where Linux's ext2 mode does not, without access times; times
  * /mnt/f, or /init when there is no module, and powers the machine off.
+ *
+ * With BARECALL_LIBRARY defined, it gives its helpers to a program that
+ * includes it, such as replay.c, without its own start.
  */
 
 #define SYS_read 0
@@ -495,6 +498,7 @@ static void sort(unsigned long *v, unsigned long n)
         }
 }
 
+#ifndef BARECALL_LIBRARY
 /** The program, from the stack the kernel left at SP. */
 void start_c(long *sp)
 {
@@ -587,3 +591,4 @@ __asm__(".globl _start\n"
         "    and $-16, %rsp\n"
         "    call start_c\n"
         "    hlt\n");
+#endif

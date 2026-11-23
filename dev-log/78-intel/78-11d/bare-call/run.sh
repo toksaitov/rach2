@@ -14,7 +14,9 @@
 # command line takes BARECALL_LINUX_APPEND too, such as mitigations=off, and
 # Rach2's BARECALL_RACH2_APPEND, such as rach2.cycleaccount. BARECALL_ARGS
 # follows the file in barecall's arguments on both, such as `8000 9 all
-# trace`; Rach2's boots mount debugfs first. Each boot's console is OUT/linux-N.log or
+# trace`; Rach2's boots mount debugfs first. BARECALL_SOURCE names another
+# program of this directory to run in barecall's place, such as replay.c,
+# and BARECALL_DONE the line that ends its run, such as `replay: done`. Each boot's console is OUT/linux-N.log or
 # OUT/rach2-KERNEL-N.log, KERNEL the first 8 digits of its SHA-256, and the
 # medians are printed at the end.
 set -eu
@@ -35,8 +37,9 @@ test -f "$module"
 test -f "$image"
 mkdir -p "$out"
 
+export BARECALL_DONE="${BARECALL_DONE:-barecall: openclose}"
 gcc -O2 -ffreestanding -static -nostdlib -fno-stack-protector -fno-pie -no-pie \
-    -o "$out/barecall" "$step/barecall.c"
+    -o "$out/barecall" "$step/${BARECALL_SOURCE:-barecall.c}"
 python3 -I "$step/initrd.py" "$out/barecall" "$out/initrd.gz" "$module"
 rm -rf "$out/volume"
 mkdir "$out/volume"
@@ -54,7 +57,7 @@ boot_linux()
         -append "console=ttyS0 loglevel=7 ${BARECALL_LINUX_APPEND:-} -- /mnt/f ${BARECALL_ARGS:-}" \
         -display none -vga none \
         -monitor none -no-reboot -nic none $disk -serial "file:$1"
-    grep -q 'barecall: openclose' "$1"
+    grep -q "$BARECALL_DONE" "$1"
 }
 
 # The guest's wait for the boot's own kernel work to end: until the system
@@ -80,7 +83,7 @@ boot_rach2_once()
         BARECALL_CMD="mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null; mkdir -p /mnt && mount -t ext2 -o noatime /dev/disk0 /mnt && $quiet && /tmp/barecall /mnt/f ${BARECALL_ARGS:-}" \
         python3 -I "$step/serial.py" "$1" "$image" "$out/barecall" \
         "$tree/krffs/rach2_demo_password" "$2"
-    grep -q 'barecall: openclose' "$2"
+    grep -q "$BARECALL_DONE" "$2"
 }
 
 kernels=$*
@@ -100,4 +103,4 @@ while [ "$i" -le "$pairs" ]; do
     done
     i=$((i + 1))
 done
-grep -H 'barecall: [a-z0-9]*: median' "$out"/*.log | tr -d '\r'
+grep -H -E '(barecall: [a-z0-9]*: median|replay: [a-z]*: total)' "$out"/*.log | tr -d '\r'
