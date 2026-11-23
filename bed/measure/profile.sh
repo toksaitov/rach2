@@ -132,6 +132,7 @@ if command -v perf > /dev/null; then
             # i915's busy, wait and semaphore time of the render ring, in
             # ns, over the whole VM; i915 samples a ring without execlists.
             rm -f /run/vgpu-gpu.stat
+            systemctl reset-failed vgpu-profile-gpu 2> /dev/null || :
             systemd-run -q --unit=vgpu-profile-gpu --property=KillSignal=SIGINT \
                 --property=RuntimeMaxSec=900s perf stat -a -x, -o /run/vgpu-gpu.stat \
                 -e i915/rcs0-busy/,i915/rcs0-wait/,i915/rcs0-sema/ || :
@@ -140,9 +141,22 @@ if command -v perf > /dev/null; then
                 --call-graph dwarf,4096 -p "$pid" -o /run/vgpu-perf.data
             ;;
         after)
+            # perf makes its file before it opens the counters, so the
+            # readings count only from a perf still running at the end
+            # that gave a number for each of the three.
+            gpu=$(systemctl is-active vgpu-profile-gpu 2> /dev/null) || :
             systemctl stop vgpu-profile-gpu 2> /dev/null || :
+            systemctl reset-failed vgpu-profile-gpu 2> /dev/null || :
             echo 'gpu busy'
-            cat /run/vgpu-gpu.stat 2> /dev/null || echo 'gpu busy unavailable'
+            if [ "$gpu" != active ]; then
+                echo "gpu busy unavailable: perf ${gpu:-gone}"
+            elif awk -F, 'BEGIN { n["rcs0-busy"] = n["rcs0-wait"] = n["rcs0-sema"] = 0 }
+                $1 ~ /^[0-9.]+$/ { for (e in n) if (index($3, e)) n[e] = 1 }
+                END { for (e in n) if (!n[e]) exit 1 }' /run/vgpu-gpu.stat 2> /dev/null; then
+                cat /run/vgpu-gpu.stat
+            else
+                echo 'gpu busy unavailable: no reading of each counter'
+            fi
             systemctl stop vgpu-profile-perf
             perf report --stdio --percent-limit 0.5 -i /run/vgpu-perf.data
             ;;
