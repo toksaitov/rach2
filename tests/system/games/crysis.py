@@ -31,11 +31,13 @@ and ends the game after LOOPS of its four loops; each loop's rate is judged
 against GATE frames a second (24 unless CRYSIS_GATE says), beside Linux's,
 but on the 32-bit game, which need only complete its loops. Each loop's
 frame figures are of its 2000 frames in the HUD's dump, counted from the
-load's last frame, which is loop 0's first and which `load:` reports apart;
-a run whose load mark cannot fix that frame is reported uncut, and one whose
-dump does not hold a loop whole fails (loop_windows). With
-CRYSIS_LOAD_TRACE=N it samples every thread from the HUD's Nth frame across
-the long frame that ends the level's load, into STATE/NAME-load (LoadTrace).
+load's last frame, which is loop 0's first and which `load:` reports apart.
+A run whose load mark cannot fix that frame is uncut, and an uncut run, or
+one whose dump does not hold a loop whole, fails (loop_windows); the frame
+figures themselves carry no gate. With CRYSIS_LOAD_TRACE=N it samples every
+thread from the HUD's Nth frame across the long frame that ends the level's
+load, in a child process killed at 30 s, into STATE/NAME-load, and fails
+unless the sampler ended by itself and the long frame came (LoadTrace).
 `hud` loads a copy of SAVE, a checkpoint before the suit's reboot on the
 first level, made under a name of its own so that the player's save is only
 read, enters the reboot's trigger at the console and reads the HUD back 35 s
@@ -56,7 +58,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import threading
 import time
 
 import wm
@@ -474,6 +475,8 @@ def finished():
 
 # The frames of one loop of the flyby, as the game's benchmark log counts them.
 LOOP_FRAMES = 2000
+# The shortest frame, in ms, that can be the one that ends the level's load.
+LOAD_FRAME = 1000
 # The longest a load mark may come after the last look at Game.log that found
 # no load, in seconds, for the load's last frame to be found from the mark;
 # the load's wait and its trace look every 0.5 s or less.
@@ -489,16 +492,18 @@ def loop_windows(dump, mark, loops):
     the HUD writes each frame's line as it is presented. So the load ends in
     a frame that ends less than GAP before frame COUNT - 1 does, or in the
     one that ended last before those, or in frame COUNT, then being drawn:
-    frames A to B. L, the load's last frame, is the longest of them, of
-    about 1.5 s on Rach2, whatever the mark's lag. The game counts L as loop
-    0's first frame, and loop k as the LOOP_FRAMES frames from
-    L + k * LOOP_FRAMES; each later loop begins with a slower frame at that
-    place in every run read. windows[k] is (start, end) of loop k's figures,
-    which leave L out of loop 0; a window whose end passes the dump's is not
-    whole. WHY says why a run is uncut, with L None and no windows: no mark,
-    a mark more than LOAD_LAG after the last look that found no load, or a
-    dump that ends before the mark. tools/lenovo/debian-ref/crysis-frames.py
-    cuts Linux's dump by this rule."""
+    frames A to B, read from the whole dump after the run. L, the load's
+    last frame, is the one of them of LOAD_FRAME ms or more, about 1.5 s on
+    Rach2. The game counts L as loop 0's first frame, and loop k as the
+    LOOP_FRAMES frames from L + k * LOOP_FRAMES; each later loop begins
+    with a slower frame at that place in every run read. windows[k] is
+    (start, end) of loop k's figures, which leave L out of loop 0; a window
+    whose end passes the dump's is not whole. WHY says why a run is uncut,
+    with L None and no windows: no mark, a mark more than LOAD_LAG after the
+    last look that found no load, a dump that ends before the mark, or no
+    frame, or more than one, of LOAD_FRAME ms or more in A to B.
+    tools/lenovo/debian-ref/crysis-frames.py cuts Linux's dump by this
+    rule."""
     if mark is None:
         return None, None, [], "no load mark"
     count, gap = mark
@@ -513,7 +518,12 @@ def loop_windows(dump, mark, loops):
         ago += dump[first]
         first -= 1
     first = max(first, 0)
-    last = max(range(first, count + 1), key=lambda i: dump[i])
+    long = [i for i in range(first, count + 1) if dump[i] >= LOAD_FRAME]
+    if len(long) != 1:
+        return None, (first, count), [], "%s of %d ms or more among frames %d to %d" % (
+            "frames " + ", ".join("%d" % i for i in long) if long else "no frame",
+            LOAD_FRAME, first, count)
+    last = long[0]
     windows = [(last + (1 if k == 0 else k * LOOP_FRAMES), last + (k + 1) * LOOP_FRAMES)
                for k in range(loops)]
     return last, (first, count), windows, None
@@ -579,47 +589,107 @@ def thread_rows():
     return rows
 
 
-def bounded(work, seconds):
-    """Run WORK() in a daemon thread and wait SECONDS for it; return whether
-    it ended. A read of /proc/PID can wait on that process's memory map for
-    as long as another thread holds it, and a daemon thread left in such a
-    read does not hold the script's exit."""
-    thread = threading.Thread(target=work, daemon=True)
-    thread.start()
-    thread.join(seconds)
-    return not thread.is_alive()
+def hud_times(path):
+    """Return the frame times of the HUD's dump at PATH so far, in ms."""
+    try:
+        with open(path) as f:
+            return [float(line.split()[-1]) for line in f if line.split()]
+    except OSError:
+        return []
+
+
+def stop_after(child, seconds):
+    """Wait SECONDS for CHILD, a Popen, and return its exit status, or kill
+    it with SIGKILL and return None. A read of /proc/PID waits on that
+    process's memory map, a wait no signal ends, for as long as another
+    thread holds it; the kill ends the child's work as that read returns,
+    and the child, never reaped here, holds no exit of the script's."""
+    try:
+        return child.wait(seconds)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        return None
 
 
 # The longest a load trace samples, and the longest it waits for the HUD's
 # FIRST frame once the level is loaded, in seconds.
 TRACE_SPAN = 30
-# The longest the trace takes to copy its counts and write its summary.
+# The longest the trace takes to copy its counts.
 TRACE_END = 10
+
+
+def trace_sample(where, hud, first):
+    """Sample every thread into WHERE/samples, as LoadTrace's child: from
+    the moment the HUD's dump HUD holds FIRST frames until it holds the
+    first frame of LOAD_FRAME ms or more from FIRST on and ten after it, or
+    TRACE_SPAN seconds have passed. It first zeroes the profiling kernel's
+    counts and, if it can, writes WHERE/zeroed. Each sample is the line
+    `sample NS BEFORE AFTER`, the monotonic time and the dump's frame counts
+    before and after the walk, then thread_rows(), then `end`, flushed
+    whole; a sample without its `end` was cut short. Return 0; an error
+    ends the child with Python's status 1."""
+    try:
+        BKL_CALLS.write_text("all\n")  # any word but `thread` counts every thread
+        (where / "zeroed").write_text("")
+    except OSError:
+        pass
+    begun = time.monotonic()
+    with open(where / "samples", "w") as f:
+        while time.monotonic() - begun < TRACE_SPAN:
+            times = hud_times(hud)
+            if any(times[i] >= LOAD_FRAME for i in range(first, len(times) - 10)):
+                break
+            ns, rows = time.monotonic_ns(), thread_rows()
+            f.write("sample %d %d %d\n" % (ns, len(times), len(hud_times(hud))))
+            f.writelines(row + "\n" for row in rows)
+            f.write("end\n")
+            f.flush()
+            time.sleep(0.05)
+    return 0
+
+
+def read_samples(path):
+    """Return the whole samples of a `samples` file as (ns, before, after,
+    rows), leaving out one that its `end` line does not close."""
+    samples, head, rows = [], None, []
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return samples
+    for line in lines:
+        if line.startswith("sample "):
+            head, rows = [int(v) for v in line.split()[1:4]], []
+        elif line == "end":
+            if head is not None:
+                samples.append((head[0], head[1], head[2], rows))
+            head = None
+        elif head is not None:
+            rows.append(line)
+    return samples
 
 
 class LoadTrace:
     """Sample every thread across the frames that end the level's load, the
-    longest of which has taken 1.5 s on Rach2: from the HUD's FIRST frame,
-    every 50 ms, until a frame of 1 s or more and ten frames after it are in
-    the dump, or TRACE_SPAN seconds have passed, however long one read takes.
-    WHERE gets `samples`, each sample a line `sample NS BEFORE AFTER`, the
-    monotonic time and the HUD's frame counts before and after the walk,
-    then thread_rows(), written as each sample is taken; `calls`, the
-    profiling kernel's bkl/calls over the trace, for every thread, when it
-    has one; and `summary`, which names the long frame by its 1-based line
-    in the dump and the states, wait channels and system calls of each
-    thread of the game's processes and wineserver, and of any other thread
-    running or in a disk wait, in the samples whose walk lay wholly inside
-    that frame."""
+    longest of which has taken 1.5 s on Rach2, every 50 ms from the HUD's
+    FIRST frame until a frame of LOAD_FRAME ms or more and ten frames after
+    it are in the dump. The samples are taken by a child process,
+    trace_sample, which the trace kills at TRACE_SPAN seconds, however long
+    one read takes, and the trace takes the load mark meanwhile. WHERE gets
+    the child's `samples`; `calls`, the profiling kernel's bkl/calls over
+    the trace, for every thread, when it has one, copied by a cp killed at
+    TRACE_END seconds; and `summary`, which the trace writes from the whole
+    samples in `samples`: the long frame by its 1-based line in the dump and
+    the states, wait channels and system calls of each thread of the game's
+    processes and wineserver, and of any other thread running or in a disk
+    wait, in the samples whose walk lay wholly inside that frame. The check
+    `load-trace` fails unless the child ended by itself with status 0 and
+    the dump holds the long frame."""
 
     def __init__(self, game, where, first):
         self.game, self.where, self.first = game, where, first
         self.done = False
         self.mark = None  # game.load_mark(), if it came in the trace
         self.loaded_at = None  # when step() first saw the level loaded
-        self.samples = []  # (ns, before, after, rows), appended by sample()
-        self.long_at = None  # the long frame's index in the dump
-        self.counting = False
 
     def step(self):
         """Run the trace once the HUD holds FIRST frames, or give it up when
@@ -634,77 +704,61 @@ class LoadTrace:
             if self.loaded_at is None:
                 self.loaded_at = time.monotonic()
             elif time.monotonic() - self.loaded_at > TRACE_SPAN:
-                text = "the HUD held no frame %d %d s after the load\n" % (self.first, TRACE_SPAN)
-                bounded(lambda: (self.where / "summary").write_text(text), TRACE_END)
-                say("load trace: " + text.strip())
+                text = "the HUD held no frame %d %d s after the load" % (self.first, TRACE_SPAN)
+                (self.where / "summary").write_text(text + "\n")
+                check("load-trace", False, text)
                 self.done = True
         return self.done
 
-    def times(self):
-        """Return the HUD's frame times so far."""
+    def run(self):
+        """Run the sampling child for TRACE_SPAN seconds at most, taking the
+        load mark meanwhile, then copy the counts and write the summary."""
+        child = subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "trace-sample", str(self.where),
+             str(self.game.hud / "frametime_(ms)"), str(self.first)],
+            stdin=subprocess.DEVNULL)
+        status = None
         try:
-            with open(self.game.hud / "frametime_(ms)") as f:
-                return [float(line.split()[-1]) for line in f if line.split()]
-        except OSError:
-            return []
-
-    def sample(self, stop):
-        """Take samples into self.samples and the `samples` file until the
-        long frame and ten after it are in the dump or STOP is set."""
-        try:
-            BKL_CALLS.write_text("all\n")  # any word but `thread` counts every thread
-            self.counting = True
-        except OSError:
-            pass
-        with open(self.where / "samples", "w") as f:
-            while not stop.is_set():
+            end = time.monotonic() + TRACE_SPAN
+            while status is None and time.monotonic() < end:
                 if self.mark is None:
                     self.mark = self.game.load_mark()
-                times = self.times()
-                if self.long_at is None:
-                    self.long_at = next((i for i in range(self.first, len(times))
-                                         if times[i] >= 1000), None)
-                if self.long_at is not None and len(times) > self.long_at + 10:
-                    return
-                ns, rows = time.monotonic_ns(), thread_rows()
-                after = self.game.frames()
-                if stop.is_set():
-                    return
-                self.samples.append((ns, len(times), after, rows))
-                f.write("sample %d %d %d\n" % (ns, len(times), after))
-                f.writelines(row + "\n" for row in rows)
-                f.flush()
-                time.sleep(0.05)
-
-    def run(self):
-        """Take the samples for TRACE_SPAN seconds at most, then the counts
-        and the summary."""
-        stop = threading.Event()
-        whole = bounded(lambda: self.sample(stop), TRACE_SPAN)
-        stop.set()
-        samples = list(self.samples)
-        if not whole:
-            say("load trace: a read had not returned at %d s; %d samples kept" % (
-                TRACE_SPAN, len(samples)))
-
-        def finish():
-            if self.counting:
                 try:
-                    shutil.copyfile(BKL_CALLS, self.where / "calls")
-                except OSError:
+                    status = child.wait(0.1)
+                except subprocess.TimeoutExpired:
                     pass
-            self.summary(samples, self.times(), self.long_at)
-        if not bounded(finish, TRACE_END):
-            say("load trace: its counts and summary were not written in %d s" % TRACE_END)
+        finally:
+            if status is None:
+                status = stop_after(child, 0)
+        copied = None
+        if (self.where / "zeroed").exists():
+            copied = stop_after(subprocess.Popen(
+                ["cp", str(BKL_CALLS), str(self.where / "calls")],
+                stdin=subprocess.DEVNULL), TRACE_END)
+        samples = read_samples(self.where / "samples")
+        times = self.game_times()
+        long_at = next((i for i in range(self.first, len(times)) if times[i] >= LOAD_FRAME),
+                       None)
+        line = self.summary(samples, times, long_at)
+        how = ("the sampler killed at %d s" % TRACE_SPAN if status is None else
+               "the sampler's status %d" % status)
+        if copied is None and (self.where / "zeroed").exists():
+            how += ", its counts not copied in %d s" % TRACE_END
+        check("load-trace", status == 0 and long_at is not None,
+              "%s; %s, %d whole samples" % (line, how, len(samples)))
+
+    def game_times(self):
+        """Return the HUD's frame times so far."""
+        return hud_times(self.game.hud / "frametime_(ms)")
 
     def summary(self, samples, times, long_at):
-        """Write and say what the game's threads did in the long frame: the
-        samples whose walk began and ended while the HUD held long_at
-        frames, that frame not yet presented. The frame is named by its
-        line in the dump, counted from 1."""
+        """Write the summary of what the game's threads did in the long
+        frame: the samples whose walk began and ended while the HUD held
+        long_at frames, that frame not yet presented. The frame is named by
+        its line in the dump, counted from 1. Return its first line."""
         if long_at is None:
-            text = "no frame of 1 s or more in %d samples to the dump's line %d\n" % (
-                len(samples), len(times))
+            text = "no frame of %d ms or more in %d samples to the dump's line %d\n" % (
+                LOAD_FRAME, len(samples), len(times))
         else:
             during = [rows for ns, before, after, rows in samples
                       if before == long_at and after == long_at]
@@ -725,7 +779,7 @@ class LoadTrace:
                 tid = key.split()[0]
                 text += "%3d %s ticks %d\n" % (n, key, ticks[tid][-1] - ticks[tid][0])
         (self.where / "summary").write_text(text)
-        say("load trace: " + text.splitlines()[0])
+        return text.splitlines()[0]
 
 
 def flyby_profile(game, counts, phase):
@@ -801,10 +855,11 @@ def flyby(route, name, loops):
     if last is None:
         say("load: uncut: %s" % why)
     else:
-        say("load: last frame %d of %.1f ms, counted from 0, the longest of frames %d to %d, "
+        say("load: last frame %d of %.1f ms, counted from 0, the one of %d ms or more in frames "
+            "%d to %d, "
             "load mark at frame %d %.2f s after the last look that found no load; "
             "loop k from frame %d + %d k, frame %d left out of loop 0" % (
-                last, dump[last], span[0], span[1], mark[0][0], mark[0][1], last,
+                last, dump[last], LOAD_FRAME, span[0], span[1], mark[0][0], mark[0][1], last,
                 LOOP_FRAMES, last))
     for i, (fps, play) in enumerate(runs):
         start, end = windows[i] if windows else (0, 0)
@@ -813,10 +868,9 @@ def flyby(route, name, loops):
         beside = (" linux %.2f" % linux[i]) if i < len(linux) else ""
         check("loop%d" % i, fps >= gate, "%.2f fps (gate %.0f)%s, play %.2f s%s" % (
             fps, gate, beside, play, (", " + frame_stats(segment)) if segment else ""))
-        if HUD_PARENT:
-            check("loop%d-frames" % i, whole, ("frames %d to %d" % (start, end - 1)) if whole
-                  else ("uncut: " + why) if why else
-                  "frames %d to %d, past the dump's %d" % (start, end - 1, len(dump)))
+        check("loop%d-frames" % i, whole, ("frames %d to %d" % (start, end - 1)) if whole
+              else ("uncut: " + why) if why else
+              "frames %d to %d, past the dump's %d" % (start, end - 1, len(dump)))
     check("loops", len(runs) == loops, "%d of %d loops finished" % (len(runs), loops))
     game.renderer()
 
@@ -1060,6 +1114,9 @@ def main():
 
 
 if __name__ == "__main__":
+    # LoadTrace's child, which keeps the default signals and ends no game.
+    if sys.argv[1:2] == ["trace-sample"] and len(sys.argv) == 5:
+        sys.exit(trace_sample(Path(sys.argv[2]), Path(sys.argv[3]), int(sys.argv[4])))
     for each in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(each, terminate)
     # A signal that comes as the inner cleanup begins, before end_all has

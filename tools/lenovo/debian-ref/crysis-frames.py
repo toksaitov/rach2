@@ -5,11 +5,12 @@
 # (tests/system/games/crysis.py). frames.txt's load line, `NOW load COUNT
 # UNSEEN`, gives the dump's count read after Game.log's "loading time" line
 # was first seen, at uptime NOW, and the uptime of the last look that found
-# none, so GAP = NOW - UNSEEN. The load's last frame L is the longest of the
-# frames that end less than GAP before frame COUNT - 1 does, the one before
-# them and frame COUNT. It is printed apart; loop k is the LOOP_FRAMES frames
-# from L + k * LOOP_FRAMES, the game's own count, less L in loop 0. A run
-# whose mark came more than LOAD_LAG after that look is printed as uncut and
+# none, so GAP = NOW - UNSEEN. The load's last frame L is the one frame of
+# LOAD_FRAME ms or more among the frames that end less than GAP before frame
+# COUNT - 1 does, the one before them and frame COUNT. It is printed apart;
+# loop k is the LOOP_FRAMES frames from L + k * LOOP_FRAMES, the game's own
+# count, less L in loop 0. A run whose mark came more than LOAD_LAG after
+# that look, or with no such frame or more than one, is printed as uncut and
 # one whose dump does not hold a loop whole fails, each with status 1. 80-2's
 # cut, the LOOP_FRAMES frames before the count read as loop 0 ended, is
 # printed after, as `end-cut`, since a poll's delay moves it.
@@ -17,6 +18,7 @@ import sys, os
 
 LOOP_FRAMES = 2000
 LOAD_LAG = 2.0
+LOAD_FRAME = 1000
 
 
 def stats(name, seg):
@@ -62,12 +64,19 @@ else:
         ago += vals[first]
         first -= 1
     first = max(first, 0)
-    last = max(range(first, count + 1), key=lambda i: vals[i])
-    print("load: last frame %d of %.1f ms, counted from 0, the longest of frames %d to %d, "
-          "load mark at frame %d %.2f s after the last look that found no load; "
-          "loop k from frame %d + %d k, frame %d left out of loop 0"
-          % (last, vals[last], first, count, count, gap, last, LOOP_FRAMES, last))
-    for k, (name, end) in enumerate(ends):
+    long = [i for i in range(first, count + 1) if vals[i] >= LOAD_FRAME]
+    if len(long) != 1:
+        print("load: uncut: %s of %d ms or more among frames %d to %d"
+              % ("frames " + ", ".join("%d" % i for i in long) if long else "no frame",
+                 LOAD_FRAME, first, count))
+        status = 1
+    else:
+        last = long[0]
+        print("load: last frame %d of %.1f ms, counted from 0, the one of %d ms or more in frames "
+              "%d to %d, load mark at frame %d %.2f s after the last look that found no load; "
+              "loop k from frame %d + %d k, frame %d left out of loop 0"
+              % (last, vals[last], LOAD_FRAME, first, count, count, gap, last, LOOP_FRAMES, last))
+    for k, (name, end) in enumerate(ends if len(long) == 1 else []):
         a, b = last + (1 if k == 0 else k * LOOP_FRAMES), last + (k + 1) * LOOP_FRAMES
         if b > len(vals):
             print("%s: FAILED: frames %d to %d, past the dump's %d" % (name, a, b - 1, len(vals)))
