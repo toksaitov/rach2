@@ -3035,7 +3035,7 @@ uint32_t seccomp_filter_count(const process_t *p)
     return 0;
 }
 
-/** The status rows' address space has no page present. */
+/** The rows' address spaces have no page present, as smaps reads them. */
 void paging_user_count(struct mm *mm, uintptr_t start, uintptr_t end, unsigned long *present,
                        unsigned long *dirty, unsigned long *anon)
 {
@@ -3052,11 +3052,15 @@ unsigned long mm_resident_peak(const struct mm *mm)
     return 0;
 }
 
-/** No file of the status rows is in memory. */
-int filemap_in_memory(const struct vm_file *f)
+/** The status rows' address space has no page resident, of any kind. */
+void mm_rss_snapshot(struct mm *mm, unsigned long pages[MM_RSS_KINDS])
 {
-    (void)f;
-    return 0;
+    uint32_t k;
+
+    (void)mm;
+    for (k = 0; k < MM_RSS_KINDS; k++) {
+        pages[k] = 0;
+    }
 }
 
 /** Take the walk's user's count of `mm`, as mm_read_begin does; then, as

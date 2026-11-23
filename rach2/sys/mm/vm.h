@@ -321,8 +321,9 @@ typedef struct vm_space {
     vma_t *root;
     vma_t *first, *last;
     vma_t *spare; /* unoccupied nodes, through next */
-    /* Nodes of regions `vm_detach` took out, through next, each still
-     * holding its file until `vm_release_detached`; `held` counts them. */
+    /* Nodes of regions `vm_detach` took out, and of the parts it cut from
+     * regions that stay, through next, each still holding its file until
+     * `vm_release_detached`; `held` counts them. */
     vma_t *detached;
     uint32_t held;
     struct vm_chunk *chunks; /* allocations owned by this space */
@@ -559,7 +560,8 @@ void vm_file_reap(void);
  * guard pages has no room, with nothing changed.
  *
  * A region that goes keeps its reference to the file it maps, on the
- * space's detached list, until `vm_release_detached`, which the caller runs
+ * space's detached list, and so does a copy of each part a trim or a split
+ * takes out, until `vm_release_detached`, which the caller runs
  * once the range's entries are cleared and their translations flushed from
  * every processor. The last reference would otherwise reach the dead list
  * first, and another thread's `vm_file_reap`, which no lock of this space
@@ -567,6 +569,8 @@ void vm_file_reap(void);
  * processor still reaches through the old entries. Linux's munmap frees
  * the detached regions only after unmap_region has cleared the entries and
  * finished the TLB gather (mm/vma.c:1122,1164,1180 in Linux 6.12.115).
+ * The unmap that follows also reads from the list the region of each page
+ * it takes away, for the kind of resident page it was (paging.c).
  */
 int vm_detach(vm_space_t *vm, uintptr_t start, uintptr_t end);
 

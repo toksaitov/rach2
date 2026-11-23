@@ -23,6 +23,7 @@
 #include "../proc/smp.h"
 #include "../lib/spinlock.h"
 #include "mm.h"
+#include "filemap.h"
 #include "notify.h"
 #include "pin.h"
 #include "pressure.h"
@@ -51,6 +52,8 @@ static size_t _free_frames; /* words of the table that are 0, kept by every writ
 static void frame_take(uintptr_t frame);
 static void frame_make_anon(uintptr_t phys);
 static int frame_is_anon(uintptr_t phys);
+static int rss_kind(const vma_t *r, uintptr_t phys);
+static void rss_count(const page_dir_t *dir, int kind, long pages);
 /* Where the next scan of the window for a free frame starts: no frame of
  * the window from `_user_frames_start` up to it is free. A scan from the
  * bottom of a million-frame table for every page would cost the table's
@@ -603,7 +606,7 @@ static int install_entry(struct mm *mm, uintptr_t page, uintptr_t phys, pte_t fl
         rc = table[MMU_INDEX(page)] != 0 || (seq && mm->zaps != *seq);
         if (rc == 0) {
             table[MMU_INDEX(page)] = PTE_ADDR((pte_t)phys) | (flags & (pte_t)PTE_FLAGS);
-            mm_resident_add(mm->dir, 1);
+            rss_count(mm->dir, rss_kind(vm_find(&mm->vm, page), phys), 1);
         }
     }
     mm_ptl_unlock(mm, lock);
@@ -819,7 +822,7 @@ static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t 
                 !vm_guarded(&mm->vm, from + i * PAGE_SIZE)) {
                 table[MMU_INDEX(from + i * PAGE_SIZE)] =
                     PTE_ADDR((pte_t)phys[i]) | (flags & (pte_t)PTE_FLAGS);
-                mm_resident_add(mm->dir, 1);
+                rss_count(mm->dir, rss_kind(vma, phys[i]), 1);
                 mapped |= from + i * PAGE_SIZE == page;
                 phys[i] = 0;
             }
@@ -1463,7 +1466,9 @@ static int huge_install(struct mm *mm, uintptr_t start, uintptr_t base, pte_t fl
                 table[i] =
                     PTE_ADDR((pte_t)(base + (uintptr_t)i * PAGE_SIZE)) | (flags & (pte_t)PTE_FLAGS);
             }
-            mm_resident_add(mm->dir, (flags & PTE_ZEROFILL) ? 0 : HUGE_PAGES);
+            if (!(flags & PTE_ZEROFILL)) {
+                rss_count(mm->dir, rss_kind(vm_find(&mm->vm, start), base), HUGE_PAGES);
+            }
             mmu_user_huge_set(mm->dir, start, (pte_t)base | (flags & (pte_t)PTE_FLAGS));
             paging_huge_mapped((pte_t)base | flags, 1);
         }
@@ -1626,6 +1631,80 @@ static long pte_resident(pte_t e)
     }
 #endif
     return PTE_MAPPED(e) != 0;
+}
+
+/**
+ * The kind of resident page (MM_RSS_ANON and on) that the frame `phys`
+ * makes in the region `r`, by the rule of smaps that /proc/PID/status
+ * reads: a private region's pages are anonymous, but for those of a region
+ * read from a file whose frame is no private copy (`frame_is_anon`), which
+ * are the file's still; a shared region's are the file's. A file's pages
+ * are shared memory when the file is in memory (`filemap_in_memory`), and
+ * file pages otherwise, device memory among them. A page outside every
+ * region counts as anonymous. A frame's mark changes only while one entry
+ * maps it, where that entry changes too, so a page keeps its kind from its
+ * entry's store to its removal unless the store that marks it counts the
+ * change (`rss_change`).
+ */
+static int rss_kind(const vma_t *r, uintptr_t phys)
+{
+    if (!r) {
+        return MM_RSS_ANON;
+    }
+    if (r->type != VM_SHARED &&
+        ((!r->file && r->type != VM_CODE && r->type != VM_DATA) || frame_is_anon(phys))) {
+        return MM_RSS_ANON;
+    }
+    return filemap_in_memory(r->file) ? MM_RSS_SHMEM : MM_RSS_FILE;
+}
+
+/** Count `pages` more, or fewer, resident pages of the kind `kind` in the
+ * space of `dir` (`mm_resident_add`). */
+static void rss_count(const page_dir_t *dir, int kind, long pages)
+{
+    long change[MM_RSS_KINDS] = {0, 0, 0};
+
+    change[kind] = pages;
+    mm_resident_add(dir, change);
+}
+
+/**
+ * Count, in the space of `dir`, the change of one entry from a page of the
+ * kind `from` to a resident page of the kind `to`, a copy-on-write break or
+ * a private copy: the entry held `was` resident pages before, 0 for the
+ * huge zero page (`pte_resident`) and 1 for any other. A page made a
+ * private copy where it stands has `was` 1, and moves to its new kind.
+ */
+static void rss_change(const page_dir_t *dir, int from, long was, int to)
+{
+    long change[MM_RSS_KINDS] = {0, 0, 0};
+
+    change[from] -= was;
+    change[to]++;
+    mm_resident_add(dir, change);
+}
+
+/**
+ * The region of `mm` that holds `va`: a live one, or one that `vm_detach`
+ * took out, whose entries the caller is taking away; NULL for none.
+ * `*hint`, the last one found or NULL, is tried first, so that a walk in
+ * address order looks each region up once. The caller holds the regions'
+ * lock.
+ */
+static const vma_t *rss_region(struct mm *mm, uintptr_t va, const vma_t **hint)
+{
+    const vma_t *r = *hint;
+
+    if (r && va >= r->start && va < r->end) {
+        return r;
+    }
+    r = vm_find(&mm->vm, va);
+    if (!r) {
+        for (r = mm->vm.detached; r && (va < r->start || va >= r->end); r = r->next) {
+        }
+    }
+    *hint = r;
+    return r;
 }
 
 /**
@@ -2298,6 +2377,8 @@ static int huge_reuse(struct mm *mm, uintptr_t addr)
 {
     page_dir_t *dir = mm->dir;
     pte_t leaf = mmu_user_huge(dir, addr);
+    const vma_t *r = vm_find(&mm->vm, addr);
+    long change[MM_RSS_KINDS] = {0, 0, 0};
     pte_t *table;
     uintptr_t base;
     uint32_t lock, i;
@@ -2319,12 +2400,17 @@ static int huge_reuse(struct mm *mm, uintptr_t addr)
     }
     if (ok) {
         for (i = 0; i < HUGE_PAGES; i++) {
-            frame_make_anon(base + (uintptr_t)i * PAGE_SIZE);
+            uintptr_t phys = base + (uintptr_t)i * PAGE_SIZE;
+
+            change[rss_kind(r, phys)]--;
+            frame_make_anon(phys);
+            change[rss_kind(r, phys)]++;
             table[i] = (table[i] & ~(pte_t)(PTE_COW | PTE_ZEROFILL)) | PTE_W;
         }
         mmu_user_huge_change(dir, addr, PTE_COW | PTE_ZEROFILL, PTE_W);
     }
     mm_ptl_unlock(mm, lock);
+    mm_resident_add(dir, change);
     return ok;
 }
 #endif
@@ -2357,11 +2443,12 @@ static int cow_fault(struct mm *mm, uintptr_t addr)
 {
     page_dir_t *dir = mm->dir;
     pte_t *e = user_pte(dir, addr);
+    const vma_t *r = vm_find(&mm->vm, addr);
     struct page_change c;
     pte_t pte;
     uintptr_t old_phys, frame;
     uintptr_t new_phys = 0;
-    int rc = 1;
+    int rc = 1, kind;
 
 #if MMU_HUGE
     if (huge_reuse(mm, addr)) {
@@ -2378,6 +2465,7 @@ static int cow_fault(struct mm *mm, uintptr_t addr)
         return 0;
     }
     old_phys = PTE_ADDR(pte);
+    kind = rss_kind(r, old_phys); /* before the frame is marked */
     frame = old_phys / PAGE_SIZE;
     if (frame < _frames_number && frame_maps(frame) > 1) {
         rc = cow_source_get(mm, e, pte);
@@ -2415,8 +2503,8 @@ static int cow_fault(struct mm *mm, uintptr_t addr)
             paging_flush_dir(dir, addr);
         }
         page_change_end(mm, &c);
-        if (rc > 0 && new_phys) {
-            mm_resident_add(dir, 1 - pte_resident(pte));
+        if (rc > 0 && (new_phys || pte_resident(pte))) {
+            rss_change(dir, kind, pte_resident(pte), rss_kind(r, new_phys ? new_phys : old_phys));
         }
     }
     if (rc < 0) {
@@ -2451,11 +2539,12 @@ static int cow_fault(struct mm *mm, uintptr_t addr)
 static int page_private(struct mm *mm, uintptr_t addr, int writable)
 {
     page_dir_t *dir = mm->dir;
+    const vma_t *r = vm_find(&mm->vm, addr);
     struct page_change c;
     uintptr_t old_phys, new_phys;
     pte_t *e;
     pte_t pte;
-    int rc;
+    int rc, kind;
 
     addr &= ~(uintptr_t)(PAGE_SIZE - 1);
 #if MMU_HUGE
@@ -2475,6 +2564,7 @@ static int page_private(struct mm *mm, uintptr_t addr, int writable)
         }
         old_phys = PTE_ADDR(pte);
         new_phys = old_phys;
+        kind = rss_kind(r, old_phys); /* before the frame is marked */
         if (frame_maps(old_phys / PAGE_SIZE) > 1) {
             rc = cow_source_get(mm, e, pte);
             if (rc < 0) {
@@ -2504,8 +2594,10 @@ static int page_private(struct mm *mm, uintptr_t addr, int writable)
                 *e = (pte_t)new_phys | (pte & PTE_FLAGS & ~(pte_t)(PTE_COW | PTE_ZEROFILL));
                 paging_flush_dir(dir, addr);
                 page_change_end(mm, &c);
+                if (new_phys != old_phys || pte_resident(pte)) {
+                    rss_change(dir, kind, pte_resident(pte), rss_kind(r, new_phys));
+                }
                 if (new_phys != old_phys) {
-                    mm_resident_add(dir, 1 - pte_resident(pte));
                     frame_unref(old_phys);
                 }
                 return 0;
@@ -3937,6 +4029,56 @@ void paging_user_count(struct mm *mm, uintptr_t start, uintptr_t end, unsigned l
     }
 }
 
+#ifdef RACH2_RSS_CHECK
+/**
+ * Walk the entries of every region, each leaf table once, a huge page's
+ * kept table among them, and count the resident pages by the kind their
+ * region gives them (`rss_kind`), as each count was kept. A page outside
+ * every region, which the counts hold and the walk does not find, shows as
+ * a difference too.
+ */
+int paging_rss_check(struct mm *mm)
+{
+    unsigned long have[MM_RSS_KINDS] = {0, 0, 0};
+    unsigned long kept[MM_RSS_KINDS];
+    const vma_t *r;
+    uintptr_t va, next;
+    int bkl = !bkl_held(), k;
+
+    if (!mm || !mm->dir) {
+        return 0;
+    }
+    if (bkl) {
+        bkl_enter();
+    }
+    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
+        for (va = r->start; va < r->end; va = next) {
+            pte_t *table = user_span(mm->dir, va, r->end, &next);
+
+            for (; table && va < next; va += PAGE_SIZE) {
+                pte_t e = table[MMU_INDEX(va)];
+
+                have[rss_kind(r, PTE_ADDR(e))] += (unsigned long)pte_resident(e);
+            }
+        }
+    }
+    mm_rss_snapshot(mm, kept);
+    if (bkl) {
+        bkl_exit();
+    }
+    for (k = 0; k < MM_RSS_KINDS && have[k] == kept[k]; k++) {
+    }
+    if (k == MM_RSS_KINDS) {
+        return 0;
+    }
+    klog(KLOG_ERR, "mm",
+         "rss: drift: pid %d: anon %lu counted %lu, file %lu counted %lu, shmem %lu counted %lu",
+         current_proc ? (int)current_proc->pid : 0, have[MM_RSS_ANON], kept[MM_RSS_ANON],
+         have[MM_RSS_FILE], kept[MM_RSS_FILE], have[MM_RSS_SHMEM], kept[MM_RSS_SHMEM]);
+    return -1;
+}
+#endif
+
 #if MMU_HUGE
 /** The next user address after `va` at which `dir` may have a huge page:
  * the next 2 MiB boundary, or past the span of absent tables around `va`
@@ -4412,7 +4554,7 @@ uint32_t frame_unref(uintptr_t phys)
     return left;
 }
 
-int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags)
+int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags, int kind)
 {
     pte_t *table;
     pte_t old;
@@ -4428,7 +4570,7 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags)
 
     old = table[MMU_INDEX(virt)];
     table[MMU_INDEX(virt)] = PTE_ADDR((pte_t)phys) | (flags & (pte_t)PTE_FLAGS);
-    mm_resident_add(dir, pte_resident(PTE_ADDR((pte_t)phys) | flags) - pte_resident(old));
+    rss_count(dir, kind, pte_resident(PTE_ADDR((pte_t)phys) | flags) - pte_resident(old));
     /* x86 caches no translation of an entry that is not present. */
     if (old & PTE_P) {
         paging_flush_dir(dir, virt);
@@ -4516,7 +4658,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
     frame_make_anon(phys_addr);
     old = table[MMU_INDEX(virt_addr)];
     table[MMU_INDEX(virt_addr)] = (pte_t)phys_addr | PTE_P | PTE_W | PTE_U;
-    mm_resident_add(dir, 1 - ((old & PTE_P) ? pte_resident(old) : 0));
+    rss_count(dir, MM_RSS_ANON, 1 - ((old & PTE_P) ? pte_resident(old) : 0));
     if (old & PTE_P) {
         paging_flush_dir(dir, virt_addr);
     }
@@ -4538,13 +4680,18 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
  * after a residency check that took no regions' lock expects a page it
  * found to stay until it sleeps (`vm_resident`), and such code that takes
  * the big lock after the first walk finds the page gone, whatever another
- * processor's translation still holds until the flush.
+ * processor's translation still holds until the flush. Each page goes from
+ * the count of the kind its region gave it (`rss_kind`), the live or
+ * detached region that holds it (`rss_region`) or `like`, in the first
+ * walk, where its entry still names its frame.
  */
-void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
+void unmap_user_range_as(struct mm *mm, uintptr_t start, uintptr_t end, const struct vma *like)
 {
+    page_dir_t *dir = mm ? mm->dir : NULL;
+    const vma_t *hint = NULL;
     struct flush_batch b;
     uintptr_t addr, next, lo = end, hi = start;
-    long gone = 0;
+    long gone[MM_RSS_KINDS] = {0, 0, 0};
 
     if (!dir) {
         return;
@@ -4568,14 +4715,15 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
             if (*e & PTE_P) {
                 batch_add(&b, addr); /* a PROT_NONE entry is in no TLB */
             }
-            gone += pte_resident(*e);
+            gone[rss_kind(like ? like : rss_region(mm, addr, &hint), PTE_ADDR(*e))] -=
+                pte_resident(*e);
             *e = PTE_ADDR(*e) | PTE_NONE | PTE_U;
             lo = addr < lo ? addr : lo;
             hi = addr + PAGE_SIZE;
         }
     }
     bkl_exit();
-    mm_resident_add(dir, -gone);
+    mm_resident_add(dir, gone);
     batch_flush(&b);
     for (addr = lo; addr < hi; addr = next) {
         pte_t *table = user_span(dir, addr, hi, &next);
@@ -4593,6 +4741,11 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
             }
         }
     }
+}
+
+void unmap_user_range(struct mm *mm, uintptr_t start, uintptr_t end)
+{
+    unmap_user_range_as(mm, start, end, NULL);
 }
 
 /**
@@ -4694,7 +4847,7 @@ static void walk_space(struct mm *mm,
             mm_note_anon(mm, lo, hi);
             mmn_change_begin(mm);
             mmn_notify(mm, event, lo, hi);
-            unmap_user_range(mm->dir, lo, hi);
+            unmap_user_range(mm, lo, hi);
             mmn_change_end(mm);
             continue;
         }
@@ -4833,12 +4986,14 @@ void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
  * stop half way. The caller holds the space's lock to write; the big lock
  * is taken over the moves of the entries, as `unmap_user_range` takes it
  * over its first walk, and the flushes follow. */
-int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t len)
+int paging_move_range(struct mm *mm, uintptr_t from, uintptr_t to, uintptr_t len)
 {
+    page_dir_t *dir = mm->dir;
     uintptr_t addr, next, end = from + len;
     struct flush_batch moved, replaced;
+    const vma_t *hint = NULL;
     pte_t *table;
-    long gone = 0;
+    long gone[MM_RSS_KINDS] = {0, 0, 0};
 
     for (addr = from; addr < end; addr = next) {
         for (table = user_span(dir, addr, end, &next); table && addr < next; addr += PAGE_SIZE) {
@@ -4876,7 +5031,9 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
                     over = 1;
 #endif
                 }
-                gone += pte_resident(*dst);
+                if (pte_resident(*dst)) {
+                    gone[rss_kind(rss_region(mm, to + (addr - from), &hint), PTE_ADDR(*dst))]--;
+                }
                 *dst = *e;
                 if (*e & PTE_P) {
                     batch_add(&moved, addr);
@@ -4893,7 +5050,7 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
     bkl_exit();
     batch_flush(&moved);
     batch_flush(&replaced);
-    mm_resident_add(dir, -gone);
+    mm_resident_add(dir, gone);
     return 0;
 }
 
@@ -5055,29 +5212,35 @@ void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint3
 
 /**
  * Give the child's directory `child_dir` the page of the parent, the
- * directory in use, whose entry is `*e`, at `va` in a region of type `type`,
- * as `paging_fork_copy` describes: 0, or -1 with no memory for a table or a
- * copy. A page is given only when it is present, user or PROT_NONE, and
- * names a frame other than 0. A writable private page is made read-only and
+ * directory in use, whose entry is `*e`, at `va` in the parent's region
+ * `r`, as `paging_fork_copy` describes: 0, or -1 with no memory for a table
+ * or a copy. The child's page counts as resident of the kind it has in the
+ * parent, since the child's copy of the region maps the same file the same
+ * way and its frame, or the frame's copy, has the same mark. A page is
+ * given only when it is present, user or PROT_NONE, and names a frame
+ * other than 0. A writable private page is made read-only and
  * copy-on-write in the parent too, so that the first write on either side
  * faults into `cow_fault`; its dirty bit is kept in the child. A private
- * page pinned for a device (`frame_pin`)
- * stays the parent's as it is, and the child gets a copy with the same
- * rights, as Linux copies a page that may be pinned at fork: a write by the
- * parent would otherwise move the parent to a copy and leave the device
- * with the frame the child has. A parent's page made read-only is added to
- * the batch `b`, which the caller flushes.
+ * page pinned for a device (`frame_pin`) stays the parent's as it is, and
+ * the child gets a copy with the same rights, as Linux copies a page that
+ * may be pinned at fork: a write by the parent would otherwise move the
+ * parent to a copy and leave the device with the frame the child has. A
+ * parent's page made read-only is added to the batch `b`, which the caller
+ * flushes.
  */
 static int fork_copy_page(struct flush_batch *b, page_dir_t *child_dir, pte_t *e, uintptr_t va,
-                          vm_type_t type)
+                          const vma_t *r)
 {
     pte_t pte = *e;
     uintptr_t parent_phys = PTE_ADDR(pte);
     uintptr_t copy;
+    vm_type_t type = r->type;
+    int kind;
 
     if (!PTE_MAPPED(pte) || !(pte & (PTE_U | PTE_NONE)) || parent_phys == 0) {
         return 0;
     }
+    kind = rss_kind(r, parent_phys);
     if (type != VM_SHARED && frame_pinned(parent_phys)) {
         copy = alloc_user_frame();
         if (copy == 0) {
@@ -5087,14 +5250,14 @@ static int fork_copy_page(struct flush_batch *b, page_dir_t *child_dir, pte_t *e
             frame_make_anon(copy);
         }
         if (paging_copy_frame(copy, parent_phys) != 0 ||
-            map_user_frame(child_dir, va, copy, pte & PTE_FLAGS) != 0) {
+            map_user_frame(child_dir, va, copy, pte & PTE_FLAGS, kind) != 0) {
             free_frame(copy);
             return -1;
         }
         return 0;
     }
     if (type == VM_SHARED) {
-        if (map_user_frame(child_dir, va, parent_phys, pte & PTE_FLAGS) != 0) {
+        if (map_user_frame(child_dir, va, parent_phys, pte & PTE_FLAGS, kind) != 0) {
             return -1;
         }
         frame_ref(parent_phys);
@@ -5103,12 +5266,13 @@ static int fork_copy_page(struct flush_batch *b, page_dir_t *child_dir, pte_t *e
     if (pte & PTE_W) {
         if (map_user_frame(child_dir, va, parent_phys,
                            PTE_P | PTE_U | PTE_COW | (pte & (PTE_NOEXEC | PTE_PKEY | PTE_DIRTY)) |
-                               (PTE_IS_ZERO(pte) ? PTE_ZEROFILL : 0)) != 0) {
+                               (PTE_IS_ZERO(pte) ? PTE_ZEROFILL : 0),
+                           kind) != 0) {
             return -1;
         }
         *e = (pte & ~(pte_t)PTE_W) | PTE_COW;
         batch_add(b, va);
-    } else if (map_user_frame(child_dir, va, parent_phys, pte & PTE_FLAGS) != 0) {
+    } else if (map_user_frame(child_dir, va, parent_phys, pte & PTE_FLAGS, kind) != 0) {
         return -1;
     }
     frame_ref(parent_phys);
@@ -5158,7 +5322,7 @@ int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
                 pte_t *table = user_span(parent_dir, va, stop, &next);
 
                 for (; table && va < next && rc == 0; va += PAGE_SIZE) {
-                    rc = fork_copy_page(&b, child_dir, &table[MMU_INDEX(va)], va, region->type);
+                    rc = fork_copy_page(&b, child_dir, &table[MMU_INDEX(va)], va, region);
                 }
             }
 #if MMU_HUGE
@@ -5212,7 +5376,6 @@ static void huge_entry_going(pte_t *e)
 /* What `collapse_scan` found in the entries of a 2 MiB range. */
 struct collapse_scan {
     uint32_t mapped;     /* entries that hold a page */
-    uint32_t resident;   /* of those, the ones counted resident (pte_resident) */
     uint32_t none;       /* entries with no page, or a page never written */
     uint32_t shared;     /* pages another mapping holds too */
     uint32_t referenced; /* pages the processor marked accessed */
@@ -5260,7 +5423,6 @@ static int collapse_scan(struct mm *mm, const pte_t *table, uintptr_t start, int
             return -EAGAIN;
         }
         sc->mapped++;
-        sc->resident += (uint32_t)pte_resident(e);
         if (!PTE_IS_ZERO(e) && frame_maps(phys / PAGE_SIZE) > 1 && ++sc->shared > shared_max) {
             return -EINVAL;
         }
@@ -5280,6 +5442,7 @@ int paging_collapse(struct mm *mm, uintptr_t start, int how)
 {
     page_dir_t *dir = mm->dir;
     const vma_t *vma = vm_find(&mm->vm, start);
+    long change[MM_RSS_KINDS] = {0, 0, 0};
     pte_t flags, *table;
     struct collapse_scan sc;
     struct flush_batch b;
@@ -5311,6 +5474,7 @@ int paging_collapse(struct mm *mm, uintptr_t start, int how)
     batch_start(&b, dir);
     for (i = 0; i < HUGE_PAGES; i++) {
         addr = start + (uintptr_t)i * PAGE_SIZE;
+        change[rss_kind(vma, PTE_ADDR(table[i]))] -= pte_resident(table[i]);
         if (table[i] & PTE_P) {
             batch_add(&b, addr);
             huge_entry_going(&table[i]);
@@ -5351,7 +5515,8 @@ int paging_collapse(struct mm *mm, uintptr_t start, int how)
         paging_huge_mapped((pte_t)base | flags, 1);
     }
     mm_ptl_unlock(mm, lock);
-    mm_resident_add(dir, (long)HUGE_PAGES - (long)sc.resident);
+    change[rss_kind(vma, base)] += HUGE_PAGES; /* the rollback above counts nothing */
+    mm_resident_add(dir, change);
     if (how == THP_SCAN) {
         thp_note(THP_PAGES_COLLAPSED);
     }
@@ -5391,6 +5556,8 @@ static uint32_t huge_underused_split(struct mm *mm, uintptr_t start)
     page_dir_t *dir = mm->dir;
     pte_t leaf = mmu_user_huge(dir, start);
     pte_t *table = mmu_user_table(dir, start, 0);
+    const vma_t *r = vm_find(&mm->vm, start);
+    long gone[MM_RSS_KINDS] = {0, 0, 0};
     struct flush_batch b;
     uint32_t i, zeros = 0, freed = 0;
     uintptr_t addr;
@@ -5425,6 +5592,7 @@ static uint32_t huge_underused_split(struct mm *mm, uintptr_t start)
             continue;
         }
         if (frame_is_zero(PTE_ADDR(table[i]))) {
+            gone[rss_kind(r, PTE_ADDR(table[i]))]--;
             frame_unref(PTE_ADDR(table[i]));
             table[i] = 0;
             freed++;
@@ -5432,7 +5600,7 @@ static uint32_t huge_underused_split(struct mm *mm, uintptr_t start)
             table[i] = (table[i] & ~(pte_t)PTE_NONE) | PTE_P;
         }
     }
-    mm_resident_add(dir, -(long)freed);
+    mm_resident_add(dir, gone);
     thp_note(THP_SPLIT_PAGE);
     thp_note(THP_UNDERUSED_SPLIT_PAGE);
     return freed;

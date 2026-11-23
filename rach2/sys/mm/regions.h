@@ -37,7 +37,8 @@ struct mm;
 struct mm *regions_begin(void);
 
 /** End what `regions_begin` began, and release the files whose last region
- * the change removed (`mm_reap`). */
+ * the change removed (`mm_reap`). The debug kernel checks the resident
+ * counts against the page tables first (`paging_rss_check`). */
 void regions_end(struct mm *mm);
 
 /** Have the caches give frames back before a call maps memory, under the big

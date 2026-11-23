@@ -194,6 +194,7 @@ void *mmu_frame_table(struct frame_map *map, size_t bytes);
 void frame_take_boot(uintptr_t frame);
 
 struct mm;
+struct vma;
 
 /**
  * Give the directory `child` the user pages of `from`, the address space in
@@ -314,7 +315,8 @@ void paging_leave_kernel(uintptr_t saved);
  * Back the user address `virt_addr`, rounded down to its page, in `dir` with
  * a frame from `alloc_user_frame`, present, writable and user, and return
  * the frame's physical address; 0 when no page table or no frame can be
- * had. The frame is not zeroed.
+ * had. The frame is not zeroed. It is marked a private copy and counts as
+ * an anonymous resident page, as does an entry it replaces.
  */
 uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr);
 
@@ -334,10 +336,13 @@ uintptr_t alloc_user_frame(void);
  * page, in `dir`, with the entry bits `flags` (any of those PTE_FLAGS
  * covers), making `dir`'s own table for it when needed, and drop the old
  * translation wherever a processor has it. No frame is allocated and no
- * count changes: the caller owns the frame's references. Returns 0, or -1
- * when no table can be had.
+ * reference changes: the caller owns the frame's references. The page
+ * counts as resident of the kind `kind` (MM_RSS_ANON and on, mm.h), which
+ * the caller reads from the region it maps the page for, and an entry it
+ * replaces as one of the same kind. Returns 0, or -1 when no table can be
+ * had.
  */
-int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags);
+int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags, int kind);
 
 /**
  * Bring in every page of [addr, addr + len) of the current process for a
@@ -498,16 +503,24 @@ int paging_collapse(struct mm *mm, uintptr_t start, int how);
 #endif
 
 /**
- * Unmap the present user pages of [start, end) in `dir`, page-aligned: each
+ * Unmap the present user pages of [start, end) in `mm`, page-aligned: each
  * has its entry cleared and its translation dropped wherever a processor
  * has it, with one flush of the span of pages unmapped
  * (`paging_flush_range`), and then drops its frame's reference, which frees
  * the frame with its last. A page never backed is passed, and a range with
- * no page present costs no flush. A NULL `dir` changes nothing. munmap and
- * a brk that shrinks the heap call it, with the space's regions' lock held
- * to write or the space no thread's; it takes the big lock.
+ * no page present costs no flush. A NULL `mm`, or one without a directory,
+ * changes nothing. munmap and a brk that shrinks the heap call it, with the
+ * space's regions' lock held to write or the space no thread's; it takes
+ * the big lock. Each page leaves the resident count of its kind, which its
+ * region gives it: a live region of `mm`, or one that `vm_detach` took out
+ * and `vm_release_detached` has not yet let go.
  */
-void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end);
+void unmap_user_range(struct mm *mm, uintptr_t start, uintptr_t end);
+
+/** `unmap_user_range` for pages whose region is no longer in `mm`, nor on
+ * its detached list, and was like `like`: the pages a failed mremap moved
+ * before their region could be made. */
+void unmap_user_range_as(struct mm *mm, uintptr_t start, uintptr_t end, const struct vma *like);
 
 /**
  * Unmap, in every address space, the pages of the device object `obj`
@@ -528,7 +541,6 @@ void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count);
  * may wait for; a space the caller holds to read only is changed as it
  * stands. The caller holds the big lock, which the process list needs.
  */
-struct vma;
 void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo, uintptr_t *hi),
                       void *arg);
 
@@ -549,13 +561,15 @@ void paging_wrprotect_where(int (*match)(const struct vma *r, void *arg, uintptr
                             void *arg);
 
 /**
- * Move the entries of [from, from + len) in `dir` to [to, to + len), for
+ * Move the entries of [from, from + len) in `mm` to [to, to + len), for
  * mremap: each frame moves with its flags and keeps its references, and a
- * page never backed stays so. The two ranges must not overlap. Returns 0,
- * or -1 when a page table for the new range cannot be had, with nothing
- * moved.
+ * page never backed stays so. The two ranges must not overlap. A moved page
+ * keeps its kind of resident page, since the region it goes to is a copy of
+ * its own; one it replaces leaves the count of the kind its region gave it.
+ * Returns 0, or -1 when a page table for the new range cannot be had, with
+ * nothing moved.
  */
-int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t len);
+int paging_move_range(struct mm *mm, uintptr_t from, uintptr_t to, uintptr_t len);
 
 /**
  * Bring the present pages of [start, end) in `dir` to the region protection
@@ -799,6 +813,26 @@ uintptr_t paging_user_ram_frame(struct mm *mm, uintptr_t va);
  * does not sleep.
  */
 uint64_t paging_user_ram_frames(struct mm *mm, uintptr_t va, uint64_t n, uintptr_t *frames);
+
+/* The debug kernel, the lock checker's, also checks the resident counts
+ * against the page tables at the end of each change of the regions
+ * (`paging_rss_check`), and stops at a count that would go below zero
+ * (mm.c, `mm_resident_add`). */
+#if defined(RACH2_LOCKDEP) && !defined(RACH2_RSS_CHECK)
+#define RACH2_RSS_CHECK 1
+#endif
+
+#ifdef RACH2_RSS_CHECK
+/**
+ * Check the resident counts of `mm` by kind (`mm_rss_snapshot`) against a
+ * walk of its page tables, the debug kernel's check that no change of an
+ * entry went uncounted: 0 when they agree, else -1, with both sets of
+ * figures logged. Run between changes, never midway through one, with the
+ * regions' lock held to write; takes the big lock when the caller does not
+ * hold it, as an unmap does.
+ */
+int paging_rss_check(struct mm *mm);
+#endif
 
 /** Count the present pages of the user range [start, end) of `mm` into
  * `*present`, those the processor marked dirty into `*dirty`, and those

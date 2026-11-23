@@ -22,6 +22,9 @@ struct mm *regions_begin(void)
 
 void regions_end(struct mm *mm)
 {
+#ifdef RACH2_RSS_CHECK
+    (void)paging_rss_check(mm);
+#endif
     mmap_unlock(mm);
     mm_reap();
 }
@@ -42,7 +45,7 @@ int regions_unmap(struct mm *mm, uintptr_t start, uintptr_t end)
         return -1;
     }
     mmn_notify(mm, MMN_UNMAP, start, end);
-    unmap_user_range(mm->dir, start, end);
+    unmap_user_range(mm, start, end);
     vm_release_detached(&mm->vm);
     return 0;
 }

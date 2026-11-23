@@ -999,9 +999,34 @@ int vm_set_policy(vm_space_t *vm, uintptr_t start, uintptr_t end, struct vm_poli
     return 0;
 }
 
+/** Put on the detached list of `vm`, from a reserved node, a copy of the
+ * part [start, end) of the region `r` that a trim or a split takes out,
+ * holding the file as a region that goes whole is held, so that the pages
+ * of the part find their region until the caller has taken them away
+ * (`rss_region` in paging.c reads the list); `vm_release_detached` lets
+ * it go. */
+static void vm_detach_piece(vm_space_t *vm, const vma_t *r, uintptr_t start, uintptr_t end)
+{
+    vma_t *p = vm->spare;
+
+    vm->spare = p->next;
+    *p = *r;
+    p->start = start;
+    p->end = end;
+    p->pgoff = r->pgoff + (uint32_t)((start - r->start) >> VM_PAGE_SHIFT);
+    p->policy = NULL;
+    p->left = p->right = p->parent = p->prev = NULL;
+    p->height = 0;
+    vm_file_get(p->file);
+    p->next = vm->detached;
+    vm->detached = p;
+    vm->held++;
+}
+
 int vm_detach(vm_space_t *vm, uintptr_t start, uintptr_t end)
 {
-    vma_t *r, *next;
+    vma_t *r, *next, *last;
+    uint32_t pieces;
 
     vm->gap_len = 0;
     if (start >= end) {
@@ -1012,14 +1037,20 @@ int vm_detach(vm_space_t *vm, uintptr_t start, uintptr_t end)
     }
     r = vm_lower(vm, start);
     if (r && r->start < start && r->end > end) {
-        if (vm_reserve(vm, 1) != 0) {
+        if (vm_reserve(vm, 1) != 0 || vm_nodes_reserve(vm, 2) != 0) {
             return -1;
         }
         guard_cut(vm, start, end);
+        vm_detach_piece(vm, r, start, end);
         (void)vm_split(vm, r, end);
         vm->total -= r->end - start;
         r->end = start;
         return 0;
+    }
+    last = vm_lower(vm, end);
+    pieces = (r && r->start < start ? 1u : 0u) + (last && last->start < end ? 1u : 0u);
+    if (pieces && vm_nodes_reserve(vm, pieces) != 0) {
+        return -1;
     }
     guard_cut(vm, start, end);
     while (r && r->start < end) {
@@ -1027,11 +1058,13 @@ int vm_detach(vm_space_t *vm, uintptr_t start, uintptr_t end)
         if (start <= r->start && end >= r->end) {
             vm_delete(vm, r, 1);
         } else if (start <= r->start) {
+            vm_detach_piece(vm, r, r->start, end);
             vm->total -= end - r->start;
             r->pgoff += (uint32_t)((end - r->start) >> VM_PAGE_SHIFT);
             r->start = end;
             break;
         } else {
+            vm_detach_piece(vm, r, start, r->end);
             vm->total -= r->end - start;
             r->end = start;
         }

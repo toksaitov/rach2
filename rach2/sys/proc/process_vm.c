@@ -456,7 +456,7 @@ static void pvm_reap(struct mm *mm)
     for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
         if (r->type != VM_SHARED && !(r->prot & VM_PROT_IO)) {
             mmn_notify(mm, MMN_DROP, r->start, r->end);
-            unmap_user_range(mm->dir, r->start, r->end);
+            unmap_user_range(mm, r->start, r->end);
         }
     }
     mm->reaped = 1;
