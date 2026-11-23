@@ -1,4 +1,4 @@
-"""Trace the immediate and settled Chromium pictures on the Lenovo's panel."""
+"""Trace Chromium's WebGPU pictures on the Lenovo's panel, under Rach2 or Debian."""
 import argparse
 import json
 import os
@@ -47,8 +47,13 @@ def client_command(user, args):
                                "graphics", *args])
 
 
-def collect(case, work, settle, weston, account, env, joined=False):
-    """Record the kernel from just before readback until the picture answers."""
+def collect(case, work, settle, weston, account, env, joined=False, kernel=True):
+    """Record the picture, with the kernel from just before readback until it answers.
+
+    JOINED adds Weston's timeline and drm-backend streams, and on Rach2 the
+    DRM frame trace. Without KERNEL, on Debian or for a probe-free picture,
+    no kernel trace is written; the browser's trace handshake still runs.
+    """
     case.mkdir()
     out = case / "out"
     desktop_dir(out, account)
@@ -59,11 +64,11 @@ def collect(case, work, settle, weston, account, env, joined=False):
     env = dict(env, TMPDIR=str(work), MESA_SHADER_CACHE_DIR=str(work / "mesa"))
     streams = (weston_streams(case, env, lambda args: user_command(account.pw_name, args))
                if joined else nullcontext())
-    traces = [(TRACE, "kernel.bin")]
-    if joined:
+    traces = [(TRACE, "kernel.bin")] if kernel else []
+    if joined and kernel:
         traces.append((DRM_TRACE, "drm.bin"))
     started = []
-    stopped = False
+    begun = stopped = False
     with streams, (case / "measure.log").open("w", buffering=1) as log:
         browser = subprocess.Popen(command, env=env, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=log, text=True,
@@ -72,13 +77,14 @@ def collect(case, work, settle, weston, account, env, joined=False):
             for line in browser.stdout:
                 print(line, end="", flush=True)
                 log.write(line)
-                if line == "webgpu: trace start\n" and not started:
+                if line == "webgpu: trace start\n" and not begun:
                     for path, name in traces:
                         path.write_text("start\n")
                         started.append((path, name))
+                    begun = True
                     browser.stdin.write("start\n")
                     browser.stdin.flush()
-                elif line == "webgpu: trace stop\n" and started and not stopped:
+                elif line == "webgpu: trace stop\n" and begun and not stopped:
                     for path, _ in reversed(started):
                         path.write_text("stop\n")
                     stopped = True
@@ -101,19 +107,35 @@ def collect(case, work, settle, weston, account, env, joined=False):
                         path.write_text("clear\n")
 
 
-def profiled_pictures(out, work, weston, account, env):
-    """Trace fresh immediate pictures until a frame misses its bound."""
+def missed(case, name):
+    """Print a picture's largest early gap and late frames; return whether it missed a bound."""
+    result = json.loads((case / "out/result.json").read_text())
+    picture = frames(result["picture"])
+    late = picture["late_after_steady"]
+    early = max(picture["first_gaps_ms"])
+    print("webgpu: %s: %.2f ms early gap, %d late frames" % (name, early, late), flush=True)
+    return early > 33.4 or late > 0
+
+
+def bare_pictures(out, work, weston, account, env, count):
+    """Draw COUNT fresh immediate pictures with no trace of any kind."""
+    env = dict(env, RACH2_BROWSER_TRACE="0")
+    for index in range(1, count + 1):
+        name = "bare-%d" % index
+        print("webgpu: measure " + name + " without probes", flush=True)
+        collect(out / name, work / name, 0, weston, account, env, kernel=False)
+        missed(out / name, name)
+
+
+def profiled_pictures(out, work, weston, account, env, kernel, every):
+    """Trace fresh immediate pictures until a frame misses its bound, or all four with EVERY."""
     env = dict(env, RACH2_BROWSER_TRACE="1")
+    what = "Chromium, Weston and DRM" if kernel else "Chromium and Weston"
     for index in range(1, 5):
         name = "immediate-%d" % index
-        print("webgpu: measure " + name + " with Chromium, Weston and DRM tracing", flush=True)
-        collect(out / name, work / name, 0, weston, account, env, joined=True)
-        result = json.loads((out / name / "out/result.json").read_text())
-        picture = frames(result["picture"])
-        late = picture["late_after_steady"]
-        early = max(picture["first_gaps_ms"])
-        print("webgpu: %s: %.2f ms early gap, %d late frames" % (name, early, late), flush=True)
-        if early > 33.4 or late:
+        print("webgpu: measure %s with %s tracing" % (name, what), flush=True)
+        collect(out / name, work / name, 0, weston, account, env, joined=True, kernel=kernel)
+        if missed(out / name, name) and not every:
             break
 
 
@@ -123,12 +145,22 @@ def main():
     parser.add_argument("user")
     parser.add_argument("output")
     parser.add_argument("--profiled", action="store_true", help="trace Chromium, Weston and DRM")
+    parser.add_argument("--bare", type=int, default=0, metavar="N",
+                        help="first draw N pictures without probes")
+    parser.add_argument("--all", action="store_true",
+                        help="trace all four pictures, not only up to the first miss")
+    parser.add_argument("--linux", action="store_true",
+                        help="Debian's reference: no Rach2 kernel traces")
     args = parser.parse_args()
     user = args.user
     account = pwd.getpwnam(user)
-    if os.getuid() != 0 or account.pw_uid == 0 or not TRACE.is_file():
-        raise RuntimeError("need root, a display user and the kernel trace file")
-    if args.profiled and not DRM_TRACE.is_file():
+    if os.getuid() != 0 or account.pw_uid == 0:
+        raise RuntimeError("need root and a display user")
+    if args.linux and TRACE.is_file():
+        raise RuntimeError("--linux is for Debian, and this kernel has Rach2's trace file")
+    if not args.linux and not TRACE.is_file():
+        raise RuntimeError("need the kernel trace file, or --linux on Debian")
+    if args.profiled and not args.linux and not DRM_TRACE.is_file():
         raise RuntimeError("need the DRM frame trace build")
     _, icd = machine()
     out = Path(args.output).resolve()
@@ -152,9 +184,10 @@ def main():
             pid = weston_pid()
             run(client_command(user, ["vkcube", "--wsi", "wayland", "--c", "300"]),
                 display / "cube.log", env)
+            bare_pictures(out, work, pid, account, env, args.bare)
             if args.profiled:
-                profiled_pictures(out, work, pid, account, env)
-            else:
+                profiled_pictures(out, work, pid, account, env, not args.linux, args.all)
+            elif not args.bare:
                 for name, delay in (("immediate", 0), ("settled", 5)):
                     print("webgpu: measure " + name, flush=True)
                     collect(out / name, work / name, delay, pid, account, env)
