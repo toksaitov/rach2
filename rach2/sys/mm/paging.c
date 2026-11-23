@@ -5380,15 +5380,18 @@ void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint3
  * `r`, as `paging_fork_copy` describes: 0, or -1 with no memory for a table
  * or a copy. The child's page counts as resident of the kind it has in the
  * parent, since the child's copy of the region maps the same file the same
- * way and its frame, or the frame's copy, has the same mark. A page is
+ * way and its frame has the same mark, but for a private copy, which is
+ * anonymous. A page is
  * given only when it is present, user or PROT_NONE, and names a frame
  * other than 0. A writable private page is made read-only and
  * copy-on-write in the parent too, so that the first write on either side
  * faults into `cow_fault`; its dirty bit is kept in the child. A private
  * page pinned for a device (`frame_pin`) stays the parent's as it is, and
- * the child gets a copy with the same rights, as Linux copies a page that
- * may be pinned at fork: a write by the parent would otherwise move the
- * parent to a copy and leave the device with the frame the child has. A
+ * the child gets a copy with the same rights, marked anonymous whatever
+ * its source was, as Linux's copy_present_page makes a new anonymous page
+ * of a page that may be pinned at fork: a write by the parent would
+ * otherwise move the parent to a copy and leave the device with the frame
+ * the child has. A
  * parent's page made read-only is added to the batch `b`, which the caller
  * flushes.
  */
@@ -5410,11 +5413,9 @@ static int fork_copy_page(struct flush_batch *b, page_dir_t *child_dir, pte_t *e
         if (copy == 0) {
             return -1;
         }
-        if (frame_is_anon(parent_phys)) {
-            frame_make_anon(copy);
-        }
+        frame_make_anon(copy);
         if (paging_copy_frame(copy, parent_phys) != 0 ||
-            map_user_frame(child_dir, va, copy, pte & PTE_FLAGS, kind) != 0) {
+            map_user_frame(child_dir, va, copy, pte & PTE_FLAGS, MM_RSS_ANON) != 0) {
             free_frame(copy);
             return -1;
         }

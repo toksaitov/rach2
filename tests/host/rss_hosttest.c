@@ -26,7 +26,8 @@
  * a file in memory, read and written, and of a shared mapping of the file
  * in memory; a copy-on-write break made in place, which moves a file's page
  * to anonymous, and one that copies; a fork, whose child counts what its
- * parent does, and a write in the child; a zap that another thread makes
+ * parent does but for its copy of a pinned page of a file in memory, which
+ * is anonymous, and a write in the child; a zap that another thread makes
  * of the page a copy-on-write break changes, just after the break gives
  * back the page-table lock, in place and by a copy, which finds the page
  * already counted as anonymous; munmap through `regions_unmap`,
@@ -167,18 +168,34 @@ static void cow_rows(void)
           "a copy of a page of a file in memory moves it to anonymous");
 }
 
-/** A fork's child counts its pages as its parent does, from none. */
+/**
+ * A fork's child counts its pages as its parent does, from none, but for
+ * its copy of a pinned page of a private region, which is anonymous
+ * whatever its source was, as Linux's copy_present_page makes it: here a
+ * page of the file in memory, which the parent counts as shared memory.
+ */
 static void fork_rows(void)
 {
+    uintptr_t copy;
+
+    touch(&mm_a, PT + P, 0);
+    check(frame_pin(tmp.page[1]) == 0 && counts(&mm_a, 6, 1, 3),
+          "a private page of the file in memory read and pinned counts as shared memory");
     check(paging_fork_copy(&mm_a, &dir_b) == 0 && vm_copy(&mm_b.vm, &mm_a.vm) == 0, "fork copies");
-    check(counts(&mm_b, 6, 1, 2) && counts(&mm_a, 6, 1, 2),
-          "the child counts the parent's pages by the same kinds");
+    copy = PTE_ADDR(pte_of(&dir_b, PT + P));
+    check(copy != 0 && copy != tmp.page[1] && frame_is_anon(copy) && !frame_is_anon(tmp.page[1]),
+          "the child has an anonymous copy of the pinned page, and the parent's is not marked");
+    check(counts(&mm_b, 7, 1, 2) && counts(&mm_a, 6, 1, 3),
+          "the child counts the copy as anonymous, and the rest by the parent's kinds");
     touch(&mm_b, PF + P, 1);
-    check(counts(&mm_b, 7, 0, 2) && counts(&mm_a, 6, 1, 2),
+    check(counts(&mm_b, 8, 0, 2) && counts(&mm_a, 6, 1, 3),
           "a write in the child copies a file page and moves the child's alone");
     unmap_user_range(&mm_b, WIN_BASE, END);
     check(counts(&mm_b, 0, 0, 0), "the child's pages all go");
     vm_free(&mm_b.vm);
+    frame_unpin(tmp.page[1]);
+    unmap_user_range(&mm_a, PT + P, PT + 2 * P);
+    check(counts(&mm_a, 6, 1, 2), "and the parent's unpinned page goes");
 }
 
 /* The page a row's zap takes, and its entry before the change the zap
