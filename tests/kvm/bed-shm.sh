@@ -526,7 +526,6 @@ cleanup()
     [ "$cleaned" = 0 ] || return 0
     cleaned=1
     cleanup_bad=$bad
-    crysis_restore_ini || fail settings 'failed to restore weston.ini'
 
     # Step 2, children: every keeper but gpu.sh's ends all of its command,
     # TERM, KILL 20 s later, and reaps all, within 40 s (keep_end): first
@@ -541,6 +540,10 @@ cleanup()
     done)
     # shellcheck disable=SC2086 # a list of keepers' numbers
     keep_end $first || survivors=$keep_left
+    # The flyby's preparation writes weston.ini, so the saved file goes back
+    # only once its keeper has ended it, or has sent KILL to what outlived
+    # TERM, which runs no more of its code.
+    crysis_restore_ini || fail settings 'failed to restore weston.ini'
     load='' fig='' waiter='' holder='' pid='' umon='' sampler=''
     vm=$vmk
     [ -z "$gpu" ] || vm=''
