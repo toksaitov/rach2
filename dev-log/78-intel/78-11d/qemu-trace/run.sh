@@ -64,7 +64,7 @@ until guest true </dev/null 2>/dev/null; do
 done
 guest 'cat /proc/cmdline; cat /proc/mounts; id desktop' > "$out/boot.txt"
 grep '^/dev/loop0 / ext2 ' "$out/boot.txt"
-tar -czf "$out/payload.tar.gz" tests/graphics/browser "$step/picture.py"
+COPYFILE_DISABLE=1 tar --no-xattrs -czf "$out/payload.tar.gz" tests/graphics/browser "$step/picture.py"
 guest "mkdir '$stage' && tar -xzf - -C '$stage' && mkdir '$stage/out' && chown desktop:desktop '$stage/out'" \
     < "$out/payload.tar.gz"
 
@@ -89,16 +89,20 @@ trap 'cleanup "$@"' EXIT
 if [ "$3" = 1 ]; then
     [ -f "$drm" ]
     pkill -TERM -x weston || :
-    export SEATD_SOCK="$PWD/seatd.sock"
-    SEATD_VTBOUND=0 seatd -s "$SEATD_SOCK" -g seat > out/seatd.log 2>&1 &
-    seat=$!
-    tries=0
-    until [ -S "$SEATD_SOCK" ]; do
-        kill -0 "$seat"
-        tries=$((tries + 1))
-        [ "$tries" -lt 10 ] || exit 1
-        sleep 1
-    done
+    export SEATD_SOCK=/run/seatd.sock
+    if [ ! -S "$SEATD_SOCK" ]; then
+        SEATD_VTBOUND=0 seatd -g seat > out/seatd.log 2>&1 &
+        seat=$!
+        tries=0
+        until [ -S "$SEATD_SOCK" ]; do
+            tries=$((tries + 1))
+            if ! kill -0 "$seat" || [ "$tries" -ge 10 ]; then
+                cat out/seatd.log >&2
+                exit 1
+            fi
+            sleep 1
+        done
+    fi
     printf 'start\n' > "$drm"
 fi
 status=0
@@ -112,9 +116,11 @@ cat "$trace" > kernel.bin
 printf 'clear\n' > "$trace"
 exit "$status"
 GUEST
-set -- out kernel.bin
-if [ "$timeline" = 1 ]; then set -- "$@" drm.bin; fi
-guest "tar -czf - -C '$stage' $*" > "$out/guest.tar.gz"
+guest "cd '$stage' && set -- out
+    for f in kernel.bin drm.bin; do
+        if [ -f \"\$f\" ]; then set -- \"\$@\" \"\$f\"; fi
+    done
+    tar -czf - \"\$@\"" > "$out/guest.tar.gz"
 tar -xzf "$out/guest.tar.gz" -C "$out"
 guest 'sync; poweroff -f' </dev/null || :
 exit "$status"
