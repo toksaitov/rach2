@@ -824,12 +824,14 @@ uint64_t paging_user_ram_frames(struct mm *mm, uintptr_t va, uint64_t n, uintptr
 
 #ifdef RACH2_RSS_CHECK
 /**
- * Check the resident counts of `mm` by kind (`mm_rss_snapshot`) against a
- * walk of its page tables, the debug kernel's check that no change of an
- * entry went uncounted: 0 when they agree, else -1, with both sets of
- * figures logged. Run between changes, never midway through one, with the
- * regions' lock held to write; takes the big lock when the caller does not
- * hold it, as an unmap does.
+ * Check the resident counts of `mm` by kind (`mm_rss_snapshot`) and their
+ * total (`mm_resident`) against a walk of every user entry of its page
+ * tables, the debug kernel's check that no change of an entry went
+ * uncounted: 0 when the kinds agree, the total is their sum and no entry
+ * maps a page outside every region, else -1, with the figures logged. Run
+ * between changes, never midway through one, with the regions' lock held
+ * to write; takes the big lock when the caller does not hold it, as an
+ * unmap does.
  */
 int paging_rss_check(struct mm *mm);
 #endif

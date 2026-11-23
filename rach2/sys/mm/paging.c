@@ -4034,17 +4034,18 @@ void paging_user_count(struct mm *mm, uintptr_t start, uintptr_t end, unsigned l
 
 #ifdef RACH2_RSS_CHECK
 /**
- * Walk the entries of every region, each leaf table once, a huge page's
- * kept table among them, and count the resident pages by the kind their
- * region gives them (`rss_kind`), as each count was kept. A page outside
- * every region, which the counts hold and the walk does not find, shows as
- * a difference too.
+ * Walk every user entry of `mm`, each leaf table once, a huge page's kept
+ * table among them, and count the resident pages by the kind their region
+ * gives them (`rss_kind`), as each count was kept, and the mapped entries
+ * outside every region, which no path makes. The counts by kind must equal
+ * the walk's, the total their sum, and no entry may be outside a region.
  */
 int paging_rss_check(struct mm *mm)
 {
     unsigned long have[MM_RSS_KINDS] = {0, 0, 0};
     unsigned long kept[MM_RSS_KINDS];
-    const vma_t *r;
+    unsigned long orphans = 0, total;
+    const vma_t *r = NULL;
     uintptr_t va, next;
     int bkl = !bkl_held(), k;
 
@@ -4054,30 +4055,42 @@ int paging_rss_check(struct mm *mm)
     if (bkl) {
         bkl_enter();
     }
-    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
-        for (va = r->start; va < r->end; va = next) {
-            pte_t *table = user_span(mm->dir, va, r->end, &next);
+    for (va = USER_ADDR_MIN; va < USER_ADDR_MAX; va = next) {
+        pte_t *table = user_span(mm->dir, va, USER_ADDR_MAX, &next);
 
-            for (; table && va < next; va += PAGE_SIZE) {
-                pte_t e = table[MMU_INDEX(va)];
+        for (; table && va < next; va += PAGE_SIZE) {
+            pte_t e = table[MMU_INDEX(va)];
 
-                have[rss_kind(r, PTE_ADDR(e))] += (unsigned long)pte_resident(e);
+            if (!PTE_MAPPED(e)) {
+                continue;
             }
+            if (!r || va < r->start || va >= r->end) {
+                r = vm_find(&mm->vm, va);
+            }
+            if (!r) {
+                orphans++;
+                continue;
+            }
+            have[rss_kind(r, PTE_ADDR(e))] += (unsigned long)pte_resident(e);
         }
     }
     mm_rss_snapshot(mm, kept);
+    total = mm_resident(mm);
     if (bkl) {
         bkl_exit();
     }
     for (k = 0; k < MM_RSS_KINDS && have[k] == kept[k]; k++) {
     }
-    if (k == MM_RSS_KINDS) {
+    if (k == MM_RSS_KINDS && orphans == 0 &&
+        total == kept[MM_RSS_ANON] + kept[MM_RSS_FILE] + kept[MM_RSS_SHMEM]) {
         return 0;
     }
     klog(KLOG_ERR, "mm",
-         "rss: drift: pid %d: anon %lu counted %lu, file %lu counted %lu, shmem %lu counted %lu",
+         "rss: drift: pid %d: anon %lu counted %lu, file %lu counted %lu, shmem %lu counted %lu, "
+         "total counted %lu, %lu outside every region",
          current_proc ? (int)current_proc->pid : 0, have[MM_RSS_ANON], kept[MM_RSS_ANON],
-         have[MM_RSS_FILE], kept[MM_RSS_FILE], have[MM_RSS_SHMEM], kept[MM_RSS_SHMEM]);
+         have[MM_RSS_FILE], kept[MM_RSS_FILE], have[MM_RSS_SHMEM], kept[MM_RSS_SHMEM], total,
+         orphans);
     return -1;
 }
 #endif
