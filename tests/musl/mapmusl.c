@@ -1171,6 +1171,43 @@ static int ext2_aligned(int fd)
     return rc;
 }
 
+/* The flusher's interval between periodic turns, in hundredths of a second. */
+#define WRITEBACK_PATH "/proc/sys/vm/dirty_writeback_centisecs"
+
+/**
+ * Read up to `size` bytes of the file `path` into `buf`. Returns the count
+ * read, or -1 with errno set.
+ */
+static ssize_t read_text(const char *path, char *buf, size_t size)
+{
+    int fd = open(path, O_RDONLY);
+    ssize_t n;
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = read(fd, buf, size);
+    close(fd);
+    return n;
+}
+
+/**
+ * Write the `len` bytes of `text` to the file `path` in one write. Returns 0,
+ * or -1 with errno set.
+ */
+static int write_text(const char *path, const char *text, size_t len)
+{
+    int fd = open(path, O_WRONLY);
+    ssize_t n;
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = write(fd, text, len);
+    close(fd);
+    return n == (ssize_t)len ? 0 : -1;
+}
+
 /**
  * Check that msync of `m`, a shared mapping of two pages of `fd`, a file on
  * ext2, succeeds, and then that a store in a third page, a hole the file
@@ -1181,13 +1218,26 @@ static int ext2_aligned(int fd)
  * the hole its blocks, as Linux's ext2 does at writepage, so the file's
  * st_blocks grows before anything here writes back; pread then finds the
  * byte and msync and fsync succeed. The file is cut back to its two pages.
- * Returns 0 with the first row reported, or 1 once the failure is reported.
+ *
+ * The flusher's periodic turn writes every marked page of every shared
+ * mapping (`filemap_sync_all`), so dirty_writeback_centisecs is 0 from
+ * before the store to after the check, as Linux's 0 stops the periodic
+ * turns: a turn that reads 0 writes back only buffers above the background
+ * threshold, never a mapping's page. Nothing else here writes the page
+ * back before the check, since the parent keeps both of its writable
+ * mappings and only the last one's release runs a pass. Only a turn that
+ * read the old value before the write and is still in its pass over the
+ * mappings, which a turn makes once in dirty_expire_centisecs, could write
+ * the page; nothing in user space can wait for that turn. The old value is
+ * put back. Returns 0 with the first row reported, or 1 once the failure
+ * is reported.
  */
 static int ext2_synced(int fd, char *m)
 {
     struct stat before, after;
     char *h = MAP_FAILED;
-    char c = 0;
+    char c = 0, interval[16];
+    ssize_t n = -1;
     pid_t pid;
     int rc = 0;
 
@@ -1196,6 +1246,11 @@ static int ext2_synced(int fd, char *m)
         return fail("msync of a shared mapping of a file on the root");
     }
     row_held();
+    if ((n = read_text(WRITEBACK_PATH, interval, sizeof(interval))) <= 0 ||
+        write_text(WRITEBACK_PATH, "0\n", 2) != 0) {
+        rc = fail("turn off the flusher's periodic write-back");
+        goto out;
+    }
     if (ftruncate(fd, 3 * PAGE) != 0 || fstat(fd, &before) != 0 ||
         (h = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 2 * PAGE)) == MAP_FAILED) {
         rc = fail("grow a file on the root by a hole and map it shared");
@@ -1229,6 +1284,9 @@ out:
     }
     if (ftruncate(fd, 2 * PAGE) != 0 && rc == 0) {
         rc = fail("cut a file on the root back to two pages");
+    }
+    if (n > 0 && write_text(WRITEBACK_PATH, interval, (size_t)n) != 0 && rc == 0) {
+        rc = fail("put the flusher's writeback interval back");
     }
     return rc;
 }
