@@ -49,7 +49,9 @@
  * 1000, end 1.05 ms later, where by the tick they ended 3.6 ms later. The
  * slack is Linux's select_estimate_accuracy: the thread's 50 us at a short
  * timeout, a thousandth of a 10 s one, a two-hundredth at a positive nice,
- * at most 100 ms, at least a larger timer slack, and none under SCHED_FIFO.
+ * at most 100 ms, at least a larger timer slack, and none under SCHED_FIFO
+ * or with a zero timer slack, which an ordinary child of a real-time parent
+ * with reset-on-fork has: its 1 ms wait ends at its time, not 1 us later.
  * A zero timeout neither sleeps nor arms the timer, a wait without one
  * never arms it, and a signal or a ready descriptor ends a timed wait at
  * once, its timer cleared. The `hrtimer` argument runs these rows alone.
@@ -480,14 +482,9 @@ static uint64_t slack_of(int64_t left, int nice, int policy, uint64_t slack)
     return poll_slack(left);
 }
 
-/** The rows of the timer a timed wait arms, and of its slack. */
-static void hrtimer(void)
+/** The rows of the slack a timed wait's timer takes. */
+static void slack_rows(void)
 {
-    struct poll_deadline d;
-    struct poll_timespec ts;
-    int64_t begun;
-    int rc;
-
     CHECK(slack_of(1000000, 0, 0, PROC_TIMER_SLACK_NS) == 50000,
           "a wait of 1 ms takes the thread's slack of 50 us");
     CHECK(slack_of(10000000000LL, 0, 0, PROC_TIMER_SLACK_NS) == 10000000,
@@ -503,7 +500,19 @@ static void hrtimer(void)
     CHECK(slack_of(10000000000LL, 0, SCHED_FIFO, PROC_TIMER_SLACK_NS) == 0 &&
               slack_of(10000000000LL, 0, SCHED_DEADLINE, PROC_TIMER_SLACK_NS) == 0,
           "a real-time or deadline thread takes none");
+    CHECK(slack_of(1000000, 0, 0, 0) == 0 && slack_of(10000000000LL, 1, 0, 0) == 0,
+          "an ordinary thread with a zero timer slack takes none");
+}
 
+/** The rows of the timer a timed wait arms, and of its slack. */
+static void hrtimer(void)
+{
+    struct poll_deadline d;
+    struct poll_timespec ts;
+    int64_t begun;
+    int rc;
+
+    slack_rows();
     timed_begin();
     begun = rtc_monotonic_ns();
     poll_ms_deadline(1, &d);
