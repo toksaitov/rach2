@@ -26,10 +26,13 @@ struct vr_export {
 struct vr;
 struct kms;
 
-/* The pins of page lists (VGS_TF_PAGES): made, refused and let go of. */
+/* The pins of page lists (VGS_TF_PAGES): made, refused and let go of; and
+ * the account's creates and blobs, held whole or charged to its ledger. */
 struct vr_pin_counts {
     uint64_t pinned, refused, unpinned;
-    uint64_t backed; /* of the pins made, backings of the VM's memory */
+    uint64_t backed;  /* of the pins made, backings of the VM's memory */
+    uint64_t held;    /* resources whose storage a hold pinned */
+    uint64_t charged; /* resources charged to the ledger at their bound */
 };
 
 /* The renderer, after vr_init; ops and cookie go to vd_init. */

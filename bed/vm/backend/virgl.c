@@ -5,10 +5,8 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #define _GNU_SOURCE
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,7 +16,6 @@
 #include <poll.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/sysmacros.h>
 #include <sys/uio.h>
 
 #include <virglrenderer.h>
@@ -58,28 +55,31 @@ struct vr_pin {
     struct iovec *back; /* a backing's mapping and length, or 0 for a blob */
 };
 
-/* The places of the account's ledger of creates, twice the resources the
- * device's table holds, a power of two for the hash. */
+/* The places of the account's ledger, twice the resources the device's
+ * table holds, a power of two for the hash. */
 #define ADMIT_SLOTS (2u * VD_OBJS)
-
-/* The DRM clients of this process that the epoch's first reading names at
- * most, vrend's, Mesa's and GBM's; the backend has three or four. */
-#define OWN_CLIENTS 16
 
 /* The most bytes the account judges for one create, blob or backing, 256
  * TiB: past any VM's memory, and small enough that the ledger's VD_OBJS
- * entries and the readings sum in 64 bits without wrapping. */
+ * entries sum in 64 bits without wrapping. */
 #define VR_BYTES_MAX ((uint64_t)1 << 48)
 
-/* A create or a blob of a context's memory that the account admitted
- * (`op_create`, `op_blob`), held at its bound from the admission to its
- * UNREF or the epoch's end; id 0 is a free place, since virtio-gpu has no
- * resource 0. */
+/* A resource whose storage the backend cannot secure (`op_create`,
+ * `op_blob`), charged at its bound from its create to its UNREF or the
+ * epoch's end; id 0 is a free place, since virtio-gpu has no resource 0. */
 struct vr_admit {
     uint32_t id;
-    uint32_t gen;  /* the reading it was admitted under (`vr.gen`) */
-    uint32_t blob; /* a blob, which every reading counts (`ledger_held`) */
     uint64_t bytes;
+};
+
+/* A resource's storage secured at its create (`hold_new`): the module's pin
+ * of the dma-buf or shmem file the renderer exported, which holds its pages
+ * until the UNREF or the epoch's end, and that file's identity, so that
+ * storage already held for another resource is charged once. */
+struct vr_hold {
+    uint32_t id, handle;
+    dev_t dev;
+    ino_t ino;
 };
 
 struct vr {
@@ -100,36 +100,14 @@ struct vr {
     int async_fence; /* fences retire on virglrenderer's threads */
     int flags;       /* VIRGL_RENDERER_* given to each start, but the fences' */
     int native;      /* the DRM renderer runs native contexts */
-    /* The account's ledger of creates and blobs (`ledger_held`): open
-     * addressing by resource id, with the sum of the bounds it holds and
-     * the sum of the blobs' among them. */
+    /* The account (`mem_room`): the ledger, by open addressing on the
+     * resource id, with the sum of the bounds it holds, and the holds. */
     struct vr_admit admit[ADMIT_SLOTS];
     uint32_t nadmit;
     uint64_t admitted;
-    uint64_t blobs;
-    /* The account's last reading of the GPU objects (`mem_room`): the bytes
-     * it counted, the ledger's among them when it missed a client, its
-     * generation, and the bounds of the creates admitted since, which it
-     * does not hold. */
-    int have_reading;
-    uint64_t read_sum;
-    uint32_t gen;
-    uint64_t since;
-    /* The DRM clients of this process that the epoch's start read, by
-     * "drm-pdev drm-client-id", and whether that reading could not name
-     * them all, which makes every judgment count the ledger. */
-    char own[OWN_CLIENTS][80];
-    uint32_t nown;
-    int own_unknown;
-    /* The drm-client-id of a DRM file opened just after that reading, or
-     * 0 when no DRM node gives one (`client_mark`): Linux numbers every
-     * DRM file from one counter as it opens, so a client of this process
-     * with a smaller ID was open at the start, and one the start's reading
-     * missed (`own_learn`). */
-    uint64_t own_mark;
+    struct vr_hold holds[PINS];
+    uint32_t nholds;
 };
-
-static void own_clients(struct vr *r);
 
 /* virglrenderer calls back with the cookie vr_init passed. */
 static struct virgl_renderer_callbacks callbacks;
@@ -189,8 +167,7 @@ static void log_line(enum virgl_log_level_flags level, const char *message, void
  * not start, and an asynchronous fence of vrend's would never retire
  * (vrend_renderer_use_threaded_sync), so the renderer starts again without
  * the thread and its fences are polled. A native context has no way but
- * the asynchronous one. Then the DRM clients the renderer opened are read
- * for the account (`own_clients`). Returns 0, or virglrenderer's error.
+ * the asynchronous one. Returns 0, or virglrenderer's error.
  */
 static int start(struct vr *r)
 {
@@ -213,7 +190,6 @@ static int start(struct vr *r)
     } else if (r->poll_fd < 0) {
         fprintf(stderr, "backend: fences: no sync thread; vrend's fences will not retire\n");
     }
-    own_clients(r);
     return 0;
 }
 
@@ -375,90 +351,209 @@ static int resp(int err)
 }
 
 static int mem_room(struct vr *r, uint64_t size);
-static int admit_add(struct vr *r, uint32_t id, uint64_t bytes, int blob);
+static int admit_add(struct vr *r, uint32_t id, uint64_t bytes);
 static void admit_drop(struct vr *r, uint32_t id);
+static int hold_new(struct vr *r, uint32_t id, int fd, uint64_t size, const char *what);
+static void hold_drop(struct vr *r, uint32_t id);
 
 /* Gallium's targets of a 3D texture, whose depth halves at each level, and
  * of a cube map, which has six faces. */
 #define PIPE_TEXTURE_3D   3u
 #define PIPE_TEXTURE_CUBE 4u
 
-/* virgl's formats R64_FLOAT to R64G64B64A64_FLOAT, of up to 32 bytes a
- * texel; every other format has 16 at most, a block of 4 by 4 or more
- * texels of a compressed one 16 bytes. */
-#define VIRGL_FORMAT_R64_FLOAT          24u
-#define VIRGL_FORMAT_R64G64B64A64_FLOAT 27u
+/**
+ * The bytes of one block of virgl format `format`, a texel or a compressed
+ * block, with the block's width and height in texels in *bw and *bh. A
+ * format the GPU may store wider than its own size is given at the wider:
+ * three 8-bit channels at four, and ETC and ATC, which Haswell cannot
+ * sample and Mesa keeps decompressed, at 4 bytes a texel. A format not
+ * listed is given 16 bytes a texel, more than any but those of 64-bit
+ * channels, which are listed. The numbers are enum virgl_formats' in
+ * virglrenderer's virgl_hw.h.
+ */
+static uint32_t format_block(uint32_t format, uint32_t *bw, uint32_t *bh)
+{
+    /* 1 byte: L8, A8, I8, S8, R8 of each kind, L8_SRGB, R1, L4A4, B2G3R3,
+     * the 8-bit SNORM alphas, lumas and intensities, A4R4, R4A4, the 8-bit
+     * integer reds, alphas, lumas and intensities, R8_SRGB, R3G3B2, the Y8
+     * formats and the integer B2G3R3 and R3G3B2. */
+    static const uint16_t one[] = {9,   10,  11,  23,  64,  69,  74,  82,  95,  127, 130,
+                                   139, 147, 148, 150, 168, 169, 177, 181, 201, 202, 203,
+                                   205, 206, 207, 312, 318, 322, 326, 375, 405};
+    /* 2 bytes: the 16-bit packed colours, L8A8, L16, Z16, R16 and R8G8 of
+     * each kind, the 16-bit alphas, lumas and intensities, R8A8, A8R8,
+     * A8L8, G8R8 and their integer and SRGB forms. */
+    static const uint16_t two[] = {5,   6,   7,   12,  13,  16,  48,  52,  56,  60,  65,  70,  75,
+                                   83,  91,  96,  122, 135, 141, 142, 149, 151, 152, 154, 155, 156,
+                                   158, 170, 171, 178, 182, 185, 189, 204, 208, 209, 210, 211, 213,
+                                   214, 215, 242, 247, 248, 254, 259, 260, 261, 263, 264, 311, 313,
+                                   319, 320, 321, 330, 331, 332, 333, 338, 339, 340, 376, 377, 378,
+                                   401, 406, 407, 408, 409, 410, 411, 427, 428};
+    /* 8 bytes: two 32-bit or three or four 16-bit channels, one 64-bit
+     * channel, Z32_FLOAT_S8X24, X32_S8X24, L32A32 and the 16-bit YUV
+     * formats. */
+    static const uint16_t eight[] = {24,  29,  33,  37,  41,  45,  50,  51,  54,  55,  58,
+                                     59,  62,  63,  88,  93,  94,  126, 138, 161, 187, 188,
+                                     191, 192, 194, 198, 220, 224, 234, 235, 236, 237, 238,
+                                     246, 251, 252, 418, 419, 433, 434, 435, 436, 441, 442};
+    /* 16 bytes: three or four 32-bit channels, or two 64-bit ones. */
+    static const uint16_t sixteen[] = {25, 30, 31,  34,  35,  38,  39,  42,  43,  46,  47,
+                                       89, 90, 195, 196, 199, 200, 239, 240, 241, 416, 417};
+    /* 32 bytes: three or four 64-bit channels. */
+    static const uint16_t big[] = {26, 27, 412, 413, 414, 415};
+    /* Blocks of 4 by 4 texels: 8 bytes for DXT1, RGTC1 and LATC1, 16 for
+     * DXT3, DXT5, RGTC2, LATC2 and BPTC. FXT1's are 8 by 4, of 16 bytes. */
+    static const uint16_t dxt8[] = {105, 106, 109, 110, 113, 114, 143, 144};
+    static const uint16_t dxt16[] = {107, 108, 111, 112, 115, 116, 145, 146, 255, 256, 257, 258};
+    static const struct {
+        const uint16_t *list;
+        size_t n;
+        uint32_t bytes, bw, bh;
+    } sizes[] = {
+        {one, sizeof(one) / sizeof(one[0]), 1, 1, 1},
+        {two, sizeof(two) / sizeof(two[0]), 2, 1, 1},
+        {eight, sizeof(eight) / sizeof(eight[0]), 8, 1, 1},
+        {sixteen, sizeof(sixteen) / sizeof(sixteen[0]), 16, 1, 1},
+        {big, sizeof(big) / sizeof(big[0]), 32, 1, 1},
+        {dxt8, sizeof(dxt8) / sizeof(dxt8[0]), 8, 4, 4},
+        {dxt16, sizeof(dxt16) / sizeof(dxt16[0]), 16, 4, 4},
+    };
+    size_t i, k;
+
+    for (k = 0; k < sizeof(sizes) / sizeof(sizes[0]); k++) {
+        for (i = 0; i < sizes[k].n; i++) {
+            if (format == sizes[k].list[i]) {
+                *bw = sizes[k].bw;
+                *bh = sizes[k].bh;
+                return sizes[k].bytes;
+            }
+        }
+    }
+    *bw = *bh = 1;
+    if (format == 395 || format == 396) {
+        *bw = 8;
+        *bh = 4;
+        return 16;
+    }
+    /* 4 bytes: every other format of the enum, of 32 bits or less or of
+     * three 8-bit channels, ETC and ATC decompressed, and the 8- to 12-bit
+     * YUV formats; the enum has no format 0, 73, 78 to 81, 86, 133, 279 to
+     * 307, 309, 310 or 348 to 367. */
+    if (format == 0 || format == 73 || (format >= 78 && format <= 81) || format == 86 ||
+        format == 133 || (format >= 279 && format <= 307) || format == 309 || format == 310 ||
+        (format >= 348 && format <= 367) || format > 442) {
+        return 16;
+    }
+    return 4;
+}
+
+/* The tiling's granularity that a level's row bytes and rows are rounded up
+ * to: a Y tile of 128 bytes by 32 rows, as large as an X tile of 512 bytes
+ * by 8 and a W tile of 64 by 64. */
+#define TILE_ROW_BYTES 128u
+#define TILE_ROWS      32u
 
 /**
- * The bytes of a resource's storage at most, as the VM's counts judge its
- * create: a buffer's width, or a texture's texels at the most bytes a texel
- * its format can have, 32 for a format of 64-bit channels and 16 for any
- * other, summed over its mipmap chain, each level's width, height and, for
- * a 3D texture, depth half the last's and never below 1, by its layers, six
- * for a cube, and its samples, and rounded up to a 4 KiB page. A bound, not
- * the driver's size: the account counts the create at this bound only
- * until its next reading of the GPU objects, after which the VM's counts
- * and i915's hold its storage (`gpu_unbacked`), unless a reading missed a
- * client (`ledger_held`), so an error of one create lies within the eighth
- * of the VM that `mem_room` keeps.
+ * The bytes the account charges a resource whose storage it cannot hold
+ * (`charge`): twice a buffer's width; twice the sum over a texture's
+ * mipmap chain of each level's blocks (`format_block`), its row bytes and
+ * its rows rounded up to a tile (TILE_ROW_BYTES, TILE_ROWS), by its depth,
+ * which halves at each level of a 3D texture and never falls below 1, its
+ * layers, six for a cube, and its samples; rounded up to a 4 KiB page.
+ * i915's isl places a miptree's levels in one surface, level 1 under level
+ * 0 and the rest beside level 1, so that the surface is no wider than the
+ * levels together and no taller than levels 0 and 1, and adds the separate
+ * stencil, HiZ, MCS and CCS surfaces, each well below the main one; Mesa's
+ * cache gives a buffer an object at most a quarter larger than its width.
+ * The factor of two covers both. UINT64_MAX for a size past any GPU's
+ * limits or VR_BYTES_MAX.
  */
 static uint64_t create_bytes(const struct vd_create *a)
 {
     uint64_t w = a->width ? a->width : 1, h = a->height ? a->height : 1;
     uint64_t d = a->depth ? a->depth : 1, layers = a->array_size ? a->array_size : 1;
-    uint64_t texel = 16, samples = a->nr_samples ? a->nr_samples : 1, n = 0;
-    uint32_t level;
+    uint64_t samples = a->nr_samples ? a->nr_samples : 1, n = 0, row, rows;
+    uint32_t level, bw, bh, bytes;
 
     if (a->target == PIPE_BUFFER) {
-        return a->width;
+        return (2u * (uint64_t)a->width + 4095u) & ~(uint64_t)4095u;
     }
     if ((w | h | d | layers) > 65536u || samples > 64u) {
         return UINT64_MAX; /* past any GPU's limits, and the sum's 64 bits */
     }
-    if (a->format >= VIRGL_FORMAT_R64_FLOAT && a->format <= VIRGL_FORMAT_R64G64B64A64_FLOAT) {
-        texel = 32;
-    }
+    bytes = format_block(a->format, &bw, &bh);
     if (a->target == PIPE_TEXTURE_CUBE && layers < 6) {
         layers = 6;
     }
     for (level = 0; level <= a->last_level && level < 32; level++) {
-        n += w * h * d;
+        row = ((w + bw - 1) / bw * bytes + TILE_ROW_BYTES - 1) & ~(uint64_t)(TILE_ROW_BYTES - 1);
+        rows = ((h + bh - 1) / bh + TILE_ROWS - 1) & ~(uint64_t)(TILE_ROWS - 1);
+        n += row * rows * d;
         w = w > 1 ? w / 2 : 1;
         h = h > 1 ? h / 2 : 1;
         if (a->target == PIPE_TEXTURE_3D) {
             d = d > 1 ? d / 2 : 1;
         }
     }
-    if (n > (UINT64_MAX / 2) / (layers * samples * texel)) {
+    if (n > VR_BYTES_MAX / (2u * layers * samples)) {
         return UINT64_MAX;
     }
-    n *= layers * samples * texel;
+    n *= 2u * layers * samples;
     return (n + 4095u) & ~(uint64_t)4095u;
 }
 
 /**
- * Create a resource without backing; device.c attaches it later. A create
- * whose storage the VM has no room for (`mem_room`) is refused with
- * ERR_OUT_OF_MEMORY, as the backing of one is, since the renderer takes
- * the storage from the VM's memory, which a GPU's driver fills and does
+ * Charge resource `id`, which the renderer has made, to the account: hold
+ * the storage exported as `fd`, `size` bytes of it from its start or the
+ * whole file for 0 (`hold_new`); else, for no descriptor (-1) or one that
+ * cannot be held, charge `bytes`, its bound, to the ledger (`admit_add`)
+ * if the room holds them (`mem_room`). fd is closed. Returns 0, or
+ * ERR_OUT_OF_MEMORY with a line naming the refusal, `what` the command;
+ * the caller unmakes a refused resource.
+ */
+static int charge(struct vr *r, uint32_t id, int fd, uint64_t size, uint64_t bytes,
+                  const char *what)
+{
+    int err = fd >= 0 ? hold_new(r, id, fd, size, what) : -1;
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (err >= 0) {
+        return err;
+    }
+    if (!mem_room(r, bytes)) {
+        fprintf(stderr,
+                "backend: %s: resource %u: refused: %llu bytes: no room in the VM's counts\n", what,
+                (unsigned)id, (unsigned long long)bytes);
+        return VD_RESP_ERR_OUT_OF_MEMORY;
+    }
+    if (admit_add(r, id, bytes) != 0) {
+        fprintf(stderr, "backend: %s: resource %u: refused: the account's ledger is full\n", what,
+                (unsigned)id);
+        return VD_RESP_ERR_OUT_OF_MEMORY;
+    }
+    return 0;
+}
+
+/**
+ * Create a resource without backing; device.c attaches it later. Its
+ * storage is held or charged before the answer (`charge`): a resource the
+ * renderer allocated through GBM exports as a dma-buf and is held whole,
+ * and any other is charged at its bound (`create_bytes`). A create the VM
+ * has no room for is unmade and refused with ERR_OUT_OF_MEMORY, as the
+ * backing of one is, since the renderer takes the storage from the VM's
+ * memory, which a GPU's driver fills at the storage's first use and does
  * not give back while the resource lives: past the room the VM's OOM
- * killer ends the process that maps the most, this one. A create made is
- * held in the account's ledger at its bound (`admit_add`) until its UNREF,
- * and one the ledger has no place for is refused the same way.
+ * killer ends the process that maps the most, this one.
  */
 static int op_create(void *c, const struct vd_create *a)
 {
     struct virgl_renderer_resource_create_args args;
+    struct vr_export e;
     struct vr *r = c;
-    uint64_t bytes = create_bytes(a);
     int err;
 
-    if (!mem_room(r, bytes)) {
-        fprintf(stderr,
-                "backend: create: resource %u: refused: %llu bytes: no room in the VM's counts\n",
-                (unsigned)a->id, (unsigned long long)bytes);
-        return VD_RESP_ERR_OUT_OF_MEMORY;
-    }
     args.handle = a->id;
     args.target = a->target;
     args.format = a->format;
@@ -473,17 +568,17 @@ static int op_create(void *c, const struct vd_create *a)
     if ((err = virgl_renderer_resource_create(&args, 0, 0)) != 0) {
         return resp(err);
     }
-    if (admit_add(r, a->id, bytes, 0) != 0) {
-        virgl_renderer_resource_unref(a->id);
-        fprintf(stderr, "backend: create: resource %u: refused: the account's ledger is full\n",
-                (unsigned)a->id);
-        return VD_RESP_ERR_OUT_OF_MEMORY;
+    if (vr_export(r, a->id, &e) != 0) {
+        e.fd = -1;
     }
-    return 0;
+    if ((err = charge(r, a->id, e.fd, 0, create_bytes(a), "create")) != 0) {
+        virgl_renderer_resource_unref(a->id);
+    }
+    return err;
 }
 
-/** Drop a resource, its framebuffer on the display and its place in the
- * account's ledger. */
+/** Drop a resource, its framebuffer on the display, its hold and its place
+ * in the account's ledger. */
 static void op_unref(void *c, uint32_t id)
 {
     struct vr *r = c;
@@ -491,6 +586,7 @@ static void op_unref(void *c, uint32_t id)
     if (r->kms) {
         kms_forget(r->kms, id);
     }
+    hold_drop(r, id);
     virgl_renderer_resource_unref(id);
     admit_drop(r, id);
 }
@@ -533,32 +629,26 @@ static int op_transfer(void *c, const struct vd_transfer *t)
 
 /**
  * Create a blob resource: guest memory in the region, or a context's. A
- * blob of a context's memory is judged at its size, rounded up to a page,
- * as a create is (`mem_room`), before the renderer makes it, since the
- * create may allocate its storage, as Venus's mappable blob of blob_id 0
- * does in shared memory; past the room it is refused with
- * ERR_OUT_OF_MEMORY. A blob made is held in the ledger at that size
- * (`admit_add`) until its UNREF, and every reading counts it besides
- * (`ledger_held`), since its storage may be shared memory, which has no
- * DRM figure, or a client's that no reading names. One the ledger has no
- * place for is refused the same way.
+ * blob of a context's memory is held or charged before the answer
+ * (`charge`): the storage the renderer exports for it, a dma-buf or a
+ * shared-memory file, is held over the blob's size from its start, and a
+ * blob whose storage cannot be exported or held, as a GPU's own memory or
+ * a Vulkan allocation's opaque descriptor cannot, is charged at its size,
+ * rounded up to a page. One the VM has no room for is unmade and refused
+ * with ERR_OUT_OF_MEMORY. A size past VR_BYTES_MAX is refused at once.
  */
 static int op_blob(void *c, const struct vd_blob *a, struct iovec *iov, uint32_t n)
 {
     struct virgl_renderer_resource_create_blob_args args;
     struct vr *r = c;
-    uint64_t bytes = 0;
-    int err;
+    uint32_t fd_type;
+    int err, fd = -1;
 
-    if (a->mem != VIRGL_RENDERER_BLOB_MEM_GUEST) {
-        bytes = a->size > VR_BYTES_MAX ? UINT64_MAX : (a->size + 4095u) & ~(uint64_t)4095u;
-        if (!mem_room(r, bytes)) {
-            fprintf(stderr,
-                    "backend: blob: resource %u: refused: %llu bytes: no room in the VM's "
-                    "counts\n",
-                    (unsigned)a->id, (unsigned long long)bytes);
-            return VD_RESP_ERR_OUT_OF_MEMORY;
-        }
+    if (a->mem != VIRGL_RENDERER_BLOB_MEM_GUEST && a->size > VR_BYTES_MAX) {
+        fprintf(stderr,
+                "backend: blob: resource %u: refused: %llu bytes: past the account's bound\n",
+                (unsigned)a->id, (unsigned long long)a->size);
+        return VD_RESP_ERR_OUT_OF_MEMORY;
     }
     memset(&args, 0, sizeof(args));
     args.res_handle = a->id;
@@ -575,13 +665,13 @@ static int op_blob(void *c, const struct vd_blob *a, struct iovec *iov, uint32_t
     if (a->mem == VIRGL_RENDERER_BLOB_MEM_GUEST) {
         return 0;
     }
-    if (admit_add(r, a->id, bytes, 1) != 0) {
-        virgl_renderer_resource_unref(a->id);
-        fprintf(stderr, "backend: blob: resource %u: refused: the account's ledger is full\n",
-                (unsigned)a->id);
-        return VD_RESP_ERR_OUT_OF_MEMORY;
+    if (virgl_renderer_resource_export_blob(a->id, &fd_type, &fd) != 0) {
+        fd = -1;
     }
-    return 0;
+    if ((err = charge(r, a->id, fd, a->size, (a->size + 4095u) & ~(uint64_t)4095u, "blob")) != 0) {
+        virgl_renderer_resource_unref(a->id);
+    }
+    return err;
 }
 
 /** Return the slot of Venus context ctx, or of a free one for ctx 0;
@@ -932,467 +1022,6 @@ static int op_pages(void *c, struct vd_pages *q)
     return pin_runs(r, p, q);
 }
 
-/* A DRM client that a scan counted, by its ID. */
-struct gpu_client {
-    char key[80];   /* "drm-pdev drm-client-id" */
-    uint64_t id;    /* its drm-client-id */
-    uint64_t bytes; /* the largest figure its descriptors gave */
-};
-
-/*
- * A scan of the GPU objects the renderer holds with no pages yet
- * (`gpu_unbacked`), each DRM client counted once.
- */
-struct gpu_scan {
-    uint64_t sum;            /* bytes of the objects counted */
-    struct gpu_client *seen; /* each client with an ID read so far */
-    size_t nseen, cap;
-    size_t nown;     /* the first of seen, those of this process */
-    size_t anon;     /* figures read with no client ID to name them */
-    int failed;      /* the errno that stopped the scan, or 0 */
-    char where[512]; /* the file or directory the scan failed on */
-};
-
-/* The character devices' majors of DRM's card and render nodes and of its
- * accel nodes, the only files whose fdinfo gives Linux's drm-usage stats. */
-#define DRM_MAJOR   226u
-#define ACCEL_MAJOR 261u
-
-/** Stop scan s on errno err at path, the first failure kept. */
-static void scan_fail(struct gpu_scan *s, const char *path, int err)
-{
-    if (s->failed == 0) {
-        s->failed = err ? err : EIO;
-        snprintf(s->where, sizeof(s->where), "%s", path);
-    }
-}
-
-/**
- * Count `bytes` for the client named `key` in s, once however many of its
- * descriptors give a figure: the largest of them stands, since each
- * descriptor's fdinfo gives the client's objects at its own reading and a
- * later one holds those made since. A client's place is made with realloc;
- * its failure fails s at path with ENOMEM.
- */
-static void client_count(struct gpu_scan *s, const char *path, const char *key, uint64_t id,
-                         uint64_t bytes)
-{
-    size_t i;
-
-    for (i = 0; i < s->nseen; i++) {
-        if (strcmp(s->seen[i].key, key) == 0) {
-            if (bytes > s->seen[i].bytes) {
-                s->sum += bytes - s->seen[i].bytes;
-                s->seen[i].bytes = bytes;
-            }
-            return;
-        }
-    }
-    if (s->nseen == s->cap) {
-        size_t cap = s->cap ? s->cap * 2 : 16;
-        struct gpu_client *seen = realloc(s->seen, cap * sizeof(*seen));
-
-        if (seen == 0) {
-            scan_fail(s, path, ENOMEM);
-            return;
-        }
-        s->seen = seen;
-        s->cap = cap;
-    }
-    snprintf(s->seen[s->nseen].key, sizeof(s->seen[s->nseen].key), "%s", key);
-    s->seen[s->nseen].id = id;
-    s->seen[s->nseen++].bytes = bytes;
-    s->sum += bytes;
-}
-
-/**
- * Add to s the bytes of system memory that the DRM client of fdinfo file
- * `path` holds in GPU objects with no pages yet, as Linux's drm-usage stats
- * give them: drm-total-system0 less drm-resident-system0, or the whole
- * total for a driver that gives no resident count. i915 makes an object's
- * pages at its first use, not at its creation, so these are bytes the VM's
- * counts do not hold yet and the renderer will take. A client that
- * drm-client-id and drm-pdev name is counted once however many descriptors
- * share it, at the largest figure they give (`client_count`), and named in
- * s even with no figure; a figure with no ID is added and counted in
- * s->anon. A file of any other kind adds nothing, nor does one whose
- * descriptor or process ended
- * before it was read (ENOENT, ESRCH); any other failure to open or read it
- * fails the scan.
- */
-static void unbacked_of(const char *path, struct gpu_scan *s)
-{
-    unsigned long long n, id = 0, total = 0, resident = 0, bytes;
-    int has_total = 0, has_resident = 0, has_id = 0, bad, err;
-    char line[160], unit[8], pdev[40] = "", key[80];
-    FILE *f = fopen(path, "r");
-
-    if (f == 0) {
-        if (errno != ENOENT && errno != ESRCH) {
-            scan_fail(s, path, errno);
-        }
-        return;
-    }
-    errno = 0;
-    while (fgets(line, sizeof(line), f)) {
-        unsigned long long *to;
-        int *has;
-
-        if (strncmp(line, "drm-client-id:", 14) == 0) {
-            has_id = sscanf(line + 14, "%llu", &id) == 1;
-            continue;
-        } else if (strncmp(line, "drm-pdev:", 9) == 0) {
-            if (sscanf(line + 9, "%39s", pdev) != 1) {
-                pdev[0] = 0;
-            }
-            continue;
-        } else if (strncmp(line, "drm-total-system0:", 18) == 0) {
-            to = &total;
-            has = &has_total;
-        } else if (strncmp(line, "drm-resident-system0:", 21) == 0) {
-            to = &resident;
-            has = &has_resident;
-        } else {
-            continue;
-        }
-        unit[0] = 0;
-        if (sscanf(strchr(line, ':') + 1, "%llu %7s", &n, unit) < 1) {
-            continue;
-        }
-        /* drm_print_memory_stats gives bytes, KiB or MiB. */
-        *to = strcmp(unit, "MiB") == 0 ? n << 20 : strcmp(unit, "KiB") == 0 ? n << 10 : n;
-        *has = 1;
-    }
-    bad = ferror(f);
-    err = errno;
-    fclose(f);
-    if (bad) {
-        if (err != ENOENT && err != ESRCH) {
-            scan_fail(s, path, err);
-        }
-        return;
-    }
-    bytes = !has_total ? 0 : has_resident ? (total > resident ? total - resident : 0) : total;
-    if (!has_id) {
-        if (has_total) {
-            s->sum += bytes;
-            s->anon++;
-        }
-        return;
-    }
-    snprintf(key, sizeof(key), "%s %llu", pdev, id);
-    client_count(s, path, key, id, bytes);
-}
-
-/**
- * Open the cgroup.procs file of this process's cgroup v2, the backend
- * service's, naming it in path. Returns the file, or 0 when the kernel has
- * no cgroup v2 to name or, with s failed, when a file cannot be opened or
- * read for a cause other than its absence.
- */
-static FILE *cgroup_procs(struct gpu_scan *s, char *path, size_t size)
-{
-    char line[256];
-    FILE *cg = fopen("/proc/self/cgroup", "r"), *procs = 0;
-
-    if (cg == 0) {
-        if (errno != ENOENT) {
-            scan_fail(s, "/proc/self/cgroup", errno);
-        }
-        return 0;
-    }
-    while (fgets(line, sizeof(line), cg)) {
-        if (strncmp(line, "0::", 3) == 0) {
-            line[strcspn(line, "\n")] = 0;
-            snprintf(path, size, "/sys/fs/cgroup%s/cgroup.procs", line + 3);
-            if ((procs = fopen(path, "r")) == 0 && errno != ENOENT) {
-                scan_fail(s, path, errno);
-            }
-            break;
-        }
-    }
-    if (procs == 0 && ferror(cg)) {
-        scan_fail(s, "/proc/self/cgroup", errno);
-    }
-    fclose(cg);
-    return procs;
-}
-
-/**
- * Add to s what each DRM descriptor of process pid holds (`unbacked_of`),
- * which counts each client once however many descriptors name it. A
- * descriptor is one when the file its /proc/PID/fd link names is a
- * character device of DRM's or accel's major; a stat of the link costs a
- * lookup, where a read of every descriptor's fdinfo cost an open, a
- * seq_file and a close each. Descriptors are not matched to the open files
- * already read, since another thread may close one and reuse its number
- * between the two reads. A
- * descriptor or process that ended before or while it was read adds what
- * was read; any other failure to read the directory or stat a link fails s.
- */
-static void scan_fds(struct gpu_scan *s, long pid)
-{
-    char base[64], path[512];
-    struct dirent *e;
-    struct stat st;
-    unsigned int major_of;
-    DIR *dir;
-
-    snprintf(base, sizeof(base), "/proc/%ld/fd", pid);
-    if ((dir = opendir(base)) == 0) {
-        if (errno != ENOENT && errno != ESRCH) {
-            scan_fail(s, base, errno);
-        }
-        return;
-    }
-    while (s->failed == 0) {
-        errno = 0;
-        if ((e = readdir(dir)) == 0) {
-            if (errno != 0 && errno != ENOENT && errno != ESRCH) {
-                scan_fail(s, base, errno);
-            }
-            break;
-        }
-        if (e->d_name[0] == '.') {
-            continue;
-        }
-        if (fstatat(dirfd(dir), e->d_name, &st, 0) != 0) {
-            if (errno != ENOENT && errno != ESRCH) {
-                snprintf(path, sizeof(path), "%s/%s", base, e->d_name);
-                scan_fail(s, path, errno);
-            }
-            continue;
-        }
-        major_of = major(st.st_rdev);
-        if (!S_ISCHR(st.st_mode) || (major_of != DRM_MAJOR && major_of != ACCEL_MAJOR)) {
-            continue;
-        }
-        snprintf(path, sizeof(path), "/proc/%ld/fdinfo/%s", pid, e->d_name);
-        unbacked_of(path, s);
-    }
-    closedir(dir);
-}
-
-/**
- * Read into s->sum the bytes of the VM's memory that the renderer's GPU
- * objects will take and the VM's counts do not hold yet (`unbacked_of`),
- * over every DRM descriptor (`scan_fds`) of this process, then of every
- * other process of the backend's cgroup, the service's (`cgroup_procs`),
- * which holds virglrenderer's render server and its workers too. The
- * clients of this process are the first s->nown of s->seen, which the
- * caller frees. 0 with no GPU: llvmpipe fills a texture's memory at its
- * create. A process that ends during the scan adds nothing. Returns 0, or
- * -1 with s->failed and s->where when a file or directory of the scan
- * cannot be opened or read for any other cause, ENOMEM or EMFILE among
- * them, since a scan that skipped a client would count its objects as 0.
- */
-static int gpu_unbacked(struct gpu_scan *s)
-{
-    char path[512];
-    long pid, self = (long)getpid();
-    FILE *procs;
-
-    memset(s, 0, sizeof(*s));
-    scan_fds(s, self);
-    s->nown = s->nseen;
-    procs = s->failed ? 0 : cgroup_procs(s, path, sizeof(path));
-    while (procs && s->failed == 0) {
-        if (fscanf(procs, "%ld", &pid) != 1) {
-            if (ferror(procs)) {
-                scan_fail(s, path, errno);
-            }
-            break;
-        }
-        if (pid != self) {
-            scan_fds(s, pid);
-        }
-    }
-    if (procs) {
-        fclose(procs);
-    }
-    return s->failed ? -1 : 0;
-}
-
-/**
- * Set *id to the drm-client-id that fdinfo file `path` gives, or to 0 when
- * it gives none. Returns 0, or -1 when the file cannot be opened or read.
- */
-static int client_id_of(const char *path, uint64_t *id)
-{
-    unsigned long long n = 0;
-    char line[160];
-    FILE *f = fopen(path, "r");
-    int bad;
-
-    *id = 0;
-    if (f == 0) {
-        return -1;
-    }
-    while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, "drm-client-id:", 14) == 0 && sscanf(line + 14, "%llu", &n) == 1) {
-            *id = n;
-            break;
-        }
-    }
-    bad = ferror(f);
-    fclose(f);
-    return bad ? -1 : 0;
-}
-
-/**
- * Open a DRM file of its own and close it again, to read the client ID
- * Linux gives it (drm_file_alloc numbers every DRM file of every device
- * from one counter as it opens), which is larger than the ID of every DRM
- * file open before. Render nodes are tried first and the card nodes after
- * them, since a card node's first opener is its master while it is open.
- * Sets *mark to that ID and returns 0. Sets it to 0 and returns 0 when
- * /dev/dri holds no DRM node, or when every node opens and none gives an
- * ID, since only a driver's own fdinfo gives one (drm_show_fdinfo), as
- * i915's does and vkms's does not, and no reading then names a client or
- * counts a figure. Returns -1 when no node gives an ID and one cannot be
- * opened or its fdinfo read.
- */
-static int client_mark(uint64_t *mark)
-{
-    static const char *const kinds[] = {"renderD", "card"};
-    char path[300], info[64];
-    struct dirent *e;
-    struct stat st;
-    unsigned int k;
-    int fd, failed = 0;
-    DIR *dir;
-
-    *mark = 0;
-    for (k = 0; k < sizeof(kinds) / sizeof(kinds[0]) && *mark == 0; k++) {
-        if ((dir = opendir("/dev/dri")) == 0) {
-            return errno == ENOENT ? 0 : -1;
-        }
-        while (*mark == 0 && (e = readdir(dir)) != 0) {
-            if (strncmp(e->d_name, kinds[k], strlen(kinds[k])) != 0) {
-                continue;
-            }
-            snprintf(path, sizeof(path), "/dev/dri/%s", e->d_name);
-            if ((fd = open(path, O_RDWR | O_CLOEXEC | O_NOCTTY)) < 0) {
-                failed = 1;
-                continue;
-            }
-            if (fstat(fd, &st) != 0) {
-                failed = 1;
-            } else if (S_ISCHR(st.st_mode) && major(st.st_rdev) == DRM_MAJOR) {
-                snprintf(info, sizeof(info), "/proc/self/fdinfo/%d", fd);
-                failed |= client_id_of(info, mark) != 0;
-            }
-            close(fd);
-        }
-        closedir(dir);
-    }
-    return *mark == 0 && failed ? -1 : 0;
-}
-
-/**
- * Name in r->own the DRM clients of this process that the renderer just
- * started holds: vrend's and Mesa's, which virgl_renderer_init opens and
- * which stay open until virgl_renderer_cleanup, and GBM's, open for the
- * backend's life. Every resource a create makes takes its storage through
- * one of them. Clients opened later, a native context's or the probe's
- * Vulkan, are not named, since none holds a create's storage and one that
- * closes would make every later reading count the ledger. Then the mark
- * is taken (`client_mark`): a client of this process that a later reading
- * reads with an ID below it was open at the start, and missed by this
- * reading if not named, as when another thread moved its descriptor
- * across the walk, and the later reading names it (`own_learn`). A
- * reading that fails, names more than OWN_CLIENTS or reads a figure with
- * no client ID, or a mark that cannot be taken, sets r->own_unknown, so
- * that every judgment of the epoch counts the ledger (`ledger_held`).
- */
-static void own_clients(struct vr *r)
-{
-    struct gpu_scan s;
-    size_t i;
-
-    memset(&s, 0, sizeof(s));
-    scan_fds(&s, (long)getpid());
-    r->own_unknown =
-        s.failed != 0 || s.anon != 0 || s.nseen > OWN_CLIENTS || client_mark(&r->own_mark) != 0;
-    r->nown = 0;
-    for (i = 0; i < s.nseen && i < OWN_CLIENTS; i++) {
-        snprintf(r->own[r->nown++], sizeof(r->own[0]), "%s", s.seen[i].key);
-    }
-    free(s.seen);
-    if (r->own_unknown) {
-        fprintf(stderr, "backend: counts: the renderer's clients are not all named: "
-                        "every create is counted at its bound\n");
-    }
-}
-
-/**
- * Name in r->own each client of this process that reading s read, that
- * the start's reading did not name and whose ID is below the start's mark
- * (`client_mark`): it was open at the start, and the start's reading
- * missed it, so that a later reading that misses it counts the ledger
- * (`ledger_held`). A client opened since, a native context's or the
- * probe's, is above the mark and stays unnamed. One more than OWN_CLIENTS
- * hold sets r->own_unknown. Each name added is printed, since a reading
- * misses a client only when another thread moves its descriptor.
- */
-static void own_learn(struct vr *r, const struct gpu_scan *s)
-{
-    uint32_t i;
-    size_t j;
-
-    for (j = 0; j < s->nown && !r->own_unknown; j++) {
-        if (s->seen[j].id >= r->own_mark) {
-            continue;
-        }
-        for (i = 0; i < r->nown && strcmp(r->own[i], s->seen[j].key) != 0; i++) {
-        }
-        if (i < r->nown) {
-            continue;
-        }
-        if (r->nown == OWN_CLIENTS) {
-            r->own_unknown = 1;
-            fprintf(stderr, "backend: counts: the renderer's clients are not all named: "
-                            "every create is counted at its bound\n");
-            break;
-        }
-        snprintf(r->own[r->nown++], sizeof(r->own[0]), "%s", s->seen[j].key);
-        fprintf(stderr,
-                "backend: counts: client %s of the renderer's start, missed then, "
-                "is named\n",
-                s->seen[j].key);
-    }
-}
-
-/**
- * The bytes the account's ledger adds to a reading s: the live blobs' sizes
- * when s read every client of this process that the epoch's start named
- * (`own_clients`), whose figures then hold every admitted create's object
- * that has no pages yet, while a blob's storage may be shared memory, with
- * no DRM figure, or a client's that no reading names, a Venus worker's or
- * a native context's; else the bounds of every create and blob admitted
- * and not yet unreferenced. Either counts an object with pages twice, here
- * and in MemAvailable or a figure, and refuses early, but never admits
- * memory twice. A reading misses a client when another thread moves its
- * descriptor across the walk.
- */
-static uint64_t ledger_held(const struct vr *r, const struct gpu_scan *s)
-{
-    uint32_t i;
-    size_t j;
-
-    if (r->own_unknown) {
-        return r->admitted;
-    }
-    for (i = 0; i < r->nown; i++) {
-        for (j = 0; j < s->nown && strcmp(r->own[i], s->seen[j].key) != 0; j++) {
-        }
-        if (j == s->nown) {
-            return r->admitted;
-        }
-    }
-    return r->blobs;
-}
-
 /** The ledger's home place of resource id, by Knuth's multiplicative hash. */
 static uint32_t admit_home(uint32_t id)
 {
@@ -1411,47 +1040,34 @@ static uint32_t admit_slot(const struct vr *r, uint32_t id)
 }
 
 /**
- * Hold resource id's create, or its blob when blob is set, in the ledger at
- * `bytes`, its bound, at most VR_BYTES_MAX as `mem_room` judged it, which
- * counts in `since` until the account's next reading. Returns 0, or -1
- * when the ledger holds VD_OBJS creates already, which the device's table
- * of resources keeps from happening.
+ * Charge resource id to the ledger at `bytes`, its bound, at most
+ * VR_BYTES_MAX as `mem_room` judged it, until its UNREF or the epoch's end.
+ * Returns 0, or -1 when the ledger holds VD_OBJS resources already, which
+ * the device's table of resources keeps from happening.
  */
-static int admit_add(struct vr *r, uint32_t id, uint64_t bytes, int blob)
+static int admit_add(struct vr *r, uint32_t id, uint64_t bytes)
 {
     uint32_t i = admit_slot(r, id);
 
     if (r->admit[i].id == id) {
         r->admitted -= r->admit[i].bytes;
-        if (r->admit[i].blob) {
-            r->blobs -= r->admit[i].bytes;
-        }
-        if (r->admit[i].gen == r->gen) {
-            r->since -= r->admit[i].bytes;
-        }
     } else if (r->nadmit == VD_OBJS) {
         return -1;
     } else {
         r->nadmit++;
     }
     r->admit[i].id = id;
-    r->admit[i].gen = r->gen;
-    r->admit[i].blob = blob != 0;
     r->admit[i].bytes = bytes;
     r->admitted += bytes;
-    if (blob) {
-        r->blobs += bytes;
-    }
-    r->since += bytes;
+    r->pc.charged++;
     return 0;
 }
 
 /**
- * Drop resource id's create from the ledger, and from `since` when it was
- * admitted since the account's last reading, if it holds it, moving each
- * later entry of its run back into the free place when its home allows,
- * so that every entry stays reachable from its home (Knuth's algorithm R,
- * TAOCP 6.4).
+ * Drop resource id from the ledger, if it holds it, moving each later
+ * entry of its run back into the free place when its home allows, so that
+ * every entry stays reachable from its home (Knuth's algorithm R, TAOCP
+ * 6.4).
  */
 static void admit_drop(struct vr *r, uint32_t id)
 {
@@ -1461,12 +1077,6 @@ static void admit_drop(struct vr *r, uint32_t id)
         return;
     }
     r->admitted -= r->admit[i].bytes;
-    if (r->admit[i].blob) {
-        r->blobs -= r->admit[i].bytes;
-    }
-    if (r->admit[i].gen == r->gen) {
-        r->since -= r->admit[i].bytes;
-    }
     r->nadmit--;
     for (;;) {
         r->admit[i].id = 0;
@@ -1484,115 +1094,136 @@ static void admit_drop(struct vr *r, uint32_t id)
 }
 
 /**
- * Read the GPU objects afresh for the account (`gpu_unbacked`): their
- * bytes, and the ledger's blobs, or all of it when the reading missed a
- * client of the renderer's (`ledger_held`), become r->read_sum, and the
- * creates admitted from now on count in r->since until the next reading. Returns 0, or -1
- * with `backend: counts: PATH: ERROR` when the objects cannot be read,
- * which leaves no reading.
+ * Hold the storage of resource id that the renderer exported as fd, a
+ * dma-buf or a shmem file: `size` bytes from its start, or the whole file
+ * for 0, rounded up to a page, pinned through the module
+ * (VGPUSHM_IOC_PIN), which brings in every page it has not and keeps them
+ * until `hold_drop`, as i915 keeps a dma-buf's pages while a device maps
+ * it. Storage that another hold already pins, the same file, is charged
+ * nothing and pinned again; any other is first judged against the room
+ * (`mem_room`). Returns 0; ERR_OUT_OF_MEMORY, with a line, when the room
+ * or the pin's allocation refuses it; or -1 when it cannot be held at all,
+ * with no module, no place left, a size of 0 or past the module's largest
+ * pin, or a file the module cannot pin, which the caller charges to the
+ * ledger instead (`charge`). `what` names the command in the line.
  */
-static int mem_read(struct vr *r)
+static int hold_new(struct vr *r, uint32_t id, int fd, uint64_t size, const char *what)
 {
-    struct gpu_scan scan;
+    struct vgpushm_pin pin;
+    struct stat st;
+    uint32_t i;
+    off_t end;
+    int err, shared = 0;
 
-    r->have_reading = 0;
-    if (gpu_unbacked(&scan) != 0) {
-        fprintf(stderr, "backend: counts: %s: %s\n", scan.where, strerror(scan.failed));
-        free(scan.seen);
+    if (r->module < 0 || r->nholds == PINS || fstat(fd, &st) != 0) {
         return -1;
     }
-    own_learn(r, &scan);
-    r->read_sum = scan.sum + ledger_held(r, &scan);
-    free(scan.seen);
-    r->have_reading = 1;
-    r->gen++;
-    r->since = 0;
+    if (size == 0) {
+        if ((end = lseek(fd, 0, SEEK_END)) <= 0) {
+            return -1;
+        }
+        size = (uint64_t)end;
+    }
+    if (size > VGPUSHM_PIN_MAX_SIZE) {
+        return -1;
+    }
+    size = (size + 4095u) & ~(uint64_t)4095u;
+    for (i = 0; i < r->nholds; i++) {
+        shared |= r->holds[i].dev == st.st_dev && r->holds[i].ino == st.st_ino;
+    }
+    if (!shared && !mem_room(r, size)) {
+        fprintf(stderr,
+                "backend: %s: resource %u: refused: %llu bytes: no room in the VM's counts\n", what,
+                (unsigned)id, (unsigned long long)size);
+        return VD_RESP_ERR_OUT_OF_MEMORY;
+    }
+    memset(&pin, 0, sizeof(pin));
+    pin.fd = fd;
+    pin.epoch = r->dev->drv.epoch;
+    pin.size = size;
+    if (ioctl(r->module, VGPUSHM_IOC_PIN, &pin) != 0) {
+        err = errno;
+        if (err != ENOMEM) {
+            return -1;
+        }
+        fprintf(stderr, "backend: %s: resource %u: refused: %llu bytes: the pin: %s\n", what,
+                (unsigned)id, (unsigned long long)size, strerror(err));
+        return VD_RESP_ERR_OUT_OF_MEMORY;
+    }
+    r->holds[r->nholds].id = id;
+    r->holds[r->nholds].handle = pin.handle;
+    r->holds[r->nholds].dev = st.st_dev;
+    r->holds[r->nholds].ino = st.st_ino;
+    r->nholds++;
+    r->pc.held++;
     return 0;
 }
 
+/** Let go of resource id's hold, if it has one. */
+static void hold_drop(struct vr *r, uint32_t id)
+{
+    uint32_t i, handle;
+
+    for (i = 0; i < r->nholds; i++) {
+        if (r->holds[i].id == id) {
+            handle = r->holds[i].handle;
+            if (ioctl(r->module, VGPUSHM_IOC_UNPIN, &handle) != 0) {
+                fprintf(stderr, "backend: unpin: resource %u: hold: %s\n", (unsigned)id,
+                        strerror(errno));
+            }
+            r->holds[i] = r->holds[--r->nholds];
+            return;
+        }
+    }
+}
+
 /**
- * Whether the VM has room for `size` bytes more, of a backing or of a
- * resource's storage: its available memory, as /proc/meminfo counts it,
- * holds them, the bytes the renderer's GPU objects will yet take, and an
- * eighth of the VM's memory besides, so that a guest that asks for more
- * than the VM has is refused, as a Linux guest's allocation fails when its
- * RAM runs out, before the pin's reclaim, or i915's at an object's first
- * use, stalls the VM and every answer with it or wakes its OOM killer.
- * Creates (`op_create`) and backings (`back_new`) are judged so against
- * one account: a create's GPU object counts here from its creation until
- * it has its pages, and in MemAvailable after; a backing is pinned whole
- * at its admission, so MemAvailable holds it at every later judgment.
- * The objects' bytes are the account's last reading (`mem_read`) and the
- * bounds of the creates admitted since (`since`), which the reading does
- * not hold; MemAvailable is read at each judgment, after the objects, so
- * that one made resident since the reading is counted twice, which refuses
- * early, and never not at all; a blob of a context's memory is judged and
- * charged so too, and every reading counts it until its UNREF (`op_blob`).
- * A size past VR_BYTES_MAX is refused at once. A judgment that would leave
- * less room than another eighth of the VM's memory, the margin, or would
- * refuse, reads the objects afresh and judges again, since the renderer
- * also makes GPU objects that no command it serves names, at submissions
- * and in Venus's workers, which only a new reading counts. The margin is
- * no bound on those: nothing limits what they make between two readings,
- * as on Linux, where i915 judges none of them. The first judgment of an
- * epoch reads them too.
- * main has the C library give back at once what llvmpipe frees. 0 when
- * the objects cannot be read (`mem_read`); 1 when the VM has no
- * /proc/meminfo or it lacks either count; 0 when it cannot be opened for
- * want of memory or its read fails, as seq_file's does when it cannot
- * allocate its buffer. MemAvailable reads 0, not less, when the free pages
- * are down to the watermarks, which is no room.
+ * Whether the VM has room for `size` bytes more, of a backing, a hold or a
+ * resource charged to the ledger: MemAvailable, read afresh from
+ * /proc/meminfo, holds them, an eighth of MemTotal, and the ledger's
+ * bounds, which the VM's memory does not hold yet, since a GPU's driver
+ * takes a resource's pages at their first use. A backing and a hold are
+ * pinned whole at their admission, so MemAvailable holds them at every
+ * later judgment; a ledger's resource made resident is counted twice,
+ * which refuses early, and never not at all. This refuses what a guest
+ * asks past the VM's memory, as a Linux guest's allocation fails when its
+ * RAM runs out, before the pin's reclaim, or i915's at a first use, stalls
+ * the VM and every answer with it or wakes its OOM killer. MemAvailable
+ * reads 0, not less, when the free pages are down to the watermarks, which
+ * is no room. 1 for a size of 0; 0 for one past VR_BYTES_MAX, and when
+ * /proc/meminfo cannot be read or lacks either count.
  */
 static int mem_room(struct vr *r, uint64_t size)
 {
-    unsigned long long total, avail, kib;
-    int has_total, has_avail, failed, fresh = 0, room;
+    unsigned long long kib, total = 0, avail = 0;
+    int has_total = 0, has_avail = 0, failed;
     uint64_t need;
     char line[128];
     FILE *f;
 
-    if (size > VR_BYTES_MAX) {
+    if (size == 0) {
+        return 1;
+    }
+    if (size > VR_BYTES_MAX || (f = fopen("/proc/meminfo", "r")) == 0) {
         return 0;
     }
-    if (!r->have_reading) {
-        if (mem_read(r) != 0) {
-            return 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "MemTotal: %llu kB", &kib) == 1) {
+            total = kib;
+            has_total = 1;
+        } else if (sscanf(line, "MemAvailable: %llu kB", &kib) == 1) {
+            avail = kib;
+            has_avail = 1;
         }
-        fresh = 1;
     }
-    for (;;) {
-        total = avail = 0;
-        has_total = has_avail = 0;
-        if ((f = fopen("/proc/meminfo", "r")) == 0) {
-            return errno != ENOMEM && errno != ENFILE && errno != EMFILE;
-        }
-        while (fgets(line, sizeof(line), f)) {
-            if (sscanf(line, "MemTotal: %llu kB", &kib) == 1) {
-                total = kib * 1024u;
-                has_total = 1;
-            } else if (sscanf(line, "MemAvailable: %llu kB", &kib) == 1) {
-                avail = kib * 1024u;
-                has_avail = 1;
-            }
-        }
-        failed = ferror(f);
-        fclose(f);
-        if (failed) {
-            return 0;
-        }
-        if (!has_total || !has_avail) {
-            return 1;
-        }
-        need = total / 8u + r->read_sum + r->since;
-        room = need <= avail && size <= avail - need;
-        if (fresh || (room && avail - need - size >= total / 8u)) {
-            return room;
-        }
-        if (mem_read(r) != 0) {
-            return 0;
-        }
-        fresh = 1;
+    failed = ferror(f);
+    fclose(f);
+    if (failed || !has_total || !has_avail || total > VR_BYTES_MAX / 1024u ||
+        avail > VR_BYTES_MAX / 1024u) {
+        return 0;
     }
+    need = total * 1024u / 8u + r->admitted;
+    return need <= avail * 1024u && size <= avail * 1024u - need;
 }
 
 volatile sig_atomic_t vr_hold;
@@ -1733,7 +1364,7 @@ static void op_unpin(void *c, uint32_t id)
 }
 
 /**
- * End every context, resource, pin and the account's ledger for a new
+ * End every context, resource, pin, hold and the account's ledger for a new
  * epoch: virglrenderer stops and starts again (`start`), since
  * virgl_renderer_reset in 1.1.0 joins vrend's sync thread and starts none,
  * after which no asynchronous fence of vrend's retires
@@ -1748,12 +1379,12 @@ static void op_reset(void *c)
     while (r->npins) {
         pin_drop(r, &r->pins[0]);
     }
+    while (r->nholds) {
+        hold_drop(r, r->holds[0].id);
+    }
     memset(r->admit, 0, sizeof(r->admit));
     r->nadmit = 0;
     r->admitted = 0;
-    r->blobs = 0;
-    r->have_reading = 0;
-    r->since = 0;
     if (r->kms) {
         kms_reset(r->kms);
     }
