@@ -210,6 +210,11 @@ struct ext2_time {
 /* The shared blocks a node lists for its `fsync` (`ext2_node_share`). */
 #define EXT2_NODE_SHARED 8
 
+/* Every open holds its node. A non-directory needs no other state. */
+struct ext2_handle {
+    struct ext2_node *node;
+};
+
 /* An inode in memory, from the heap, on its mount's list and in its hash. */
 struct ext2_node {
     struct ext2_node *next;  /* the mount's list of nodes in memory */
@@ -309,12 +314,12 @@ struct ext2_node {
      * and when the node is made, and cleared as an `fsync` writes the
      * table block: `fdatasync` writes that block only while it is set. */
     int dirty_meta;
+    struct ext2_handle file_handle; /* shared by opens of a non-directory */
 };
 
-/* One open file, holding `node` until release. The directory cursor and
- * version belong to this open, under the node lock, not to other opens. */
-struct ext2_handle {
-    struct ext2_node *node;
+/* A directory open's cursor and version, under the node's lock. */
+struct ext2_dir_handle {
+    struct ext2_handle file;
     uint32_t cursor;      /* the last position returned, or ~0u before the first read */
     uint64_t dir_version; /* the directory version at that position */
 };
@@ -751,6 +756,7 @@ int ext2_writeback_holds(const struct ext2_mount *em, const struct ext2_node *n)
 int ext2_writeback_keeps(struct ext2_mount *em, const struct ext2_node *n);
 int ext2_writeback_error(struct ext2_mount *em, int rc);
 int ext2_writeback_drain(struct ext2_mount *em);
+void ext2_writeback_close(struct ext2_mount *em, const struct ext2_node *node);
 int ext2_writeback_contiguous(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
                               uint32_t count);
 int ext2_writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
