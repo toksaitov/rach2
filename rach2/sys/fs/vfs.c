@@ -2354,6 +2354,64 @@ static int cached_hop_root(const struct vfs_mount *mnt, const void *node)
  * be looked up for the search to answer. */
 #define HOP_LOOKUP 2
 
+/*
+ * What `cached_hop_node` has looked up: at the boot root's lookup count
+ * `stamp` (`krffs_names_stamp`), the name `name` in the root directory
+ * named `node`, which stands while the count reads the same, since every
+ * write that can change what a lookup finds moves it. Under the mount
+ * table's lock, which `cached_hop_take` holds when it reads an entry.
+ */
+#define HOP_MEMOS    8u  /* entries, a power of two */
+#define HOP_NAME_MAX 31u /* the longest name an entry holds */
+
+struct hop_memo {
+    uint32_t stamp;
+    void *node; /* NULL for an empty entry */
+    char name[HOP_NAME_MAX + 1];
+};
+
+static struct hop_memo hop_memos[HOP_MEMOS];
+
+/** The entry of `hop_memos` for the name `comp`, by a hash of it, or NULL
+ * for a name longer than an entry holds. */
+static struct hop_memo *hop_memo_slot(const char *comp)
+{
+    uint32_t h = 5381u;
+    uint32_t i;
+
+    for (i = 0; comp[i] != '\0'; i++) {
+        if (i == HOP_NAME_MAX) {
+            return NULL;
+        }
+        h = (h * 33u) ^ (uint8_t)comp[i];
+    }
+    return &hop_memos[h & (HOP_MEMOS - 1u)];
+}
+
+/** The node an entry of `hop_memos` made at the lookup count `stamp` gives
+ * the name `comp`, or NULL. Under the mount table's lock. */
+static void *hop_memo_find(const char *comp, uint32_t stamp)
+{
+    const struct hop_memo *e = hop_memo_slot(comp);
+
+    return e && e->node && e->stamp == stamp && streq(e->name, comp) ? e->node : NULL;
+}
+
+/** Whether a mount covers the root of `over`. Under the mount table's
+ * lock. */
+static int mount_stacked(const struct vfs_mount *over)
+{
+    int i;
+
+    for (i = 1; i < mount_slots; i++) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == over &&
+            mounts[i]->covered == over->root) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** Whether `m` is a mount `cached_hop` may enter from `root` by the name
  * `comp`: a nameless one entered by it, or, when `node` is not NULL, one
  * covering `node`, the node that name names now in the root directory.
@@ -2372,21 +2430,24 @@ static int cached_hop_match(const struct vfs_mount *m, const struct vfs_mount *r
 
 /**
  * `cached_hop`'s search of the mount table, under its lock: the mount the
- * name `comp` enters from `root`, a nameless one before one that covers
- * `node`, the name's node or NULL when it is not yet looked up, entered and
- * held into `cur`, with `*stacked` set when a mount is over its root. 0;
- * HOP_LOOKUP with nothing taken, for a `node` of NULL when no nameless
- * mount takes the name and a mount covers a node of the root directory; or
- * WALK_FULL with nothing taken.
+ * name `comp` enters from `root`, a nameless one before one that covers the
+ * node of that name, entered and held into `cur`, with `*stacked` set when
+ * a mount is over its root. The node is `node`, which the caller looked
+ * up, or when that is NULL the one an entry of `hop_memos` made at the
+ * lookup count that reads now gives. 0; HOP_LOOKUP with nothing taken, when
+ * neither gives the node, no nameless mount takes the name and a mount
+ * covers a node of the root directory; or WALK_FULL with nothing taken.
  */
 static int cached_hop_take(struct vfs_mount *root, const char *comp, const void *node,
                            struct vfs_ref *cur, int *stacked)
 {
     struct vfs_mount *named = NULL, *over = NULL;
+    uint32_t stamp = krffs_names_stamp();
     uint32_t flags = spin_lock_irqsave(&mount_table_lock);
     int covers = 0;
     int i, rc = 0;
 
+    node = node ? node : hop_memo_find(comp, stamp);
     for (i = 1; i < mount_slots && !named && rc == 0; i++) {
         struct vfs_mount *m = mounts[i];
         int seen = cached_hop_match(m, root, comp, node) ? vfs_mount_seen_word(m) : 0;
@@ -2399,11 +2460,7 @@ static int cached_hop_take(struct vfs_mount *root, const char *comp, const void 
         }
     }
     over = named ? named : over;
-    *stacked = 0;
-    for (i = 1; over && i < mount_slots && !*stacked; i++) {
-        *stacked = mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == over &&
-                   mounts[i]->covered == over->root;
-    }
+    *stacked = over && mount_stacked(over);
     if (rc == 0 && !over && !node && covers) {
         rc = HOP_LOOKUP;
     }
@@ -2412,65 +2469,20 @@ static int cached_hop_take(struct vfs_mount *root, const char *comp, const void 
     return rc;
 }
 
-/*
- * What `cached_hop_node` has looked up: at the boot root's lookup count
- * `stamp` (`krffs_names_stamp`), the name `name` in the root directory
- * named `node`, which stands while the count reads the same, since every
- * write that can change what a lookup finds moves it. Under
- * `hop_memo_lock`.
- */
-#define HOP_MEMOS    8u  /* entries, a power of two */
-#define HOP_NAME_MAX 31u /* the longest name an entry holds */
-
-struct hop_memo {
-    uint32_t stamp;
-    void *node; /* NULL for an empty entry */
-    char name[HOP_NAME_MAX + 1];
-};
-
-static struct hop_memo hop_memos[HOP_MEMOS];
-static struct spinlock hop_memo_lock = SPINLOCK_INIT;
-
-/** The entry of `hop_memos` for the name comp[0..len), by a hash of it. */
-static struct hop_memo *hop_memo_slot(const char *comp, uint32_t len)
-{
-    uint32_t h = 5381u;
-    uint32_t i;
-
-    for (i = 0; i < len; i++) {
-        h = (h * 33u) ^ (uint8_t)comp[i];
-    }
-    return &hop_memos[h & (HOP_MEMOS - 1u)];
-}
-
 /**
  * The node the name `comp`, of `len` bytes, names now in the root directory
- * of `root`, the KRFFS boot root; or NULL for a name that is not there or a
- * lookup that failed. An entry of `hop_memos` made at the lookup count that
- * reads now answers without a lock; otherwise the lookup runs under the big
- * lock, which the core needs, and the boot root's lookup cache answers it
- * without a walk of the ring. A change of a name under way when the count
- * is read moves the walk sequence, which the caller checks at the walk's
- * end. KRFFS counts no holds (`kfs_lookup`), so the node is compared, not
- * held. May sleep.
+ * of `root`, the KRFFS boot root, looked up under the big lock, which the
+ * core needs, and kept in `hop_memos` with the lookup count read before the
+ * lookup; or NULL for a name that is not there or a lookup that failed. The
+ * boot root's lookup cache answers without a walk of the ring. KRFFS counts
+ * no holds (`kfs_lookup`), so the node is compared, not held. May sleep.
  */
 static void *cached_hop_node(struct vfs_mount *root, const char *comp, uint32_t len)
 {
-    struct hop_memo *e = len <= HOP_NAME_MAX ? hop_memo_slot(comp, len) : NULL;
-    uint32_t stamp = krffs_names_stamp();
+    struct hop_memo *e = hop_memo_slot(comp);
     void *found = NULL;
-    uint32_t flags;
+    uint32_t stamp, flags;
 
-    if (e) {
-        flags = spin_lock_irqsave(&hop_memo_lock);
-        if (e->node && e->stamp == stamp && streq(e->name, comp)) {
-            found = e->node;
-        }
-        spin_unlock_irqrestore(&hop_memo_lock, flags);
-        if (found) {
-            return found;
-        }
-    }
     bkl_enter();
     stamp = krffs_names_stamp();
     if (root->type->ops->lookup(mount_base(root), root->root, comp, &found) != 0) {
@@ -2478,11 +2490,11 @@ static void *cached_hop_node(struct vfs_mount *root, const char *comp, uint32_t 
     }
     bkl_exit();
     if (e && found) {
-        flags = spin_lock_irqsave(&hop_memo_lock);
+        flags = spin_lock_irqsave(&mount_table_lock);
         e->stamp = stamp;
         e->node = found;
         k_memcpy(e->name, comp, len + 1);
-        spin_unlock_irqrestore(&hop_memo_lock, flags);
+        spin_unlock_irqrestore(&mount_table_lock, flags);
     }
     return found;
 }
@@ -2494,15 +2506,17 @@ static void *cached_hop_node(struct vfs_mount *root, const char *comp, uint32_t 
  * as the full walk would after its lookup of that name, with `*path` moved
  * past the name. That is a nameless mount entered by the name, as
  * `cached_named` finds one, or else the mount that covers the node the
- * name names now, which is looked up (`cached_hop_node`) only when some
- * mount covers a node of the root directory; then the mounts over its
- * root in turn (`cached_cross`), which the search of the table, under its
- * lock, finds whether there are. A mount's recorded path is not trusted,
- * since a rename through a namespace that does not see the mount can move
- * the node it covers. The search
- * check of the root directory, whose mode is 0755 whatever its header says
- * (`kfs_getattr`), passes for every caller. `root` is the permanent mount
- * of the boot root. 0 with `cur` entered and held, or WALK_FULL with
+ * name names now, which an entry of `hop_memos` gives while no name of
+ * the boot root has changed since its lookup, and which is looked up
+ * (`cached_hop_node`) only when no entry does and some mount covers a node
+ * of the root directory; then the mounts over its root in turn
+ * (`cached_cross`), which the search of the table, under its lock, finds
+ * whether there are. A mount's recorded path is not trusted, since a
+ * rename through a namespace that does not see the mount can move the node
+ * it covers. The search check of the root directory, whose mode is 0755
+ * whatever its header says (`kfs_getattr`), passes for every caller.
+ * `root` is the permanent mount of the boot root. 0 with `cur` entered and
+ * held, or WALK_FULL with
  * nothing taken, for a name no mount takes, `.` and `..` among them, a
  * mount the walk may not judge (`vfs_mount_seen_word`) or stand on
  * (`cached_take`), and what `cached_cross` leaves to the full walk. The
