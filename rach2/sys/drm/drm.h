@@ -1464,6 +1464,9 @@ struct drm_mode_config {
     void (*fb_destroy)(struct drm_framebuffer *fb);
     void (*commit_fence_wait)(struct drm_device *dev, struct dma_fence *fence);
     uint32_t commit_fence_timeout_ms;
+    /* Program all planes and arm the event of one CRTC in the same
+     * update. A driver using this hook has planes fixed to their CRTCs. */
+    void (*commit_crtc_planes)(struct drm_crtc *crtc, struct drm_atomic_state *state);
 };
 
 /* The index masks of Linux's drm_crtc_mask, drm_plane_mask and

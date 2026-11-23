@@ -110,6 +110,36 @@ static int32_t crtc_scanline(struct intel_crtc *c, int32_t vtotal)
     return (position + vtotal + (c->cfg.output == INTEL_OUTPUT_HDMI ? 2 : 1)) % vtotal;
 }
 
+uint32_t intel_pipe_update_lock(struct intel_crtc *c)
+{
+    const struct drm_mode_modeinfo *mode = &c->cfg.mode;
+    struct spinlock *lock = &c->i915->drm.event_lock;
+    int32_t start = mode->vsync_start < mode->vdisplay ? mode->vsync_start : mode->vdisplay;
+    int32_t total = mode->vtotal, lines = 0, line;
+    uint32_t waited = 0, flags;
+
+    if (mode->htotal && mode->clock) {
+        lines = (int32_t)((mode->clock + 10u * mode->htotal - 1u) / (10u * mode->htotal));
+    }
+    if (mode->flags & DRM_MODE_FLAG_INTERLACE) {
+        start = (start + 1) / 2;
+        total /= 2;
+    }
+    for (;;) {
+        flags = spin_lock_irqsave(lock);
+        if (!c->cfg.active || total == 0 || lines == 0 || start <= lines || waited >= 1000u) {
+            return flags;
+        }
+        line = crtc_scanline(c, total);
+        if (line < start - lines || line >= start) {
+            return flags;
+        }
+        spin_unlock_irqrestore(lock, flags);
+        i915_delay_us(&c->i915->hw, 5);
+        waited += 5u;
+    }
+}
+
 /**
  * Where `crtc` scans, Linux's i915_get_crtc_scanoutpos with the scanline
  * counter: the line from the end of the vertical blank of `mode`,
@@ -249,26 +279,14 @@ void intel_crtc_vblank_off(struct intel_crtc *c)
     spin_unlock_irqrestore(&c->i915->drm.event_lock, flags);
 }
 
-void intel_crtc_arm_flip_done(struct intel_crtc *c, struct drm_atomic_state *state)
+void intel_crtc_arm_event(struct intel_crtc *c, struct drm_crtc_state *cs, uint32_t frame)
 {
-    struct drm_crtc_state *cs = state->crtcs_new[c->base.index];
+    struct drm_pending_event *e = cs->event;
 
-    if (cs && cs->async_flip && cs->event) {
-        intel_crtc_arm_event(c, state);
-    }
-}
-
-void intel_crtc_arm_event(struct intel_crtc *c, struct drm_atomic_state *state)
-{
-    struct drm_crtc_state *cs = state->crtcs_new[c->base.index];
-    struct drm_pending_event *e;
-    uint32_t flags;
-
-    if (!cs || !(e = cs->event)) {
+    if (!e) {
         return;
     }
     cs->event = NULL;
-    flags = spin_lock_irqsave(&c->i915->drm.event_lock);
     if (e->flip_crtc && c->base.flip_pending == DRM_FLIP_QUEUED) {
         c->base.flip_pending = DRM_FLIP_ARMED;
         wq_wake_all(&c->base.vblank.wait);
@@ -281,7 +299,7 @@ void intel_crtc_arm_event(struct intel_crtc *c, struct drm_atomic_state *state)
     intel_crtc_send_event(c);
     if (cs->active && drm_crtc_vblank_get(&c->base) == 0) {
         c->event = e;
-        c->event_frame = intel_get_vblank_counter(&c->base);
+        c->event_frame = frame;
         c->event_async = cs->async_flip != 0;
         if (c->event_async) {
             /* The event is installed before the surface write can raise
@@ -295,7 +313,6 @@ void intel_crtc_arm_event(struct intel_crtc *c, struct drm_atomic_state *state)
         drm_crtc_send_vblank_event_locked(&c->base, e);
         intel_crtc_interactive_end(c);
     }
-    spin_unlock_irqrestore(&c->i915->drm.event_lock, flags);
 }
 
 /** The error interrupt, Linux's ivb_err_int_handler and
@@ -433,11 +450,9 @@ void intel_display_irq_work(struct drm_i915_private *i915)
         if (iir & DE_PIPE_VBLANK_IVB(pipe)) {
             intel_wm_vblank(c);
             vblank_boost(c, 1);
-            /* The writes latch at the vblank that ends the frame they were
-             * made in, so the event goes once the counter has moved past
-             * the frame read after them. */
-            if (c->event && !c->event_async &&
-                intel_get_vblank_counter(&c->base) != c->event_frame) {
+            /* The event lock keeps the vblank handler out of the pipe
+             * update, including a vblank just after the surface write. */
+            if (c->event && !c->event_async && c->base.vblank.last != c->event_frame) {
                 intel_crtc_send_event(c);
             }
             /* A flip whose event the core sent ends here too. */

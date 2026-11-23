@@ -1468,7 +1468,7 @@ struct intel_color {
 /*
  * A pipe as a CRTC, with its three planes. `hw` is the readout of the bind.
  * `event` is the commit's event the pipe holds until the frame counter passes
- * `event_frame`, the count read after the commit's writes, or until the flip
+ * `event_frame`, the count read before the commit's writes, or until the flip
  * done of an async flip (`event_async`); NULL for none. `cfg` is what the pipe
  * is set to, from the readout until its first mode set, and `color` its colour,
  * all off until a commit sets it. `crc_wa` says a CRC source runs that needs
@@ -3366,34 +3366,48 @@ void intel_wm_sanitize(struct drm_i915_private *i915);
  * the DRM device's `event_lock`. */
 void intel_wm_cancel(struct intel_crtc *crtc);
 
-/** Install the event and unmask flip done when `crtc`'s new state in
- * `state` is an async flip. From `atomic_begin`, before the surface write
- * can complete the flip. */
-void intel_crtc_arm_flip_done(struct intel_crtc *crtc, struct drm_atomic_state *state);
-
 /**
  * Hand the event of `crtc`'s new state in `state` to the vblank path: the
  * commit's flip armed and its event held until the frame counter passes
- * the count read now, or sent now on a pipe that is off or without its
- * vblanks. From `atomic_flush` after the planes, or, for an async flip,
- * from `atomic_begin` before the surface write.
+ * `frame`, or sent now on a pipe that is off or without its vblanks. For
+ * an async flip this also unmasks flip done before the surface write.
+ * Holds the device's event lock throughout the call.
  */
-void intel_crtc_arm_event(struct intel_crtc *crtc, struct drm_atomic_state *state);
+void intel_crtc_arm_event(struct intel_crtc *crtc, struct drm_crtc_state *cs, uint32_t frame);
+
+/** Take the event lock with interrupts off, outside the last 100 us
+ * before vblank. Return the interrupt flags for spin_unlock_irqrestore.
+ * The caller has already prepared the plane buffers and any vblank hold. */
+uint32_t intel_pipe_update_lock(struct intel_crtc *crtc);
+
+/* A plane's address, stride and offset resolved before the vblank guard. */
+struct intel_plane_surface {
+    uint32_t addr, stride, x, y;
+};
+
+/** Flush a visible plane's damage and resolve its scanout address.
+ * May take the GEM lock. */
+void intel_plane_prepare(const struct drm_plane_state *ps, struct intel_plane_surface *surface);
+/** Program the primary plane from its prepared surface. Does not sleep. */
+void intel_primary_update(struct drm_plane *plane, struct drm_atomic_state *state,
+                          const struct intel_plane_surface *surface);
+/** Program the sprite from its prepared surface. Does not sleep. */
+void intel_sprite_update(struct drm_plane *plane, struct drm_atomic_state *state,
+                         const struct intel_plane_surface *surface);
+/** Program the cursor from its prepared surface. Does not sleep. */
+void intel_cursor_update(struct drm_plane *plane, struct drm_atomic_state *state,
+                         const struct intel_plane_surface *surface);
 
 /**
  * Wait until `crtc` has just passed the start of its vertical blank, where
- * its pipe's and planes' double-buffered registers latch, so that a
- * commit's writes made now latch together at the next one, the purpose of
- * Linux's intel_pipe_update_start. Linux evades the last 100 us before the
- * blank with interrupts off; Rach2's plane updates may sleep, so the commit
- * takes the frame that follows the blank instead. Polls the frame counter
- * for up to three frames; returns at once on a pipe that is off. Sleeping
- * context, from `atomic_begin`.
+ * its pipe's and planes' double-buffered registers latch, before writing
+ * the new fitter and source size of a fastset. Polls the frame counter
+ * for up to three frames. Returns at once on a pipe that is off.
  */
 void intel_pipe_update_start(struct intel_crtc *crtc);
 /** Log the commit begun by `intel_pipe_update_start` when its writes
  * crossed a vertical blank and latched in two frames, Linux's
- * intel_pipe_update_end's "Atomic update failure". From `atomic_flush`. */
+ * intel_pipe_update_end's "Atomic update failure". */
 void intel_pipe_update_end(struct intel_crtc *crtc);
 
 /** The CRTC's `enable_vblank`: unmask the pipe's vblank. 0. Any context. */

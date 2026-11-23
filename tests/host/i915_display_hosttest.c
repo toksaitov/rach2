@@ -183,7 +183,7 @@ void drm_file_locks_init(struct drm_file *file)
 /* ---- the driver's buffer objects: a few, bound in the aperture by the
  * pin, which counts what it is asked ---- */
 
-#define NBO    20
+#define NBO    21
 #define NREMAP 4
 
 const struct drm_gem_object_funcs i915_gem_object_funcs;
@@ -792,6 +792,50 @@ static void row_flip(void)
     frame();
     CHECK(bo_vma[1].pin_count == 1 && bo_vma[0].pin_count == 1 && unpins >= 1,
           "flip: a buffer two flips back unpinned");
+}
+
+static struct i915_hw_ops crossing_ops;
+static const struct i915_hw_ops *saved_ops;
+
+/** Latch the new surface between its MMIO write and event arming. */
+static void cross_on_surface(struct i915_hw *hw, uint32_t reg, uint32_t value)
+{
+    saved_ops->write32(hw, reg, value);
+    if (reg == DSPSURF(0)) {
+        i915_model_pipe_vblank(&model, 0);
+    }
+}
+
+/** The vblank just after DSPSURF delivers the event in that frame. */
+static void row_vblank_crossing(void)
+{
+    uint32_t fb, h, before;
+    int n0;
+
+    if (!fb_con) {
+        h = bo_new(0, 5504u * 768u, I915_TILING_NONE, 0);
+        fb_con = addfb(h, 1366, 768, DRM_FORMAT_XRGB8888, 5504, NO_MODIFIER);
+        CHECK(setcrtc(&pa->hw.mode, fb_con) == 0, "crossing: take over the panel");
+        frame();
+    }
+    h = bo_new(20, 5504u * 768u, I915_TILING_NONE, 0);
+    fb = addfb(h, 1366, 768, DRM_FORMAT_XRGB8888, 5504, NO_MODIFIER);
+    n0 = nsent;
+    before = intel_get_vblank_counter(&pa->base);
+    saved_ops = gpu.hw.ops;
+    crossing_ops = *saved_ops;
+    crossing_ops.write32 = cross_on_surface;
+    gpu.hw.ops = &crossing_ops;
+    CHECK(page_flip(fb, DRM_MODE_PAGE_FLIP_EVENT, 0x3504) == 0, "crossing: PAGE_FLIP");
+    gpu.hw.ops = saved_ops;
+    CHECK(intel_get_vblank_counter(&pa->base) == before + 1 &&
+              i915_model_pipes(&model)->pipe[0].primary.surf == BO_GGTT(20),
+          "crossing: the write latched before the event was armed");
+    CHECK(nsent == n0, "crossing: wait for the interrupt");
+    take_messages();
+    CHECK(nsent == n0 + 1 && sent[n0].user_data == 0x3504 &&
+              sent[n0].sequence == (uint32_t)pa->base.vblank.count,
+          "crossing: the first vblank delivered the event with its own count");
 }
 
 /** A wait that takes the pending interrupts first, as the processor takes
@@ -1970,10 +2014,14 @@ void i915_rps_mark_interactive(struct drm_i915_private *i915, int on)
     }
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     model_start("i915-display-test");
     CHECK(bring_up() == 0, "the display is made");
+    if (argc == 2 && strcmp(argv[1], "--vblank-crossing") == 0) {
+        row_vblank_crossing();
+        goto done;
+    }
     row_readout();
     row_adopt();
     row_adopt_wm();
@@ -2000,6 +2048,8 @@ int main(void)
     row_crc();
     row_modeset();
     row_link_retry();
+    row_vblank_crossing();
+done:
     row_fini();
     if (fw_obj && fw_obj->refs == 0) {
         fw_obj->funcs->free(fw_obj);

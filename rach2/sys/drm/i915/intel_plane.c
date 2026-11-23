@@ -410,6 +410,20 @@ static void flush_damage(const struct drm_plane_state *ps)
     i915_gem_unlock(to_i915(fb->dev), taken);
 }
 
+void intel_plane_prepare(const struct drm_plane_state *ps, struct intel_plane_surface *surface)
+{
+    if (!ps->visible || !ps->fb) {
+        return;
+    }
+    if (ps->plane->type == DRM_PLANE_TYPE_CURSOR) {
+        surface->addr = intel_fb_ggtt(ps->fb);
+    } else {
+        flush_damage(ps);
+        surface->addr = plane_surface(ps, ps->plane->type == DRM_PLANE_TYPE_PRIMARY,
+                                      &surface->stride, &surface->x, &surface->y);
+    }
+}
+
 /* ------------------------------------------------------------------------
  * The primary plane
  */
@@ -454,14 +468,15 @@ uint32_t intel_plane_ctl_crtc(const struct intel_crtc *crtc)
  * async bit and the surface alone, which the plane takes at once. The VGA
  * plane, which would cover it, is turned off before the first.
  */
-static void primary_update(struct drm_plane *plane, struct drm_atomic_state *state)
+void intel_primary_update(struct drm_plane *plane, struct drm_atomic_state *state,
+                          const struct intel_plane_surface *surface)
 {
     struct intel_crtc *c = primary_crtc(plane);
     struct drm_i915_private *i915 = c->i915;
     struct i915_hw *hw = &i915->hw;
     const struct drm_plane_state *ps = plane->state;
     const struct drm_crtc_state *cs = c->base.state;
-    uint32_t cntr, surf, stride, x, y;
+    uint32_t cntr;
 
     if (!ps->visible || !ps->fb || !cs->active) {
         i915_write(hw, DSPCNTR(c->pipe), intel_plane_ctl_crtc(c));
@@ -476,8 +491,6 @@ static void primary_update(struct drm_plane *plane, struct drm_atomic_state *sta
         }
         i915->display.vga_off = 1;
     }
-    flush_damage(ps);
-    surf = plane_surface(ps, 1, &stride, &x, &y);
     cntr = DISP_ENABLE | primary_format(ps->fb->format);
     if (intel_fb_modifier(ps->fb) == I915_FORMAT_MOD_X_TILED) {
         cntr |= DISP_TILED;
@@ -488,17 +501,17 @@ static void primary_update(struct drm_plane *plane, struct drm_atomic_state *sta
     cntr |= intel_plane_ctl_crtc(c);
     if (state->crtcs_new[c->base.index] && state->crtcs_new[c->base.index]->async_flip) {
         i915_write(hw, DSPCNTR(c->pipe), cntr | DISP_ASYNC_FLIP);
-        i915_write(hw, DSPSURF(c->pipe), surf);
+        i915_write(hw, DSPSURF(c->pipe), surface->addr);
     } else {
-        i915_write(hw, DSPSTRIDE(c->pipe), stride);
-        i915_write(hw, DSPOFFSET(c->pipe), y << 16 | x);
+        i915_write(hw, DSPSTRIDE(c->pipe), surface->stride);
+        i915_write(hw, DSPOFFSET(c->pipe), surface->y << 16 | surface->x);
         i915_write(hw, DSPCNTR(c->pipe), cntr);
-        i915_write(hw, DSPSURF(c->pipe), surf);
+        i915_write(hw, DSPSURF(c->pipe), surface->addr);
     }
     c->planes_on |= 1u << INTEL_PLANE_PRIMARY;
 }
 
-static const struct drm_plane_funcs primary_funcs = {primary_check, primary_update, NULL};
+static const struct drm_plane_funcs primary_funcs = {primary_check, NULL, NULL};
 
 /* ------------------------------------------------------------------------
  * The sprite plane
@@ -579,13 +592,14 @@ static int32_t sprite_check(struct drm_plane *plane, struct drm_atomic_state *st
  * scaling, its offset and control, then its surface, which arms them, and
  * for FP16 its own gamma.
  */
-static void sprite_update(struct drm_plane *plane, struct drm_atomic_state *state)
+void intel_sprite_update(struct drm_plane *plane, struct drm_atomic_state *state,
+                         const struct intel_plane_surface *surface)
 {
     struct intel_crtc *c = sprite_crtc(plane);
     struct i915_hw *hw = &c->i915->hw;
     const struct drm_plane_state *ps = plane->state;
     const struct drm_crtc_state *cs = c->base.state;
-    uint32_t ctl, surf, stride, x, y, w, h;
+    uint32_t ctl, w, h;
 
     (void)state;
     if (!ps->visible || !ps->fb || !cs->active) {
@@ -595,8 +609,6 @@ static void sprite_update(struct drm_plane *plane, struct drm_atomic_state *stat
         c->planes_on &= ~(1u << INTEL_PLANE_SPRITE);
         return;
     }
-    flush_damage(ps);
-    surf = plane_surface(ps, 0, &stride, &x, &y);
     w = (uint32_t)(ps->dst.x2 - ps->dst.x1);
     h = (uint32_t)(ps->dst.y2 - ps->dst.y1);
     ctl = SPRITE_ENABLE | sprite_format(ps->fb->format);
@@ -627,23 +639,23 @@ static void sprite_update(struct drm_plane *plane, struct drm_atomic_state *stat
     if (c->color.csc_enable) {
         ctl |= SPRITE_PIPE_CSC_ENABLE;
     }
-    i915_write(hw, SPRSTRIDE(c->pipe), stride);
+    i915_write(hw, SPRSTRIDE(c->pipe), surface->stride);
     i915_write(hw, SPRPOS(c->pipe), (uint32_t)ps->dst.y1 << 16 | (uint32_t)ps->dst.x1);
     i915_write(hw, SPRSIZE(c->pipe), (h - 1u) << 16 | (w - 1u));
     i915_write(hw, SPRSCALE(c->pipe), 0);
     i915_write(hw, SPRKEYVAL(c->pipe), ps->ckey.min_value);
     i915_write(hw, SPRKEYMAX(c->pipe), ps->ckey.max_value);
     i915_write(hw, SPRKEYMSK(c->pipe), ps->ckey.channel_mask);
-    i915_write(hw, SPROFFSET(c->pipe), y << 16 | x);
+    i915_write(hw, SPROFFSET(c->pipe), surface->y << 16 | surface->x);
     i915_write(hw, SPRCTL(c->pipe), ctl);
-    i915_write(hw, SPRSURF(c->pipe), surf);
+    i915_write(hw, SPRSURF(c->pipe), surface->addr);
     if (sprite_needs_gamma(ps->fb->format)) {
         sprite_load_gamma(hw, c->pipe);
     }
     c->planes_on |= 1u << INTEL_PLANE_SPRITE;
 }
 
-static const struct drm_plane_funcs sprite_funcs = {sprite_check, sprite_update, NULL};
+static const struct drm_plane_funcs sprite_funcs = {sprite_check, NULL, NULL};
 
 /* The flags the uapi takes; NONE is dropped first, as Linux drops it. */
 #define COLORKEY_FLAGS (I915_SET_COLORKEY_DESTINATION | I915_SET_COLORKEY_SOURCE)

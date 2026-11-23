@@ -1422,15 +1422,10 @@ static void crtc_fastset(struct intel_crtc *c, struct drm_atomic_state *state)
     c->cfg = cfg;
 }
 
-/** Before the planes: a pipe that comes on turned on, as Linux's commit
- * tail turns it on before it writes the planes, else its new colour set
- * and the watermarks raised to cover the planes the commit shows; and an
- * async flip's event installed before flip done is unmasked, since the
- * flip may be done as soon as the surface is written. */
-static void intel_crtc_begin(struct drm_crtc *crtc, struct drm_atomic_state *state)
+/** Prepare the pipe before programming its planes. May sleep. */
+static void intel_crtc_begin(struct intel_crtc *c, struct drm_atomic_state *state)
 {
-    struct intel_crtc *c = to_intel_crtc(crtc);
-    struct drm_crtc_state *cs = state->crtcs_new[crtc->index];
+    struct drm_crtc_state *cs = state->crtcs_new[c->base.index];
 
     if (cs && drm_atomic_crtc_needs_modeset(cs) && cs->active) {
         crtc_enable(c, state);
@@ -1447,19 +1442,62 @@ static void intel_crtc_begin(struct drm_crtc *crtc, struct drm_atomic_state *sta
         }
         intel_wm_commit(c, state, 0);
     }
-    intel_crtc_arm_flip_done(c, state);
     intel_crtc_rpm_sync(c);
 }
 
-/** After the planes: the commit's event handed to the vblank path, or,
- * on a pipe that came on, left to the core, which arms it once the
- * pipe's vblanks are on. */
-static void intel_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *state)
+/** Program one pipe's planes and arm its event without letting its
+ * vblank handler run between the writes and arming. A modeset leaves its
+ * event to the core once it enables vblanks. */
+static void intel_commit_crtc_planes(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
     struct intel_crtc *c = to_intel_crtc(crtc);
     struct drm_crtc_state *cs = state->crtcs_new[crtc->index];
+    struct drm_plane *planes[3];
+    static void (*const update[])(struct drm_plane *, struct drm_atomic_state *,
+                                  const struct intel_plane_surface *) = {
+        intel_primary_update, intel_sprite_update, intel_cursor_update};
+    struct intel_plane_surface surfaces[3] = {{0, 0, 0, 0}};
+    struct spinlock *lock = &c->i915->drm.event_lock;
+    int modeset = drm_atomic_crtc_needs_modeset(cs);
+    int sync = !modeset && cs->active && !cs->async_flip;
+    int hold, i;
+    uint32_t flags, frame = 0;
 
-    if (cs && drm_atomic_crtc_needs_modeset(cs)) {
+    planes[0] = &c->primary;
+    planes[1] = &c->sprite;
+    planes[2] = &c->cursor;
+    intel_crtc_begin(c, state);
+    for (i = 0; cs->active && i < 3; i++) {
+        struct drm_plane_state *ps = state->planes_new[planes[i]->index];
+
+        if (ps) {
+            intel_plane_prepare(ps, &surfaces[i]);
+        }
+    }
+    hold = sync && cs->event && drm_crtc_vblank_get(crtc) == 0;
+    flags = sync ? intel_pipe_update_lock(c) : spin_lock_irqsave(lock);
+    if (sync) {
+        frame = intel_get_vblank_counter(crtc);
+    }
+    if (cs->async_flip) {
+        intel_crtc_arm_event(c, cs, 0);
+    }
+    for (i = 0; i < 3; i++) {
+        uint32_t idx = planes[i]->index;
+        struct drm_plane_state *ps = state->planes_new[idx];
+
+        if (ps && (ps->crtc || state->planes_old[idx]->crtc)) {
+            update[i](planes[i], state, &surfaces[i]);
+        }
+    }
+    if (!modeset && !cs->async_flip) {
+        intel_crtc_arm_event(c, cs, frame);
+    }
+    spin_unlock_irqrestore(lock, flags);
+    if (hold) {
+        drm_crtc_vblank_put(crtc);
+    }
+    if (modeset) {
         return;
     }
     intel_pipe_update_end(c);
@@ -1469,14 +1507,13 @@ static void intel_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *sta
         c->inherited = 0;
         intel_fifo_underrun_reporting(c, 1);
     }
-    intel_crtc_arm_event(c, state);
 }
 
 static const struct drm_crtc_funcs intel_crtc_funcs = {intel_crtc_check,
                                                        intel_crtc_enable,
                                                        intel_crtc_disable,
-                                                       intel_crtc_begin,
-                                                       intel_crtc_flush,
+                                                       NULL,
+                                                       NULL,
                                                        intel_crtc_mode_valid,
                                                        intel_enable_vblank,
                                                        intel_disable_vblank,
@@ -2021,6 +2058,7 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     mc->fb_destroy = intel_fb_destroy;
     mc->commit_fence_wait = commit_fence_wait;
     mc->commit_fence_timeout_ms = I915_FENCE_TIMEOUT_MS;
+    mc->commit_crtc_planes = intel_commit_crtc_planes;
     intel_cdclk_init(i915);
     intel_wm_init(i915);
     intel_gmbus_setup(i915);
