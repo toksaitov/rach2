@@ -74,6 +74,7 @@ set -eu
 trace=/sys/kernel/debug/bkl/trace
 drm=/sys/kernel/debug/drm_frame_trace
 seat=
+run_mount=
 cleanup()
 {
     printf 'stop\n' > "$trace"
@@ -82,6 +83,7 @@ cleanup()
         kill "$seat" 2>/dev/null || :
         wait "$seat" 2>/dev/null || :
     fi
+    if [ -n "$run_mount" ]; then umount /run || :; fi
 }
 test -e "$trace" || mount -t debugfs debugfs /sys/kernel/debug
 printf 'start\n' > "$trace"
@@ -91,6 +93,8 @@ if [ "$3" = 1 ]; then
     pkill -TERM -x weston || :
     export SEATD_SOCK=/run/seatd.sock
     if [ ! -S "$SEATD_SOCK" ]; then
+        mount -t tmpfs -o mode=755 tmpfs /run
+        run_mount=1
         SEATD_VTBOUND=0 seatd -g seat > out/seatd.log 2>&1 &
         seat=$!
         tries=0
