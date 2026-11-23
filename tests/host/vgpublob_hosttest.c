@@ -1187,7 +1187,9 @@ static void row_copied(void)
     blob_unbind("the copy row leaves nothing");
 }
 
-/** Run the blob rows against the real driver, fence and PRIME code. */
+#ifndef VGPU_PAYLOAD_TEST
+/** Run the blob rows against the real driver, fence and PRIME code; a test
+ * that defines VGPU_PAYLOAD_TEST brings its own main. */
 int main(void)
 {
     current_proc = &self;
@@ -1205,3 +1207,4 @@ int main(void)
     printf("vgpublob-test: %s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;
 }
+#endif
