@@ -311,6 +311,10 @@ void mm_unhold(struct mm *mm);
  * waits for it, unless the thread holds it already. */
 void mmap_read_lock(struct mm *mm);
 
+/** `mmap_read_lock` that SIGKILL ends, as Linux's `mmap_read_lock_killable`:
+ * 0 once held, or -EINTR with no hold taken. */
+int mmap_read_lock_killable(struct mm *mm);
+
 /** Take `mm`'s regions' lock to read if that needs no wait: 1 when held
  * now, as a thread that holds it already always is, or 0. Any context but
  * an interrupt. */
@@ -339,7 +343,12 @@ void mmap_unlock(struct mm *mm);
  * a core dump, a pin. The reference keeps the record across the wait. */
 void mm_read_begin(struct mm *mm);
 
-/** End what `mm_read_begin` began. */
+/** `mm_read_begin` that SIGKILL ends, for a reader of another process's
+ * address space in /proc, as Linux's take it with `mmap_read_lock_killable`:
+ * 0 once held, or -EINTR with neither the count nor the lock kept. */
+int mm_read_begin_killable(struct mm *mm);
+
+/** End what `mm_read_begin` or `mm_read_begin_killable` began. */
 void mm_read_end(struct mm *mm);
 
 /** Whether the calling thread holds `mm`'s regions' lock, to write when

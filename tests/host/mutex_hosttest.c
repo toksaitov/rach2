@@ -1,8 +1,8 @@
 /*
  * mutex_hosttest.c: the kernel mutex of rach2/sys/proc/mutex.c: its spin
  * while the holder runs on another processor, the sleeps it saves for a
- * short hold, the handoff to a sleeper that spinners would starve, and the
- * queue of spinners.
+ * short hold, the handoff to a sleeper that spinners would starve, the
+ * queue of spinners, and an rwsem reader's wait that SIGKILL ends.
  *
  * host-deps: tests/host/compat/park_host.c
  * host-cflags: -DRACH2_HOST_CPU
@@ -490,6 +490,52 @@ static void row_signals(void)
     check(m.owner == 0, "the holder's release after the killed sleeper left frees the word");
 }
 
+/* The rwsem of the killable reader's row, which processor 1's holder holds
+ * to write. */
+static struct rwsem rw;
+
+/** A step: the holder, of processor 1, gives `rw` back. */
+static int writer_gives(void)
+{
+    unsigned int me = host_cpu;
+
+    host_cpu = 1;
+    up_write(&rw);
+    host_cpu = me;
+    return 1;
+}
+
+/**
+ * A reader's killable wait for an rwsem a writer holds returns -EINTR once
+ * SIGKILL comes, leaving the writer's hold as it was and no reader counted,
+ * as Linux's down_read_killable; with no SIGKILL it has the lock once the
+ * writer gives it back, and a free lock is taken with SIGKILL pending, as
+ * Linux's fast path takes it.
+ */
+static void row_read_killable(void)
+{
+    row_start(0);
+    rwsem_init(&rw, "row");
+    host_cpu = 1;
+    down_write(&rw);
+    host_cpu = 0;
+    step = kill_waiter;
+    check(down_read_killable(&rw) == -EINTR && rw.state == RWSEM_WRITER && sleeps == 1,
+          "a killable read wait SIGKILL ends returns -EINTR, the writer keeping the rwsem");
+    group.pending = 0;
+    sleeps = 0;
+    step = writer_gives;
+    check(down_read_killable(&rw) == 0 && rw.state == 1u && sleeps == 1,
+          "a killable read wait has the rwsem once the writer gives it back");
+    up_read(&rw);
+    group.pending |= KSIG_BIT(SIGKILL);
+    check(down_read_killable(&rw) == 0 && rw.state == 1u,
+          "a killable read of a free rwsem takes it with SIGKILL pending");
+    up_read(&rw);
+    group.pending = 0;
+    check(rw.state == 0u, "the reader's release frees the rwsem");
+}
+
 /* The third spinner's result, for the row that runs it parked. */
 static int third_rc;
 
@@ -595,6 +641,7 @@ int main(void)
     row_holder_moves();
     row_handoff();
     row_signals();
+    row_read_killable();
     row_queue();
     if (fails) {
         printf("mutex_hosttest: %d failed\n", fails);

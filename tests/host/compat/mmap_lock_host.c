@@ -16,9 +16,14 @@
  * outside an address space (`mm_read_begin`) may run a row's
  * `host_read_begin` before it takes the lock and `host_read_end` after it
  * gives it back, where the row keeps the walk's user's count, as mm.c does,
- * and runs what another thread does while the walk waits.
+ * and runs what another thread does while the walk waits. A row may name an
+ * address space another thread holds to write for the whole row
+ * (`host_write_held`): a killable take of its lock fails with -EINTR, as
+ * SIGKILL ends that wait on the machine, and a take that would wait for ever
+ * is counted in `host_stuck`.
  */
 #include "../../../rach2/sys/mm/mm.h"
+#include "../../../rach2/sys/lib/kerrno.h"
 
 /* The address space whose regions' lock another thread holds until a write
  * lock waits for it, or NULL; and what that thread does meanwhile, or NULL. */
@@ -34,6 +39,10 @@ void (*host_ptl_after)(struct mm *mm);
  * gives it back, or NULL. */
 void (*host_read_begin)(struct mm *mm);
 void (*host_read_end)(struct mm *mm);
+/* The address space another thread holds to write, or NULL; the takes of
+ * its lock that would have waited for ever. */
+struct mm *host_write_held;
+int host_stuck;
 
 /* The holds of the one thread: the address space, its depth and whether the
  * first hold was to write. Two at once, as on the machine. */
@@ -77,10 +86,25 @@ static void host_take(struct mm *mm, int write)
     host_holds[i].write = write;
 }
 
-/** Take `mm`'s regions' lock to read: count the hold. */
+/** Take `mm`'s regions' lock to read: count the hold, and count in
+ * `host_stuck` a take of `host_write_held`'s, which would wait for ever. */
 void mmap_read_lock(struct mm *mm)
 {
+    if (mm == host_write_held && host_hold(mm) < 0) {
+        host_stuck++;
+    }
     host_take(mm, 0);
+}
+
+/** Take `mm`'s regions' lock to read, as `mmap_read_lock`: 0, or -EINTR
+ * with no hold for `host_write_held`'s, whose wait SIGKILL ends. */
+int mmap_read_lock_killable(struct mm *mm)
+{
+    if (mm == host_write_held && host_hold(mm) < 0) {
+        return -EINTR;
+    }
+    host_take(mm, 0);
+    return 0;
 }
 
 /** Take `mm`'s regions' lock to read if that needs no wait: always 1. */
@@ -192,6 +216,23 @@ void mm_read_begin(struct mm *mm)
         host_read_begin(mm);
     }
     mmap_read_lock(mm);
+}
+
+/** `mm_read_begin` with the killable take: 0, or -EINTR after
+ * `host_read_end`, where the row gives the walk's count back, as mm.c puts
+ * it. */
+int mm_read_begin_killable(struct mm *mm)
+{
+    if (host_read_begin) {
+        host_read_begin(mm);
+    }
+    if (mmap_read_lock_killable(mm) != 0) {
+        if (host_read_end) {
+            host_read_end(mm);
+        }
+        return -EINTR;
+    }
+    return 0;
 }
 
 /** End what `mm_read_begin` began, then run `host_read_end`. */

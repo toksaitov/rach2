@@ -146,6 +146,12 @@ void rwsem_init_key(struct rwsem *s, const char *name, const struct lockdep_key 
  * Linux's `down_read` (rwsem.c:1521). */
 void down_read(struct rwsem *s);
 
+/** `down_read` that SIGKILL pending for the thread or its process ends, as
+ * Linux's `down_read_killable` (kernel/locking/rwsem.c): 0 once held, or
+ * -EINTR with `s` not held. A free lock is taken with SIGKILL pending, as
+ * Linux's fast path takes it. */
+int down_read_killable(struct rwsem *s);
+
 /** Take `s` to read if no writer holds it or waits for it and return 1, or
  * return 0 at once. */
 int down_read_trylock(struct rwsem *s);

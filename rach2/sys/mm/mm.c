@@ -121,6 +121,25 @@ void mmap_read_lock(struct mm *mm)
     hold_add(mm, 0);
 }
 
+int mmap_read_lock_killable(struct mm *mm)
+{
+    struct mmap_hold *h;
+
+    if (!current_proc) {
+        return 0;
+    }
+    h = hold_of(mm);
+    if (h) {
+        h->depth++;
+        return 0;
+    }
+    if (down_read_killable(&mm->mmap_lock) != 0) {
+        return -EINTR;
+    }
+    hold_add(mm, 0);
+    return 0;
+}
+
 int mmap_read_trylock(struct mm *mm)
 {
     struct mmap_hold *h;
@@ -232,6 +251,16 @@ void mm_read_begin(struct mm *mm)
 {
     mm_get(mm);
     mmap_read_lock(mm);
+}
+
+int mm_read_begin_killable(struct mm *mm)
+{
+    mm_get(mm);
+    if (mmap_read_lock_killable(mm) != 0) {
+        mm_put(mm);
+        return -EINTR;
+    }
+    return 0;
 }
 
 void mm_read_end(struct mm *mm)
