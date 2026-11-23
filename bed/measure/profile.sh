@@ -125,6 +125,7 @@ threads()
     done
 }
 threads
+grep '^cpu' /proc/stat | sed 's/^/vm stat /'
 if command -v perf > /dev/null; then
     case $1 in
         before)
