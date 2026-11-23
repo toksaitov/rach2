@@ -1,7 +1,11 @@
 # piglit.txt: the test bed's piglit scene (bed/measure/Readme.md), tests of
 # piglit's quick profile that draw, upload or read back and that pass on
 # virgl in the testing PC's reference (tests/graphics/ref/virgl-wsl/piglit),
-# one name a line as piglit.sh -l takes them.
+# one name a line as piglit.sh -l takes them. A comment `# need N MiB`
+# gives the memory the next test needs of the VM that renders it on its
+# GPU, on the rungs through the bed's VM, and on llvmpipe as well unless
+# `, llvmpipe M MiB` or `, llvmpipe never` follows: measure.sh -M skips a
+# test that needs more than the VM has.
 spec@!opengl 1.0@gl-1.0-readpixsanity
 spec@ext_framebuffer_object@fbo-readpixels
 spec@!opengl 1.1@texsubimage
@@ -9,8 +13,15 @@ shaders@glsl-fs-loop
 spec@ext_framebuffer_object@fbo-generatemipmap
 spec@!opengl 1.4@triangle-rasterization
 spec@arb_vertex_buffer_object@vbo-subdata-many drawarrays
-# left out: spec@!opengl 1.1@streaming-texture-leak keeps each texture and
-# its 4 MiB staging buffer until Mesa's command buffer fills, more memory
-# than the bed's VM has (bed/vm/Readme.md, Limits)
+# need 16384 MiB, llvmpipe never: on the Lenovo a VM of 13175 MiB had no
+# room for it; i915 rose to 8605 MiB, all of it the test's own and given
+# back at its end, the backend refused 3141 of its creates, and the
+# renderer refuses every later submission of a context that has named a
+# resource it lacks, so the test cannot pass once one create is refused.
+# Whether the bed's largest VM, 16384 MiB, holds it no run has shown
+# (dev-log/84-locks/bed-memory.md). On llvmpipe a VM of 14 GiB ran out
+# while the backend's C library kept the textures it freed, which it now
+# gives back; no run has measured it since (dev-log/84-locks/5259.md).
+spec@!opengl 1.1@streaming-texture-leak
 shaders@glsl-fs-sampler-numbering
 spec@!opengl 1.1@getteximage-formats

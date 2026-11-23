@@ -2,7 +2,9 @@
 # (bed/measure/piglit.txt) whose readbacks failed in the Lenovo's bed/shm
 # while the VM's backend refused to export persistent buffers, which
 # bed-shm.sh runs on the region's card (`readback`), one name a line as
-# piglit.sh -l takes them.
+# piglit.sh -l takes them. The scene's streaming-texture-leak is not here:
+# it needs a VM of more than 15 GiB, and machine.bed-shm's VM has bed-shm.sh's
+# 2 GiB in a Rach2 of 6 GiB.
 spec@ext_framebuffer_object@fbo-readpixels
 shaders@glsl-fs-loop
 spec@ext_framebuffer_object@fbo-generatemipmap
