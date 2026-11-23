@@ -227,7 +227,9 @@ void vgpu_cmd_free(struct virtio_gpu_cmd *cmd)
         virtio_dma_free(vg->vdev, cmd->extra[i], PAGE_SIZE);
     }
     for (i = 0; i < cmd->npayload; i++) {
-        virtio_dma_free(vg->vdev, cmd->payload[i].page, PAGE_SIZE);
+        if (cmd->payload[i].pages) {
+            virtio_dma_free(vg->vdev, cmd->payload[i].page, cmd->payload[i].pages * PAGE_SIZE);
+        }
     }
     kfree(cmd->payload);
     if (cmd->segments != cmd->sg) {

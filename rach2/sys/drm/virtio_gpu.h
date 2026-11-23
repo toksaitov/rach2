@@ -557,9 +557,12 @@ struct vgpu_event {
 void vgpu_profile_event(struct virtio_gpu_device *vg, uint32_t type, int64_t start, uint32_t kib);
 #endif
 
+/* A page of a command's payload, one of a run of pages that follow each
+ * other in the device's addresses, given back whole. */
 struct vgpu_dma_page {
     void *page;
     uint64_t addr;
+    uint32_t pages; /* the run's pages at its first page, given back there; 0 after it */
 };
 
 struct virtio_gpu_cmd {
