@@ -9,6 +9,7 @@
  * fuzz-deps: rach2/sys/lib/kctypes.c
  */
 #include "../../rach2/sys/fs/krffs.h"
+#include "../../rach2/sys/lib/spinlock.h"
 #include "fuzz.h"
 
 /* The repair in krffs.c indexes names with these; the harness runs no
@@ -37,6 +38,20 @@ void klog(int level, const char *subsystem, const char *format, ...)
 void console_printf(const char *format, ...)
 {
     (void)format;
+}
+
+/** The test runs on one thread, so the lock is never contended. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    (void)lock;
+    return 0;
+}
+
+/** Let go of what `spin_lock_irqsave` took: nothing. */
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    (void)lock;
+    (void)flags;
 }
 
 /** A fixed time of day, 1000000000 seconds after the epoch. */
