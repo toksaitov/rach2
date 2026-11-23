@@ -5355,6 +5355,13 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
 void dcache_drain(void)
 {}
 
+/** The model keeps no name cache, so each lookup asks the type, as
+ * `dcache_lookup` does on a miss. */
+int dcache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
+{
+    return mnt->type->ops->lookup(mnt, dir, name, node);
+}
+
 /** Walk a path below /fl to its node, or to its parent and last name with
  * VFS_WALK_PARENT, holding nothing, as a walk on a file-locked type does. */
 static int fl_resolve(const char *path, int flags, struct vfs_ref *out, char *leaf,
