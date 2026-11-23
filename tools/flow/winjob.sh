@@ -1,7 +1,7 @@
 #!/bin/sh
 # winjob.sh: print the lines for the testing host's MSYS2 bash that build
-# winjob.c, beside this script, into Windows' output directory once and set
-# winjob to the program.
+# winjob.c, beside this script, into Windows' output directory once, making
+# that directory if it is missing, and set winjob to the program.
 #
 # Usage: winjob.sh OUT
 #
@@ -18,6 +18,10 @@ sum=$(cksum < "$src" | cut -d ' ' -f 1) || exit 1
 echo "winjob=$1/winjob-$sum.exe"
 # shellcheck disable=SC2016 # the remote shell expands these
 echo 'if [ ! -x "$winjob" ]; then'
+# OUT is missing until a release has run on Windows, and the sweep runs
+# these lines before any has.
+# shellcheck disable=SC2016 # the remote shell expands these
+echo '    mkdir -p "${winjob%/*}"'
 # shellcheck disable=SC2016 # the remote shell expands these
 echo '    cat > "$winjob.$$.c" << '"'END_OF_WINJOB'"
 cat "$src"
