@@ -3505,7 +3505,7 @@ static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode, i
 
 int mnt_is_root(const struct vfs_mount *mnt)
 {
-    return mnt == vfs_root_mount() && mnt->type == &vfs_krffs_type;
+    return mnt && mnt->type == &vfs_krffs_type && mnt == vfs_root_mount();
 }
 
 /** Find the current boot-root node of a file holder through any bind alias. */
@@ -8389,6 +8389,15 @@ static long device_lseek(fd_entry_t *entry, long long offset, int whence, uint64
     return -ESPIPE;
 }
 
+/** Whether a file seek needs getattr. For ext2 SEEK_SET and SEEK_CUR use
+ * only the description's position, and getattr can fail only for a gone
+ * device. Other file types keep their own checks. */
+static int seek_needs_attrs(const struct open_file *ofd, int whence)
+{
+    return (whence != 0 && whence != 1) || !ofd->vmnt || ofd->vmnt->type != &vfs_ext2_type ||
+           vfs_mount_gone(ofd->vmnt);
+}
+
 /**
  * lseek(2): move the offset of the descriptor in argument 0 by the offset
  * in argument 1, a signed register's worth, and the whence in argument 2;
@@ -8397,10 +8406,11 @@ static long device_lseek(fd_entry_t *entry, long long offset, int whence, uint64
  * A file of the KRFFS root or of a mounted type takes SEEK_SET, SEEK_CUR
  * and SEEK_END, the last from the size its getattr gives, and SEEK_DATA and
  * SEEK_HOLE (`seek_data_hole`); any other whence, and a place before 0, is
- * -EINVAL. The description's lock is held from the
- * getattr to the store, so a seek through a shared description waits for a
- * transfer that holds it. A raw disk window, /dev/mem and a loop device seek
- * by `raw_lseek`, /dev/bootlog by `seek_bootlog`, /fb by `seek_framebuffer`,
+ * -EINVAL. The description's lock covers the position and any size read,
+ * so a seek through a shared description waits for a transfer that holds
+ * it. The caller has looked up and held `entry`. A raw disk window,
+ * /dev/mem and a loop device seek by `raw_lseek`, /dev/bootlog by
+ * `seek_bootlog`, /fb by `seek_framebuffer`,
  * and a directory or a /proc file by `seek_listing`. /dev/null, /dev/zero
  * and /dev/full take any seek
  * and land at 0. Any other descriptor, among them a pipe, a socket, a
@@ -8413,22 +8423,15 @@ static long device_lseek(fd_entry_t *entry, long long offset, int whence, uint64
  * The call runs without the big lock, which `sys_lseek` takes for what
  * `seek_unlocked` leaves.
  */
-static long lseek_call(isr_params_t *params)
+static long lseek_call(isr_params_t *params, fd_entry_t *entry)
 {
-    int fd = (int)SC_ARG(params, 0);
     long long offset = SC_SIGNED(params, 1);
     uint64_t limit = SC_SIGNED_MAX(params);
     int whence = (int)SC_ARG(params, 2);
-    fd_entry_t *entry;
-    uint64_t file_size;
+    uint64_t file_size = 0;
     int seek_rc;
     long long at;
 
-    if (!current_proc) {
-        return -ESRCH;
-    }
-
-    entry = fd_get(current_proc->fds, fd);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
@@ -8466,7 +8469,7 @@ static long lseek_call(isr_params_t *params)
         return -EBADF;
     }
     fd_ofd_lock(entry->ofd);
-    {
+    if (seek_needs_attrs(entry->ofd, whence)) {
         struct vfs_stat vst;
         int rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
 
@@ -8543,17 +8546,22 @@ static int seek_unlocked(const fd_entry_t *e)
 }
 
 /** lseek(2): `lseek_call`, under the big lock for a descriptor that
- * `seek_unlocked` does not admit. */
+ * `seek_unlocked` does not admit. The same held entry determines the lock
+ * and receives the seek. */
 long sys_lseek(isr_params_t *params)
 {
+    fd_entry_t *entry;
     long rc;
 
-    if (!current_proc || bkl_held() ||
-        seek_unlocked(fd_get(current_proc->fds, (int)SC_ARG(params, 0)))) {
-        return lseek_call(params);
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    entry = fd_get(current_proc->fds, (int)SC_ARG(params, 0));
+    if (bkl_held() || seek_unlocked(entry)) {
+        return lseek_call(params, entry);
     }
     bkl_enter();
-    rc = lseek_call(params);
+    rc = lseek_call(params, entry);
     bkl_exit();
     return rc;
 }
@@ -8763,6 +8771,31 @@ static int32_t file_read_unwritable(struct open_file *ofd, uint64_t at)
     return r > 0 ? -EFAULT : r;
 }
 
+/** Try a short buffered read from the page cache. Return 1 with the
+ * description locked and `*got` set when the cache served the read or the
+ * request's end overflowed. On 0 no bytes were copied, and the caller may
+ * fault in the buffer before it locks the description again. */
+static int file_try_read_hit(fd_entry_t *entry, char __user *buf, uint32_t count,
+                             const uint64_t *at, size_t asked, int32_t *got)
+{
+    struct open_file *ofd = entry->ofd;
+
+    if (count == 0 || count > PAGE_SIZE || !file_vfs_unlocked(entry) || bkl_held() ||
+        direct_to_device(ofd)) {
+        return 0;
+    }
+    fd_ofd_lock(ofd);
+    if (!at && rw_offset_end(entry, asked) != 0) {
+        *got = -EINVAL;
+        return 1;
+    }
+    if (!file_read_cut(ofd) && filecache_read_hit(ofd, buf, count, at ? *at : ofd->offset, got)) {
+        return 1;
+    }
+    fd_ofd_unlock(ofd);
+    return 0;
+}
+
 /**
  * Read up to `count` bytes into user buffer `buf` from the file of a mounted
  * type or of the KRFFS root that `entry` is open on: at the description's
@@ -8783,8 +8816,10 @@ static int32_t file_read_unwritable(struct open_file *ofd, uint64_t at)
  * read from memory (`file_read_locked`).
  *
  * A regular ext2 file is read through the file page cache
- * (`filecache_file_read`), which keeps each page it reads. Otherwise the
- * file system writes straight into the user buffer, so its pages are
+ * (`filecache_file_read`), which keeps each page it reads. A buffered read
+ * served by one ready cached page faults the user buffer in at the copy,
+ * as Linux's filemap_read does. Reads that may reach a file system's raw
+ * copy check the buffer before taking file locks, so its pages are
  * range-checked and faulted in first. The description is held across the
  * operation: with dup or fork sharing the offset, a second reader sleeps
  * rather than reading the same bytes while the first is in a request, and a
@@ -8818,16 +8853,18 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     if (!ofd || !ofd->vmnt) {
         return -EBADF;
     }
-    one[0].iov_base = (__force uintptr_t)buf;
-    one[0].iov_len = count;
-    room = iov_prefix(one, 1, 1);
-    fd_ofd_lock(ofd);
-    if (!at && rw_offset_end(entry, asked) != 0) {
-        bytes_read = -EINVAL;
-    } else if (room == 0 && count > 0) {
-        bytes_read = file_read_unwritable(ofd, at ? *at : ofd->offset);
-    } else {
-        bytes_read = file_read_locked(ofd, buf, room, at ? *at : ofd->offset, &big);
+    if (!file_try_read_hit(entry, buf, count, at, asked, &bytes_read)) {
+        one[0].iov_base = (__force uintptr_t)buf;
+        one[0].iov_len = count;
+        room = iov_prefix(one, 1, 1);
+        fd_ofd_lock(ofd);
+        if (!at && rw_offset_end(entry, asked) != 0) {
+            bytes_read = -EINVAL;
+        } else if (room == 0 && count > 0) {
+            bytes_read = file_read_unwritable(ofd, at ? *at : ofd->offset);
+        } else {
+            bytes_read = file_read_locked(ofd, buf, room, at ? *at : ofd->offset, &big);
+        }
     }
     if (bytes_read > 0 && !at) {
         ofd->offset += (uint64_t)bytes_read;
@@ -10665,6 +10702,7 @@ static int32_t stat64_root_times(struct kstat *kst)
  */
 static int32_t vfs_fill_stat64(struct kstat *kst, const struct vfs_ref *r)
 {
+    const struct vfs_mount *base = vfs_mount_base(r->mnt);
     struct vfs_stat st;
     int rc;
     int i;
@@ -10675,9 +10713,13 @@ static int32_t vfs_fill_stat64(struct kstat *kst, const struct vfs_ref *r)
         return rc;
     }
     k_memset(kst, 0, sizeof(*kst));
-    i = vfs_mount_index(vfs_mount_base(r->mnt));
-    if (i >= 0) {
-        kst->st_dev = procfs_mount_dev(i, vfs_mount_base(r->mnt));
+    if (base->source_dev) {
+        kst->st_dev = base->source_dev;
+    } else {
+        i = vfs_mount_index(base);
+        if (i >= 0) {
+            kst->st_dev = procfs_mount_dev(i, base);
+        }
     }
     kst->st_mode = st.mode;
     kst->st_nlink = st.nlink;
@@ -12992,8 +13034,6 @@ static void fstat_synth(fd_entry_t *entry, struct kstat *kst)
  */
 static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
 {
-    k_memset(kst, 0, sizeof(*kst));
-    stat64_boot_times(kst);
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
         entry->ofd->vmnt && !mnt_is_root(entry->ofd->vmnt)) {
         struct vfs_ref r;
@@ -13002,6 +13042,8 @@ static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
         r.node = entry->ofd->vnode;
         return vfs_fill_stat64(kst, &r);
     }
+    k_memset(kst, 0, sizeof(*kst));
+    stat64_boot_times(kst);
     if (entry->type == FD_TYPE_DIR && entry->node == NULL) {
         kst->st_mode = S_IFDIR | 0755;
         kst->st_ino = 1;
@@ -16800,22 +16842,16 @@ static int32_t device_llseek(fd_entry_t *entry, long long off, int whence, long 
  * (`seek_data_hole`). A NULL `result` is -EFAULT for a file; musl always
  * passes one.
  */
-static long llseek_call(isr_params_t *params)
+static long llseek_call(isr_params_t *params, fd_entry_t *entry)
 {
-    int fd = (int)SC_ARG(params, 0);
     uint32_t offset_high = (uint32_t)SC_ARG(params, 1);
     uint32_t offset_low = (uint32_t)SC_ARG(params, 2);
     long long __user *result = (long long __user *)SC_ARG(params, 3);
     int whence = (int)SC_ARG(params, 4);
-    fd_entry_t *entry;
     long long off, new_off;
     uint64_t size = 0;
     int seek_rc;
 
-    if (!current_proc) {
-        return -ESRCH;
-    }
-    entry = fd_get(current_proc->fds, fd);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
@@ -16846,9 +16882,14 @@ static long llseek_call(isr_params_t *params)
     if (entry->type != FD_TYPE_FILE) {
         return -ESPIPE;
     }
-    seek_rc = entry->ofd ? file_size_now(entry, &size) : -EBADF;
-    if (seek_rc != 0) {
-        return seek_rc;
+    if (!entry->ofd) {
+        return -EBADF;
+    }
+    if (seek_needs_attrs(entry->ofd, whence)) {
+        seek_rc = file_size_now(entry, &size);
+        if (seek_rc != 0) {
+            return seek_rc;
+        }
     }
 
     if (!result) {
@@ -16899,17 +16940,22 @@ static long llseek_call(isr_params_t *params)
 }
 
 /** _llseek(2): `llseek_call`, under the big lock for a descriptor that
- * `seek_unlocked` does not admit. */
+ * `seek_unlocked` does not admit. The same held entry determines the lock
+ * and receives the seek. */
 long sys__llseek(isr_params_t *params)
 {
+    fd_entry_t *entry;
     long rc;
 
-    if (!current_proc || bkl_held() ||
-        seek_unlocked(fd_get(current_proc->fds, (int)SC_ARG(params, 0)))) {
-        return llseek_call(params);
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    entry = fd_get(current_proc->fds, (int)SC_ARG(params, 0));
+    if (bkl_held() || seek_unlocked(entry)) {
+        return llseek_call(params, entry);
     }
     bkl_enter();
-    rc = llseek_call(params);
+    rc = llseek_call(params, entry);
     bkl_exit();
     return rc;
 }

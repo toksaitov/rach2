@@ -569,6 +569,8 @@ typedef void (*vfs_option_emit)(void *out, const char *name, uint64_t value,
 struct vfs_mount {
     const struct vfs_type *type;
     block_device_t *dev; /* NULL for the KRFFS root and a type with no device */
+    /* st_dev from the source device at mount time, or 0 when unnamed. */
+    uint32_t source_dev;
     /* The mount's VFS_MS_ flags. On a base mount VFS_MS_RDONLY is the file
      * system's read-only state, Linux's SB_RDONLY, which a mount or a
      * remount without MS_BIND sets and a type, a failed write or a halt

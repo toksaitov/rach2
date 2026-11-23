@@ -43,6 +43,14 @@ uint32_t filecache_lend(const struct fd_entry *e, uint32_t first, uint32_t count
  * `filecache_store`. */
 uint32_t filecache_epoch(struct vfs_mount *mnt, void *node);
 
+/** Read at most one ready cached page into `buf`, faulting in the user
+ * buffer at the copy. Return 1 with `*got` set to the bytes read, 0 at
+ * EOF, or -EFAULT when no byte fits. A miss, a locked or readahead-marked
+ * page, or a range that needs more than one page returns 0, with nothing
+ * copied. The caller holds the description and may sleep. */
+int filecache_read_hit(struct open_file *ofd, char __user *buf, uint32_t count, uint64_t offset,
+                       int32_t *got);
+
 /**
  * Read up to `count` bytes at `offset` of the file `ofd` is open on into the
  * user buffer `buf` through the cache, as read(2) does: each page the cache
