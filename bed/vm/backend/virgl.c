@@ -455,28 +455,37 @@ static uint32_t format_block(uint32_t format, uint32_t *bw, uint32_t *bh)
  * 64 and a linear surface's pitch 64 bytes. */
 #define TILE_ROW_BYTES 512u
 #define TILE_ROWS      32u
+/* The rows gen7 adds to an array layer's pitch past h0 and h1: 12 * valign
+ * for a valign of 4, and 3 rows each for rounding h0 and h1 up to it. */
+#define LAYER_ROWS     54u
 
 /**
  * The bytes the account judges a create at before the renderer makes it,
  * and charges one whose storage it cannot hold (`charge`): twice a buffer's
- * width; twice the sum over a texture's mipmap chain of each level's blocks
- * (`format_block`), its row bytes and its rows rounded up to any tiling's
- * (TILE_ROW_BYTES, TILE_ROWS), by its depth,
- * which halves at each level of a 3D texture and never falls below 1, its
- * layers, six for a cube, and its samples; rounded up to a 4 KiB page.
- * i915's isl places a miptree's levels in one surface, level 1 under level
- * 0 and the rest beside level 1, so that the surface is no wider than the
- * levels together and no taller than levels 0 and 1, and adds the separate
- * stencil, HiZ, MCS and CCS surfaces, each well below the main one; Mesa's
- * cache gives a buffer an object at most a quarter larger than its width.
- * The factor of two covers both. UINT64_MAX for a size past any GPU's
- * limits or VR_BYTES_MAX.
+ * width; for a texture, twice its samples by the larger of two sums. The
+ * first is its layers, six for a cube, by the sum over its mipmap chain of
+ * each level's blocks (`format_block`), its row bytes and its rows rounded
+ * up to any tiling's (TILE_ROW_BYTES, TILE_ROWS), by its depth, which
+ * halves at each level of a 3D texture and never falls below 1. The second,
+ * for more than one layer, is level 0's rounded row bytes by LAYER_ROWS
+ * past the block rows of levels 0 and 1 for each layer, and a tile's rows
+ * more: gen7's hardware spaces an array's layers h0 + h1 + 12 * valign
+ * rows apart, h1 counted even with one level, valign at most 4 rows, and
+ * each height rounded up to valign. The total is rounded up to a 4 KiB
+ * page. i915's isl places a miptree's levels in one surface, level 1 under
+ * level 0 and the rest beside level 1, so that the surface is no wider than
+ * the levels together and no taller than levels 0 and 1, and adds the
+ * separate stencil, HiZ, MCS and CCS surfaces, each well below the main
+ * one; Mesa's cache gives a buffer an object at most a quarter larger than
+ * its width. The factor of two covers both. UINT64_MAX for a size past any
+ * GPU's limits or VR_BYTES_MAX.
  */
 static uint64_t create_bytes(const struct vd_create *a)
 {
     uint64_t w = a->width ? a->width : 1, h = a->height ? a->height : 1;
     uint64_t d = a->depth ? a->depth : 1, layers = a->array_size ? a->array_size : 1;
     uint64_t samples = a->nr_samples ? a->nr_samples : 1, n = 0, row, rows;
+    uint64_t row0 = 0, pitch, spaced;
     uint32_t level, bw, bh, bytes;
 
     if (a->target == PIPE_BUFFER) {
@@ -489,9 +498,13 @@ static uint64_t create_bytes(const struct vd_create *a)
     if (a->target == PIPE_TEXTURE_CUBE && layers < 6) {
         layers = 6;
     }
+    pitch = (h + bh - 1) / bh + ((h > 1 ? h / 2 : 1) + bh - 1) / bh + LAYER_ROWS;
     for (level = 0; level <= a->last_level && level < 32; level++) {
         row = ((w + bw - 1) / bw * bytes + TILE_ROW_BYTES - 1) & ~(uint64_t)(TILE_ROW_BYTES - 1);
         rows = ((h + bh - 1) / bh + TILE_ROWS - 1) & ~(uint64_t)(TILE_ROWS - 1);
+        if (level == 0) {
+            row0 = row;
+        }
         n += row * rows * d;
         w = w > 1 ? w / 2 : 1;
         h = h > 1 ? h / 2 : 1;
@@ -502,7 +515,15 @@ static uint64_t create_bytes(const struct vd_create *a)
     if (n > VR_BYTES_MAX / (2u * layers * samples)) {
         return UINT64_MAX;
     }
-    n *= 2u * layers * samples;
+    n *= layers;
+    if (layers > 1) {
+        spaced = row0 * (pitch * layers + TILE_ROWS); /* row0 <= 2^20, the rest < 2^33 */
+        if (spaced > VR_BYTES_MAX / (2u * samples)) {
+            return UINT64_MAX;
+        }
+        n = spaced > n ? spaced : n;
+    }
+    n *= 2u * samples;
     return (n + 4095u) & ~(uint64_t)4095u;
 }
 
@@ -533,8 +554,9 @@ static int judge(struct vr *r, uint32_t id, uint64_t bytes, const char *what)
  * `bytes`, to the account: hold the whole of the storage exported as `fd`
  * (`hold_new`); else, for no descriptor (-1) or one that cannot be held,
  * charge the ledger (`admit_add`) the larger of `bytes` and the exported
- * file's size, rounded up to a page, judging only what passes `bytes`. fd
- * is closed. Returns 0, or ERR_OUT_OF_MEMORY with a line naming the
+ * file's size, rounded up to a page, judging the whole of a size past
+ * `bytes` again, since `judge` reserved none of it in the ledger. fd is
+ * closed. Returns 0, or ERR_OUT_OF_MEMORY with a line naming the
  * refusal, `what` the command; the caller unmakes a refused resource.
  */
 static int charge(struct vr *r, uint32_t id, int fd, uint64_t bytes, const char *what)
@@ -552,7 +574,7 @@ static int charge(struct vr *r, uint32_t id, int fd, uint64_t bytes, const char 
     if (err >= 0) {
         return err;
     }
-    if (bytes > judged && (bytes > VR_BYTES_MAX || !mem_room(r, bytes - judged))) {
+    if (bytes > judged && (bytes > VR_BYTES_MAX || !mem_room(r, bytes))) {
         fprintf(stderr,
                 "backend: %s: resource %u: refused: %llu bytes: no room in the VM's counts\n", what,
                 (unsigned)id, (unsigned long long)bytes);
