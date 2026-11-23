@@ -145,8 +145,9 @@ int virtio_halt(struct virtio_dev *d)
     return -ETIMEDOUT;
 }
 
-/** The bytes of each page of `vq`'s indirect tables: the tables a page
- * holds, which is all of them when they take less than a page. */
+/** The bytes of each allocation of `vq`'s indirect tables: the tables a
+ * page holds, which is all of them when they take less than a page, or one
+ * table of more than a page. */
 static uint32_t virtqueue_ind_bytes(const struct virtqueue *vq)
 {
     uint32_t n = vq->ind_tables < vq->ind_per_page ? vq->ind_tables : vq->ind_per_page;
@@ -156,18 +157,24 @@ static uint32_t virtqueue_ind_bytes(const struct virtqueue *vq)
 
 /**
  * Give `vq` the indirect tables its device asks for (`indirect_len` and
- * `indirect_tables`), a page of them at a time from dma_alloc. A page that
- * cannot be had leaves the tables before it, and none when the first
- * cannot. The lengths are cut to a power of two within their bounds.
+ * `indirect_tables`), a page of them at a time from dma_alloc, or a run of
+ * pages for each table of more than a page. An allocation that cannot be
+ * had leaves the tables before it, and none when the first cannot. The
+ * lengths are cut to a power of two within their bounds, and a table to
+ * the most one dma_alloc gives (`dma_max`).
  */
 static void virtqueue_ind_setup(struct virtio_dev *d, struct virtqueue *vq)
 {
     uint16_t len = d->indirect_len ? d->indirect_len : VIRTQ_INDIRECT_LEN;
     uint16_t tables = d->indirect_tables ? d->indirect_tables : VIRTQ_INDIRECT_TABLES;
+    uint32_t most = d->dma_max > VIRTQ_PAGE_BYTES ? d->dma_max : VIRTQ_PAGE_BYTES;
     uint16_t want, p;
 
     if (len > VIRTQ_INDIRECT_MAX) {
         len = VIRTQ_INDIRECT_MAX;
+    }
+    while ((uint32_t)len * VIRTQ_DESC_BYTES > most) {
+        len >>= 1;
     }
     while (len & (len - 1u)) {
         len &= (uint16_t)(len - 1u);
@@ -180,6 +187,9 @@ static void virtqueue_ind_setup(struct virtio_dev *d, struct virtqueue *vq)
     }
     vq->ind_len = len;
     vq->ind_per_page = (uint16_t)(VIRTQ_PAGE_BYTES / (len * VIRTQ_DESC_BYTES));
+    if (vq->ind_per_page == 0) {
+        vq->ind_per_page = 1;
+    }
     vq->ind_tables = tables;
     want = (uint16_t)((tables + vq->ind_per_page - 1u) / vq->ind_per_page);
     for (p = 0; p < want; p++) {
@@ -419,6 +429,18 @@ void virtio_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
 {
     if (p) {
         d->ops->dma_free(d, p, bytes);
+    }
+}
+
+int virtio_dma_frames(struct virtio_dev *d, uint32_t pages, uint64_t *addr)
+{
+    return d->ops->dma_frames ? d->ops->dma_frames(d, pages, addr) : -ENODEV;
+}
+
+void virtio_dma_frames_free(struct virtio_dev *d, uint64_t addr, uint32_t pages)
+{
+    if (pages && d->ops->dma_frames_free) {
+        d->ops->dma_frames_free(d, addr, pages);
     }
 }
 

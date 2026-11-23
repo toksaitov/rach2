@@ -102,13 +102,15 @@ struct virtq_used_elem {
  * VIRTQ_INDIRECT_LEN descriptors per queue, in one page, unless the driver
  * asks for others (`indirect_len` and `indirect_tables` of the device): up
  * to VIRTQ_INDIRECT_TABLES tables of up to VIRTQ_INDIRECT_MAX descriptors,
- * as many to a page as fit. A buffer of more segments than the queue has
- * free descriptors goes into one when the device offered the feature and a
- * table is free.
+ * as many to a page as fit, or a table of more than a page in a run of
+ * pages where the transport gives one (`dma_max`). VIRTQ_INDIRECT_MAX is
+ * QEMU's bound on one chain (VIRTQUEUE_MAX_SIZE), past which it fails the
+ * device. A buffer of more segments than the queue has free descriptors
+ * goes into one when the device offered the feature and a table is free.
  */
 #define VIRTQ_INDIRECT_TABLES 16
 #define VIRTQ_INDIRECT_LEN    16
-#define VIRTQ_INDIRECT_MAX    256
+#define VIRTQ_INDIRECT_MAX    1024
 
 /* A transport's `dma_max` for runs of any length the memory holds: the most
  * whole pages a 32-bit count of bytes, a descriptor's length, carries. */
@@ -164,8 +166,8 @@ struct virtqueue {
     uint32_t indirect_free; /* a bit for each free table */
     uint16_t ind_len;       /* descriptors in a table */
     uint16_t ind_tables;    /* the tables */
-    uint16_t ind_per_page;  /* tables in one page of them */
-    uint16_t ind_pages;     /* the pages, each from dma_alloc */
+    uint16_t ind_per_page;  /* tables in one allocation of them, at least 1 */
+    uint16_t ind_pages;     /* the allocations, each a page or one table */
     volatile struct virtq_desc *ind_page[VIRTQ_INDIRECT_TABLES];
     uint64_t ind_page_addr[VIRTQ_INDIRECT_TABLES];
     uint16_t max_chain; /* descriptors one chain may hold; the transport's */
@@ -264,6 +266,16 @@ struct virtio_map;
  *     the physical address.
  * put: the driver has let go of `d` for good, after its removal (below);
  *     the transport may free its record.
+ * dma_frames: `pages` consecutive frames of any memory, zeroed, for a
+ *     buffer the device reads or writes and the kernel reaches only
+ *     through a mapping of its own (`kmap_cpu`), the device's address of
+ *     the first in `*addr`, which is also its physical address; 0, or
+ *     -ENOMEM when no such run is free. For a transport whose dma_alloc
+ *     gives only memory the kernel maps for good, a heap of limited size,
+ *     as virtio-pci's of i686, where Linux's vmalloc'd buffers take
+ *     high memory. NULL: every buffer comes from dma_alloc.
+ * dma_frames_free: give back the `pages` frames at `addr` that dma_frames
+ *     gave, whole.
  *
  * The last three are for a device whose buffers live in its own memory and
  * reach the driver as lists of its pages, not through a shared memory
@@ -318,6 +330,8 @@ struct virtio_ops {
     uintptr_t (*map_frame)(struct virtio_map *m, uint64_t i);
     void (*map_free)(struct virtio_map *m);
     void (*dma_enable)(struct virtio_dev *d, int on);
+    int (*dma_frames)(struct virtio_dev *d, uint32_t pages, uint64_t *addr);
+    void (*dma_frames_free)(struct virtio_dev *d, uint64_t addr, uint32_t pages);
 };
 
 /*
@@ -505,6 +519,13 @@ void *virtio_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr);
 
 /** Give back what virtio_dma_alloc gave. */
 void virtio_dma_free(struct virtio_dev *d, void *p, uint32_t bytes);
+
+/** Frames of any memory for a buffer, through the transport; see
+ * `dma_frames`. -ENODEV on a transport without it. */
+int virtio_dma_frames(struct virtio_dev *d, uint32_t pages, uint64_t *addr);
+
+/** Give back what virtio_dma_frames gave. */
+void virtio_dma_frames_free(struct virtio_dev *d, uint64_t addr, uint32_t pages);
 
 /** Shared memory region `id`, through the transport; see `shm_region`. */
 int virtio_shm_region(struct virtio_dev *d, uint8_t id, uint64_t *addr, uint64_t *len);

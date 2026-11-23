@@ -87,10 +87,11 @@
  * at most, each with 128 bytes of the queue's page: the request header at
  * 0, the status byte at 16, a discard's range at 32 and GET_ID's answer at
  * 64. A chain is the header, the data and the status, and with indirect
- * tables of VIRTQ_INDIRECT_MAX descriptors carries VBLK_SEGS pieces of
- * data; VBLK_TABLES of them for each queue serve the requests the block
- * layer lets one device have in flight, eight, and a polled command beside
- * them takes the queue's own descriptors when no table is free.
+ * tables of VBLK_TABLE_LEN descriptors, a page each, carries VBLK_SEGS
+ * pieces of data; VBLK_TABLES of them for each queue serve the requests
+ * the block layer lets one device have in flight, eight, and a polled
+ * command beside them takes the queue's own descriptors when no table is
+ * free.
  */
 #define VBLK_DISKS      8
 #define VBLK_SLOTS      16
@@ -99,7 +100,8 @@
 #define VBLK_STATUS     16u
 #define VBLK_RANGE      32u
 #define VBLK_ID         64u
-#define VBLK_SEGS       (VIRTQ_INDIRECT_MAX - 2)
+#define VBLK_TABLE_LEN  256u
+#define VBLK_SEGS       (VBLK_TABLE_LEN - 2)
 #define VBLK_TABLES     8
 #define VBLK_PAGE       4096u
 
@@ -1656,7 +1658,7 @@ static int vblk_bring_up(struct vblk *vb)
     vb->nqueues = vblk_queue_count(d);
     d->priv = vb;
     d->irq_unlocked = 1;
-    d->indirect_len = VIRTQ_INDIRECT_MAX;
+    d->indirect_len = VBLK_TABLE_LEN;
     d->indirect_tables = VBLK_TABLES;
     d->config_changed = vblk_config_changed;
     d->removed = vblk_removed;

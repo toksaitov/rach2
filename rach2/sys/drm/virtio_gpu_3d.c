@@ -5,6 +5,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
+#include "../mm/paging.h"
 #include "../mm/usercopy.h"
 #include "../proc/process.h"
 #include "../virtio/vgpushm.h"
@@ -52,49 +53,77 @@ static int32_t payload_room(const struct virtio_gpu_cmd *cmd, uint32_t bytes, in
     return 0;
 }
 
-/** A run of `pages` pages of the DMA pool for `cmd`'s payload, its address
- * in *addr: at once where the transport has one free; else, unless
- * *waited says this payload has waited in vain already, after a wait for
- * the pages started commands hold (`vgpu_dma_alloc_wait`); else the
- * longest shorter run the transport has free, halving, its pages in
- * *pages. NULL when not even a page is free. May sleep. */
-static uint8_t *payload_run(struct virtio_gpu_cmd *cmd, uint32_t *pages, int *waited,
-                            uint64_t *addr)
+/** A run of `want` pages for `cmd`'s payload, at once or after a wait
+ * (`wait`) for the pages started commands hold: frames of any memory
+ * while *frames is set and the transport gives them (`virtio_dma_frames`),
+ * *page NULL, which the kernel reaches through `kmap_cpu`; else from the
+ * DMA pool, mapped at *page, *frames cleared. The device's address in
+ * *addr. 0, -ENOMEM, or -ENODEV for a device that died. May sleep. */
+static int32_t payload_take(struct virtio_gpu_cmd *cmd, uint32_t want, int wait, int *frames,
+                            uint8_t **page, uint64_t *addr)
 {
-    uint32_t want = *pages;
-    uint8_t *run = (uint8_t *)virtio_dma_alloc(cmd->vg->vdev, want * PAGE_SIZE, addr);
+    int32_t rc;
 
-    if (!run && !*waited) {
-        run = (uint8_t *)vgpu_dma_alloc_wait(cmd->vg, want * PAGE_SIZE, addr);
-        *waited = !run;
+    if (*frames) {
+        *page = NULL;
+        rc = wait ? vgpu_dma_frames_wait(cmd->vg, want, addr)
+                  : virtio_dma_frames(cmd->vg->vdev, want, addr);
+        if (rc != -ENODEV || cmd->vg->dead) {
+            return rc != 0 && cmd->vg->dead ? -ENODEV : rc;
+        }
+        *frames = 0;
     }
-    while (!run && want > 1 && !cmd->vg->dead) {
-        want /= 2;
-        run = (uint8_t *)virtio_dma_alloc(cmd->vg->vdev, want * PAGE_SIZE, addr);
-    }
-    *pages = want;
-    return run;
+    *page = wait ? (uint8_t *)vgpu_dma_alloc_wait(cmd->vg, want * PAGE_SIZE, addr)
+                 : (uint8_t *)virtio_dma_alloc(cmd->vg->vdev, want * PAGE_SIZE, addr);
+    return *page ? 0 : cmd->vg->dead ? -ENODEV : -ENOMEM;
 }
 
-/** Take the `n` pages of a payload from the DMA pool into `cmd->payload`,
- * in runs that follow each other in the device's addresses, one
- * descriptor each, within the `room` descriptors one chain leaves them: a
- * page each while the pages left fit the descriptors left, else runs of
- * the fewest pages that keep them within. Where the transport has no free
- * run that long, even after a wait, a shorter one is taken
- * (`payload_run`) and the rest sized again on the descriptors left, so
- * that scattered free frames carry a payload as far as the chain's
- * descriptors reach, as Linux's vmalloc'd copy of a submission takes
- * scattered pages. 0; -ENOMEM where the pages left outrun what the
- * descriptors left carry in runs of the largest the transport gives
- * (`dma_max`: a page alone, or the shared region's 64 MiB; virtio-pci's
- * runs have no bound but the memory's) or the memory has not a page
- * free; -ENODEV for a device that died. The runs taken stay `cmd`'s to
- * free. May sleep. */
-static int32_t payload_runs(struct virtio_gpu_cmd *cmd, uint32_t n, uint32_t room)
+/** A run of `*pages` pages for `cmd`'s payload (`payload_take`): at once
+ * where the transport has one free; else, unless *waited says this
+ * payload has waited in vain already, after a wait for the pages started
+ * commands hold; else the longest shorter run the transport has free,
+ * halving, its pages in *pages. 0, or -ENOMEM when not even a page is
+ * free, or -ENODEV. May sleep. */
+static int32_t payload_run(struct virtio_gpu_cmd *cmd, uint32_t *pages, int *waited, int *frames,
+                           uint8_t **page, uint64_t *addr)
+{
+    uint32_t want = *pages;
+    int32_t rc = payload_take(cmd, want, 0, frames, page, addr);
+
+    if (rc == -ENOMEM && !*waited) {
+        rc = payload_take(cmd, want, 1, frames, page, addr);
+        *waited = rc != 0;
+    }
+    while (rc == -ENOMEM && want > 1) {
+        want /= 2;
+        rc = payload_take(cmd, want, 0, frames, page, addr);
+    }
+    *pages = want;
+    return rc;
+}
+
+/** Take the `n` pages of a payload into `cmd->payload`, in runs that
+ * follow each other in the device's addresses, one descriptor each,
+ * within the `room` descriptors one chain leaves them: a page each while
+ * the pages left fit the descriptors left, else runs of the fewest pages
+ * that keep them within. Where the transport has no free run that long,
+ * even after a wait, a shorter one is taken (`payload_run`) and the rest
+ * sized again on the descriptors left, so that scattered free frames
+ * carry a payload as far as the chain's descriptors reach, as Linux's
+ * vmalloc'd copy of a submission takes scattered pages. A payload the
+ * device reads (`frames`) takes frames of any memory where the transport
+ * gives them (`virtio_dma_frames`), each page's `page` NULL; else, and
+ * for one the device writes, the DMA pool's mapped memory. 0; -ENOMEM
+ * where the pages left outrun what the descriptors left carry in runs of
+ * the largest the transport gives (`dma_max`: a page alone, or the shared
+ * region's 64 MiB; virtio-pci's runs have no bound but the memory's) or
+ * the memory has not a page free; -ENODEV for a device that died. The
+ * runs taken stay `cmd`'s to free. May sleep. */
+static int32_t payload_runs(struct virtio_gpu_cmd *cmd, uint32_t n, uint32_t room, int frames)
 {
     uint32_t most = cmd->vg->vdev->dma_max / PAGE_SIZE, i, k, here, left;
     int waited = 0;
+    int32_t rc;
     uint8_t *run;
     uint64_t addr;
 
@@ -110,12 +139,12 @@ static int32_t payload_runs(struct virtio_gpu_cmd *cmd, uint32_t n, uint32_t roo
             return -ENODEV;
         }
         here = left / room + (left % room != 0);
-        run = payload_run(cmd, &here, &waited, &addr);
-        if (!run) {
-            return cmd->vg->dead ? -ENODEV : -ENOMEM;
+        rc = payload_run(cmd, &here, &waited, &frames, &run, &addr);
+        if (rc) {
+            return rc;
         }
         for (k = 0; k < here; k++) {
-            cmd->payload[i + k].page = run + k * PAGE_SIZE;
+            cmd->payload[i + k].page = run ? run + k * PAGE_SIZE : NULL;
             cmd->payload[i + k].addr = addr + (uint64_t)k * PAGE_SIZE;
         }
         cmd->payload[i].pages = here;
@@ -125,26 +154,60 @@ static int32_t payload_runs(struct virtio_gpu_cmd *cmd, uint32_t n, uint32_t roo
     return 0;
 }
 
+/** Copy `bytes` of the user's `user` into the payload page `p`: straight
+ * into its mapping, or for a frame the kernel does not map (`page` NULL)
+ * through `*bounce`, a page allocated at the first such copy, and the
+ * processor's own mapping of the frame (`kmap_cpu`), since the user's
+ * copy may fault and sleep where that mapping may not. 0, -EFAULT or
+ * -ENOMEM. May fault and sleep. */
+static int32_t payload_page_fill(struct virtio_gpu_cmd *cmd, const struct vgpu_dma_page *p,
+                                 uint8_t **bounce, uint64_t user, uint32_t bytes)
+{
+    uint32_t flags;
+    void *to;
+
+    if (p->page) {
+        return payload_copy(cmd, p->page, user, bytes) ? -EFAULT : 0;
+    }
+    if (!*bounce) {
+        *bounce = kmalloc(PAGE_SIZE);
+        if (!*bounce) {
+            return -ENOMEM;
+        }
+    }
+    if (payload_copy(cmd, *bounce, user, bytes)) {
+        return -EFAULT;
+    }
+    to = kmap_cpu((uintptr_t)p->addr, &flags);
+    k_memcpy(to, *bounce, bytes);
+    kunmap_cpu(to, flags);
+    return 0;
+}
+
 /** Fill the `n` segments of a payload of `bytes` after `sg`'s header, a
  * page each, from the user's `user` unless the device writes it
  * (`response`); adjacent pages of a run become one descriptor at the send.
- * 0 or -EFAULT. May fault and sleep. */
+ * 0, -EFAULT, or -ENOMEM for a bounce page (`payload_page_fill`). May
+ * fault and sleep. */
 static int32_t payload_fill(struct virtio_gpu_cmd *cmd, struct virtio_sg *sg, uint32_t n,
                             uint64_t user, uint32_t bytes, int response)
 {
     uint32_t i, left = bytes, off = 0, here;
+    uint8_t *bounce = NULL;
+    int32_t rc = 0;
 
-    for (i = 0; i < n; i++) {
+    for (i = 0; i < n && !rc; i++) {
         here = left < PAGE_SIZE ? left : PAGE_SIZE;
-        if (!response && payload_copy(cmd, cmd->payload[i].page, user + off, here)) {
-            return -EFAULT;
+        if (!response) {
+            rc = payload_page_fill(cmd, &cmd->payload[i], &bounce, user + off, here);
         }
         sg[i + 1].addr = cmd->payload[i].addr;
         sg[i + 1].len = here;
         left -= here;
         off += here;
     }
-    return 0;
+    kfree(bounce);
+    return rc;
 }
 
 /** Give `cmd` its payload of `n` pages, `bytes`, whole in its one chain:
@@ -174,7 +237,7 @@ static int32_t payload_chain(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t
     }
     sg[0] = cmd->sg[0];
     cmd->segments = sg;
-    rc = payload_runs(cmd, n, room);
+    rc = payload_runs(cmd, n, room, !response);
     if (!rc) {
         rc = payload_fill(cmd, sg, n, user, bytes, response);
     }
