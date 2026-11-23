@@ -183,7 +183,8 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 
 /* ---- events: reserved against the file's space and recorded when sent ---- */
 
-#define MAX_SENT 16
+/* Room for every event one test sends; one past it is sent unrecorded. */
+#define MAX_SENT 64
 static struct drm_event_vblank sent[MAX_SENT];
 static struct drm_event_crtc_sequence sent_seq[MAX_SENT]; /* the same bytes as a sequence event */
 static int nsent, reserved;
