@@ -202,6 +202,7 @@ struct vd_pending {
     uint32_t per_ctx; /* 1 for a context fence on ring */
     uint32_t ring;
     uint64_t fence_id; /* the command's fence */
+    uint32_t unfenced; /* 1 while the renderer holds no fence of its own for it */
     uint32_t rlen;     /* response bytes in resp */
     uint8_t resp[24];  /* a fenced command's response is a bare header */
     struct vgs_chain chain;
@@ -223,10 +224,11 @@ struct vd {
     uint32_t scanout[VD_SCANOUTS]; /* each scanout's resource, or 0 */
     struct vd_pending pend[VD_PENDING];
     uint32_t npend;
-    int kick;         /* used entries published since the last notify */
-    uint8_t *cmd;     /* a chain's readable part, cmd_cap bytes, grown to a chain's */
-    uint32_t cmd_cap; /* at most offer.limits.max_cmd */
-    uint32_t room;    /* the writable bytes of the chain being served */
+    uint32_t nunfenced; /* the pending commands whose fence the renderer refused */
+    int kick;           /* used entries published since the last notify */
+    uint8_t *cmd;       /* a chain's readable part, cmd_cap bytes, grown to a chain's */
+    uint32_t cmd_cap;   /* at most offer.limits.max_cmd */
+    uint32_t room;      /* the writable bytes of the chain being served */
     /* The stream a SUBMIT_3D with VGS_FLAG_JOINED takes, joined from its
      * VGS_CMD_PART chains (vgpushm.h): join_total bytes allocated at the
      * first part, join_len of them come; join_err is the refusal of a part

@@ -192,6 +192,7 @@ static void offer(struct vd *d, const struct vgs_driver *drv)
     memset(d->pend, 0, sizeof(d->pend));
     d->drv = *drv;
     d->npend = 0;
+    d->nunfenced = 0;
     d->kick = 0;
     memset(&d->me, 0, sizeof(d->me));
     d->me.epoch = drv->epoch;
@@ -679,13 +680,16 @@ static int cmd_ctx_create(struct vd *d, const struct vd_hdr *h, const uint8_t *b
     return err;
 }
 
-/** CTX_DESTROY. */
+/** CTX_DESTROY, which drops a stream the context was sending in parts. */
 static int cmd_ctx_destroy(struct vd *d, const struct vd_hdr *h)
 {
     struct vgs_obj *o = vgs_table_find(&d->t, VGS_OBJ_CONTEXT, h->ctx_id);
 
     if (o == 0) {
         return VD_RESP_ERR_CONTEXT_ID;
+    }
+    if (d->join_open && d->join_ctx == h->ctx_id) {
+        join_drop(d);
     }
     d->ops->ctx_destroy(d->cookie, h->ctx_id);
     vgs_table_del(&d->t, o);
@@ -715,7 +719,8 @@ static int cmd_ctx_resource(struct vd *d, const struct vd_hdr *h, const uint8_t 
  * stream; a later part must follow the one before it. A part refused
  * breaks the stream: the rest are refused alike, and so is its SUBMIT_3D.
  * Returns 0 or the refusal: ERR_OUT_OF_MEMORY when the VM has no memory for
- * the stream, ERR_PARAMETER for a part out of order or no stream begun.
+ * the stream, ERR_PARAMETER for a part out of order or no stream begun,
+ * ERR_CONTEXT_ID for a context not live, whose part allocates nothing.
  */
 static int cmd_part(struct vd *d, const struct vd_hdr *h, const uint8_t *body, uint32_t blen)
 {
@@ -724,6 +729,9 @@ static int cmd_part(struct vd *d, const struct vd_hdr *h, const uint8_t *body, u
 
     if ((d->drv.transport_features & VGS_TF_PARTS) == 0) {
         return VD_RESP_ERR_UNSPEC;
+    }
+    if (!ctx_live(d, h->ctx_id)) {
+        return VD_RESP_ERR_CONTEXT_ID;
     }
     memcpy(&p, body, sizeof(p));
     if (p.offset == 0) {
@@ -1214,11 +1222,11 @@ static void complete(struct vd *d, uint32_t qi, uint32_t head, uint32_t put)
 }
 
 /**
- * Hold a fenced command until its fence retires. Returns 0, or -1 when
- * every pending slot is taken, which the caller answers at once.
+ * Hold a fenced command until its fence retires. Returns its slot, or 0
+ * when every pending slot is taken, which the caller answers at once.
  */
-static int hold(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_chain *c,
-                const struct vd_hdr *h, const uint8_t *resp)
+static struct vd_pending *hold(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_chain *c,
+                               const struct vd_hdr *h, const uint8_t *resp)
 {
     uint32_t i;
 
@@ -1235,13 +1243,60 @@ static int hold(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_chain
         p->ctx = p->per_ctx ? h->ctx_id : 0;
         p->ring = p->per_ctx ? h->ring_idx : 0;
         p->fence_id = h->fence_id;
+        p->unfenced = 0;
         p->rlen = sizeof(struct vd_hdr);
         memcpy(p->resp, resp, sizeof(struct vd_hdr));
         p->chain = *c;
         d->npend++;
-        return 0;
+        return p;
     }
-    return -1;
+    return 0;
+}
+
+/** Whether fence a comes after fence b on pending command p's timeline:
+ * a context ring's 64-bit ids, or the global timeline's 32 bits, which the
+ * renderer keeps, compared across their wrap as vd_fence_retired does. */
+static int fence_after(const struct vd_pending *p, uint64_t a, uint64_t b)
+{
+    return p->per_ctx ? a > b : (int32_t)((uint32_t)a - (uint32_t)b) > 0;
+}
+
+/**
+ * Ask the renderer again for the fence of each held command it refused
+ * one, when that command is still the newest held on its timeline. A
+ * newer held command's fence covers the work before it and retires it
+ * with its own (vd_fence_retired), so only the newest asks; asking for an
+ * older fence after a newer one would break the order of the timeline's
+ * fences, which the renderer may report as one. A context ring's command
+ * whose context is gone waits as its other held commands do.
+ */
+static void fence_retry(struct vd *d)
+{
+    uint32_t i, j;
+
+    for (i = 0; i < VD_PENDING && d->nunfenced != 0; i++) {
+        struct vd_pending *p = &d->pend[i];
+        int newest = 1;
+
+        if (!p->used || !p->unfenced || (p->per_ctx && !ctx_live(d, p->ctx))) {
+            continue;
+        }
+        for (j = 0; j < VD_PENDING && newest; j++) {
+            const struct vd_pending *q = &d->pend[j];
+
+            newest = !q->used || q == p || q->per_ctx != p->per_ctx || q->ctx != p->ctx ||
+                     q->ring != p->ring || !fence_after(p, q->fence_id, p->fence_id);
+        }
+        if (newest &&
+            d->ops->fence(d->cookie, p->ctx, (int)p->per_ctx, p->ring, p->fence_id) == 0) {
+            p->unfenced = 0;
+            d->nunfenced--;
+            if (d->verbose) {
+                fprintf(stderr, "backend: fence: taken again: id %llu of context %u, ring %u\n",
+                        (unsigned long long)p->fence_id, (unsigned)p->ctx, (unsigned)p->ring);
+            }
+        }
+    }
 }
 
 /**
@@ -1249,13 +1304,17 @@ static int hold(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_chain
  * header, once the renderer retires its fence on the timeline the header
  * names. A refusal waits so too: the driver retires every earlier fence of
  * the timeline with the answer, as Linux's virtio_gpu_fence_event_process
- * does, and the renderer's work behind them may still be pending.
+ * does, and the renderer's work behind them may still be pending. A fence
+ * the renderer refuses leaves its command held, with no fence of its own,
+ * until a later fence on its timeline retires or fence_retry has the
+ * renderer take it, for the same reason.
  */
 static void answer(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_chain *c,
                    uint32_t type, uint32_t len)
 {
+    struct vd_pending *p;
     struct vd_hdr h, o;
-    int per_ctx;
+    int per_ctx, err;
 
     /* resp is a byte array in struct vd, so its header goes by memcpy. */
     memcpy(&h, d->cmd, sizeof(h));
@@ -1278,13 +1337,17 @@ static void answer(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_ch
     if (h.flags & VD_FLAG_FENCE) {
         per_ctx = (h.flags & VD_FLAG_INFO_RING_IDX) != 0;
         if ((type == VD_RESP_OK_NODATA || type >= VD_RESP_ERR_UNSPEC) &&
-            (!per_ctx || ctx_live(d, h.ctx_id)) && hold(d, qi, head, c, &h, d->resp) == 0) {
+            (!per_ctx || ctx_live(d, h.ctx_id)) && (p = hold(d, qi, head, c, &h, d->resp)) != 0) {
             d->n.fenced++;
-            if (d->ops->fence(d->cookie, per_ctx ? h.ctx_id : 0, per_ctx, h.ring_idx, h.fence_id) ==
-                0) {
-                return;
+            err = d->ops->fence(d->cookie, p->ctx, per_ctx, p->ring, p->fence_id);
+            if (err != 0) {
+                p->unfenced = 1;
+                d->nunfenced++;
+                fprintf(stderr,
+                        "backend: fence: refused: id %llu of context %u, ring %u: error %d: "
+                        "held until a later fence retires or the renderer takes it\n",
+                        (unsigned long long)p->fence_id, (unsigned)p->ctx, (unsigned)p->ring, err);
             }
-            vd_fence_retired(d, per_ctx ? h.ctx_id : 0, per_ctx, h.ring_idx, h.fence_id);
             return;
         }
     }
@@ -1316,6 +1379,10 @@ void vd_fence_retired(struct vd *d, uint32_t ctx, int per_ctx, uint32_t ring, ui
             continue;
         }
         complete(d, p->queue, p->head, put_response(d, &p->chain, p->resp, p->rlen));
+        if (p->unfenced) {
+            p->unfenced = 0;
+            d->nunfenced--;
+        }
         p->used = 0;
         d->npend--;
     }
@@ -1552,6 +1619,7 @@ int vd_step(struct vd *d)
     if (d->me.state != VGS_DEV_RUNNING) {
         return VD_IDLE;
     }
+    fence_retry(d);
     if ((err = serve(d, VGS_QUEUE_CONTROL)) == VGS_OK) {
         err = serve(d, VGS_QUEUE_CURSOR);
     }
