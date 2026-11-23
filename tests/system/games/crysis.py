@@ -598,6 +598,26 @@ def hud_times(path):
         return []
 
 
+def start_child(argv, log):
+    """Start ARGV with no descriptor of the script's but its standard input
+    from /dev/null and its output and errors to the file LOG, so that a
+    child left in a read of /proc holds no pipe of the run's. The caller
+    calls it inside its cleanup's `try` and in a `with HELD` block that also
+    keeps the result, so that a signal waits until the child is recorded."""
+    with open(log, "wb") as out:
+        return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out,
+                                stderr=subprocess.STDOUT, close_fds=True)
+
+
+def last_line(path):
+    """Return the last line of the file PATH, or an empty string."""
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return ""
+    return lines[-1] if lines else ""
+
+
 def stop_after(child, seconds):
     """Wait SECONDS for CHILD, a Popen, and return its exit status, or kill
     it with SIGKILL and return None. A read of /proc/PID waits on that
@@ -677,7 +697,9 @@ class LoadTrace:
     one read takes, and the trace takes the load mark meanwhile. WHERE gets
     the child's `samples`; `calls`, the profiling kernel's bkl/calls over
     the trace, for every thread, when it has one, copied by a cp killed at
-    TRACE_END seconds; and `summary`, which the trace writes from the whole
+    TRACE_END seconds; `sampler.out` and `cp.out`, the two children's output
+    and errors, each a child's only descriptors but /dev/null (start_child);
+    and `summary`, which the trace writes from the whole
     samples in `samples`: the long frame by its 1-based line in the dump and
     the states, wait channels and system calls of each thread of the game's
     processes and wineserver, and of any other thread running or in a disk
@@ -713,12 +735,13 @@ class LoadTrace:
     def run(self):
         """Run the sampling child for TRACE_SPAN seconds at most, taking the
         load mark meanwhile, then copy the counts and write the summary."""
-        child = subprocess.Popen(
-            [sys.executable, os.path.abspath(__file__), "trace-sample", str(self.where),
-             str(self.game.hud / "frametime_(ms)"), str(self.first)],
-            stdin=subprocess.DEVNULL)
-        status = None
+        child, status = None, None
         try:
+            with HELD:
+                child = start_child(
+                    [sys.executable, os.path.abspath(__file__), "trace-sample", str(self.where),
+                     str(self.game.hud / "frametime_(ms)"), str(self.first)],
+                    self.where / "sampler.out")
             end = time.monotonic() + TRACE_SPAN
             while status is None and time.monotonic() < end:
                 if self.mark is None:
@@ -728,13 +751,18 @@ class LoadTrace:
                 except subprocess.TimeoutExpired:
                     pass
         finally:
-            if status is None:
+            if child is not None and status is None:
                 status = stop_after(child, 0)
-        copied = None
+        copied, cp = None, None
         if (self.where / "zeroed").exists():
-            copied = stop_after(subprocess.Popen(
-                ["cp", str(BKL_CALLS), str(self.where / "calls")],
-                stdin=subprocess.DEVNULL), TRACE_END)
+            try:
+                with HELD:
+                    cp = start_child(["cp", str(BKL_CALLS), str(self.where / "calls")],
+                                     self.where / "cp.out")
+                copied = stop_after(cp, TRACE_END)
+            finally:
+                if cp is not None and cp.returncode is None:
+                    cp.kill()
         samples = read_samples(self.where / "samples")
         times = self.game_times()
         long_at = next((i for i in range(self.first, len(times)) if times[i] >= LOAD_FRAME),
@@ -742,6 +770,8 @@ class LoadTrace:
         line = self.summary(samples, times, long_at)
         how = ("the sampler killed at %d s" % TRACE_SPAN if status is None else
                "the sampler's status %d" % status)
+        if status:
+            how += " (%s)" % last_line(self.where / "sampler.out")
         if copied is None and (self.where / "zeroed").exists():
             how += ", its counts not copied in %d s" % TRACE_END
         check("load-trace", status == 0 and long_at is not None,
