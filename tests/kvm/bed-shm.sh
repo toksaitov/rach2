@@ -134,10 +134,10 @@
 # With -w -g -l crysis, run the two-loop Crysis flyby once the region's
 # session is ready, in native/crysis.sh's private data fixture and, through
 # `crysis.sh seal`, in its read-only namespace. After the figure the
-# backend is stopped through the VM's second serial port, whose
-# `backend: result:` lines are printed and must hold the account's
-# (`account`); then the VM stops, and the same return and handoff checks
-# apply.
+# backend is stopped through the VM's second serial port, and the
+# `backend: result:` lines it prints after that word are printed and must
+# hold a whole account line followed by its end with status 0 (`account`);
+# then the VM stops, and the same return and handoff checks apply.
 # CRYSIS_LOOPS=1 selects one loop for a profile.
 # BED_VM_PROFILE_PORT forwards a loopback port to a profiling VM's SSH
 # server. BED_VM_PROFILE_CRC=1 asks that VM to enable the flush readback.
@@ -1338,14 +1338,14 @@ readback()
     fi
 }
 
-# vm_ctl WORD: have bed-vm-control in the VM do WORD to the backend, stop,
-# cont, kill or start, and wait, 120 s at most, for its word on the console
-# that it has.
+# vm_ctl WORD [SECONDS]: have bed-vm-control in the VM do WORD to the
+# backend, stop, cont, kill, start, hold, refuse or term, and wait SECONDS,
+# 120 by default, at most for its word on the console that it has.
 vm_ctl()
 {
     had=$(tr -d '\r' < "$console" | grep -c "bed-vm: control: $1: done")
     echo "$1" >&7
-    n=120
+    n=${2:-120}
     while [ "$(tr -d '\r' < "$console" | grep -c "bed-vm: control: $1: done")" -le "$had" ]; do
         n=$((n - 1))
         [ "$n" -gt 0 ] || return 1
@@ -1802,29 +1802,45 @@ crysis_figure()
 
 # crysis_account: stop the VM's backend with SIGTERM through the control
 # port, so that it prints its `backend: result:` lines before the VM is
-# killed, wait 120 s at most for the service's `backend: ended:` line on
-# the console while the VM lives, print the result lines, and fail
-# `account` without the account's line (`backend: result: account judged`).
+# killed, and wait while the VM lives, 120 s at most in all, for the
+# service's `backend: ended:` line on the console. Print the result and end
+# lines that came after the word, and pass `account` only when they hold a
+# whole account line, `backend: result: account judged N, least room R
+# bytes, ledger most L bytes`, followed by `backend: ended: status 0`. A
+# stall's snapshot before the word does not count.
 crysis_account()
 {
     if ! vm_alive; then
         fail account 'the VM ended before its backend was stopped'
         return
     fi
-    vm_ctl term || echo 'bed-shm: account: no word from the VM that the backend was sent TERM' >&2
-    n=120
-    until tr -d '\r' < "$console" | grep -q 'bed-vm: backend: ended: status'; do
+    mark=$(wc -l < "$console")
+    start=$(date +%s)
+    aerr=''
+    vm_ctl term 120 || aerr="no word from the VM that the backend was sent TERM"
+    n=$((120 - ($(date +%s) - start)))
+    until tail -n "+$((mark + 1))" "$console" | tr -d '\r' | grep -q 'bed-vm: backend: ended: status'; do
         n=$((n - 1))
         { [ "$n" -gt 0 ] && vm_alive; } || break
         sleep 1
     done
-    tr -d '\r' < "$console" | grep -aE 'bed-vm: backend: (result|ended): ' |
+    tail -n "+$((mark + 1))" "$console" | tr -d '\r' | grep -aE 'bed-vm: backend: (result|ended): ' |
         sed 's/^.*bed-vm: /bed-shm: vm: /'
-    line=$(tr -d '\r' < "$console" | grep -a 'bed-vm: backend: result: account ' | tail -n 1)
+    line=$(tail -n "+$((mark + 1))" "$console" | tr -d '\r' | awk '
+        /bed-vm: backend: result: account / {
+            sub(/^.*bed-vm: backend: result: account /, "")
+            acc = $0 ~ /^judged [0-9]+, least room [0-9]+ bytes, ledger most [0-9]+ bytes$/ ? $0 : ""
+            next
+        }
+        /bed-vm: backend: ended: status/ {
+            if (acc != "" && $0 ~ /bed-vm: backend: ended: status 0$/) found = acc
+            exit
+        }
+        END { if (found != "") print found }')
     if [ -n "$line" ]; then
-        pass account "${line#*backend: result: account }"
+        pass account "$line"
     else
-        fail account "no account line on the VM's console: $(tr -d '\r' < "$console" | tail -n 2 | tr '\n' ' ')"
+        fail account "${aerr:+$aerr; }no whole account line followed by the backend's end with status 0 since TERM: $(tr -d '\r' < "$console" | tail -n 2 | tr '\n' ' ')"
     fi
 }
 
