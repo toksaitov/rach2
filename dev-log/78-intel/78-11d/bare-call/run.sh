@@ -9,7 +9,9 @@
 # Every boot has the same ext2 volume, in the profile of tools/image/
 # mkext2.sh, on a virtio disk, mounted at /mnt without access times, and
 # times /mnt/f; every boot uses multi-threaded TCG, -cpu max, four
-# processors and 3 GiB. Each boot's console is OUT/linux-N.log or
+# processors and 3 GiB, or the accelerator and processor model that
+# BARECALL_ACCEL and BARECALL_CPU name, such as kvm and host; Linux's
+# command line takes BARECALL_LINUX_APPEND too, such as mitigations=off. Each boot's console is OUT/linux-N.log or
 # OUT/rach2-KERNEL-N.log, KERNEL the first 8 digits of its SHA-256, and the
 # medians are printed at the end.
 set -eu
@@ -43,9 +45,10 @@ disk="-drive file=$out/volume.ext2,format=raw,if=virtio,snapshot=on"
 # Boot Linux, whose /init times the calls and powers off, logging to $1.
 boot_linux()
 {
-    timeout 900 qemu-system-x86_64 -accel tcg,thread=multi -cpu max -smp 4 \
+    timeout 900 qemu-system-x86_64 -accel "${BARECALL_ACCEL:-tcg,thread=multi}" \
+        -cpu "${BARECALL_CPU:-max}" -smp 4 \
         -m 3G -machine q35 -kernel "$linux" -initrd "$out/initrd.gz" \
-        -append 'console=ttyS0 loglevel=7' -display none -vga none \
+        -append "console=ttyS0 loglevel=7 ${BARECALL_LINUX_APPEND:-}" -display none -vga none \
         -monitor none -no-reboot -nic none $disk -serial "file:$1"
     grep -q 'barecall: openclose' "$1"
 }

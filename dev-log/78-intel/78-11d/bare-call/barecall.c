@@ -4,13 +4,18 @@
  *
  * Build: gcc -O2 -ffreestanding -static -nostdlib -fno-stack-protector -fno-pie
  *        -no-pie -o barecall barecall.c
- * Use:   barecall [FILE [COUNT [ROUNDS]]]
+ * Use:   barecall [FILE [COUNT [ROUNDS [KIND]]]]
  *
  * Each round times COUNT calls of each kind in turn, 200000 unless given: a
  * number no table holds, getpid, lseek(fd, 0, SEEK_CUR) and fstat on FILE's
- * descriptor, a one-byte pread64 at 0, and an open and close of FILE. ROUNDS
+ * descriptor, a one-byte pread64 at 0, and an open and close of FILE. Then,
+ * with the working directory at FILE's directory, COUNT/20 each of FILE's
+ * name opened by its name alone with O_RDWR|O_CREAT|O_CLOEXEC, as the
+ * shader cache's opens are, and the close of each at once, timed apart by
+ * the time-stamp counter, and unlinks of a name the directory does not hold. ROUNDS
  * rounds, 9 unless given, give each kind's median, least and most, in
- * nanoseconds a call by CLOCK_MONOTONIC.
+ * nanoseconds a call by CLOCK_MONOTONIC. KIND, one of the names below, runs
+ * that kind alone, COUNT times a round, for a profile of its kernel time.
  *
  * As PID 1 in a Linux initramfs it loads /virtio_blk.ko.xz, mounts devtmpfs
  * and the ext2 volume on /dev/vda at /mnt by the ext4 driver, which takes
@@ -27,6 +32,8 @@
 #define SYS_pread64 17
 #define SYS_nanosleep 35
 #define SYS_getpid 39
+#define SYS_chdir 80
+#define SYS_unlink 87
 #define SYS_exit 60
 #define SYS_mount 165
 #define SYS_reboot 169
@@ -36,7 +43,11 @@
 
 #define MS_NOATIME 1024
 #define MODULE_INIT_COMPRESSED_FILE 4
-#define KINDS 6
+#define KINDS 9
+#define PATH_KINDS 5 /* the kinds from here on run COUNT/20 times */
+#define O_RDWR 2
+#define O_CREAT 0100
+#define O_CLOEXEC 02000000
 #define MAX_ROUNDS 31
 
 /** System call N with three arguments; its result. */
@@ -147,6 +158,45 @@ static void finish(int pid1)
     sys3(SYS_exit, 0, 0, 0);
 }
 
+/** The time-stamp counter, after the instructions before it. */
+static unsigned long tsc(void)
+{
+    unsigned int lo, hi;
+
+    __asm__ volatile("lfence; rdtsc" : "=a"(lo), "=d"(hi) : : "memory");
+    return (unsigned long)hi << 32 | lo;
+}
+
+/**
+ * Open NAME COUNT times with O_RDWR|O_CREAT|O_CLOEXEC and close each
+ * descriptor at once, timing the open and the close apart by the
+ * time-stamp counter, whose rate the round's CLOCK_MONOTONIC gives; store
+ * each's mean in picoseconds in *OPEN_PS and *CLOSE_PS.
+ */
+static void open_close_apart(const char *name, unsigned long count,
+                             unsigned long *open_ps, unsigned long *close_ps)
+{
+    unsigned long i, a, b, c, opens = 0, closes = 0, t0, t1, c0, c1;
+    long fd;
+
+    t0 = now_ns();
+    c0 = tsc();
+    for (i = 0; i < count; i++) {
+        a = tsc();
+        fd = sys3(SYS_open, (long)name, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+        b = tsc();
+        sys3(SYS_close, fd, 0, 0);
+        c = tsc();
+        opens += b - a;
+        closes += c - b;
+    }
+    c1 = tsc();
+    t1 = now_ns();
+    /* cycles a call, times 1000, times nanoseconds a cycle */
+    *open_ps = opens * 1000UL / count * (t1 - t0) / (c1 - c0);
+    *close_ps = closes * 1000UL / count * (t1 - t0) / (c1 - c0);
+}
+
 /**
  * Time COUNT calls of kind K on FD, or opens and closes of PATH, and return
  * the mean in picoseconds.
@@ -174,8 +224,11 @@ static unsigned long run(int k, long fd, const char *path, unsigned long count)
         case 4:
             sys4(SYS_pread64, fd, (long)st, 1, 0);
             break;
-        default:
+        case 5:
             sys3(SYS_close, sys3(SYS_open, (long)path, 0, 0), 0, 0);
+            break;
+        default:
+            sys3(SYS_unlink, (long)path, 0, 0);
             break;
         }
     }
@@ -183,8 +236,23 @@ static unsigned long run(int k, long fd, const char *path, unsigned long count)
     return (t1 - t0) * 1000UL / count;
 }
 
-static const char *const names[KINDS] = {"enosys", "getpid", "lseek",
-                                         "fstat",  "pread1", "openclose"};
+static const char *const names[KINDS] = {
+    "enosys",    "getpid", "lseek",  "fstat",  "pread1",
+    "openclose", "openrw", "closerw", "unlinkx"};
+
+/** The index of the kind named S, or -1. */
+static int kind_named(const char *s)
+{
+    int k, i;
+
+    for (k = 0; k < KINDS; k++) {
+        for (i = 0; s[i] && s[i] == names[k][i]; i++)
+            ;
+        if (!s[i] && !names[k][i])
+            return k;
+    }
+    return -1;
+}
 
 /** Write that the setup call WHAT failed with the error -RC. */
 static void put_error(const char *what, long rc)
@@ -194,6 +262,26 @@ static void put_error(const char *what, long rc)
     put(" failed: errno ");
     put_num((unsigned long)-rc);
     put("\n");
+}
+
+/** Make FILE's directory the working directory; FILE's last name. */
+static const char *enter_dir(const char *file)
+{
+    static char dir[256];
+    unsigned long n = length(file), slash = n;
+    long rc;
+
+    while (slash > 0 && file[slash - 1] != '/')
+        slash--;
+    if (slash == 0 || slash >= sizeof(dir))
+        return file;
+    for (n = 0; n < slash; n++)
+        dir[n] = file[n];
+    dir[slash] = 0;
+    rc = sys3(SYS_chdir, (long)dir, 0, 0);
+    if (rc != 0)
+        put_error("chdir", rc);
+    return file + slash;
 }
 
 /** Load the disk driver and mount the test volume at /mnt; 0 or -1. */
@@ -245,9 +333,10 @@ void start_c(long *sp)
     unsigned long count = parse(argc > 2 ? argv[2] : 0, 200000);
     unsigned long rounds = parse(argc > 3 ? argv[3] : 0, 9);
     unsigned long ps[KINDS][MAX_ROUNDS];
-    unsigned long r;
+    unsigned long r, fewer, unused;
+    const char *name;
     long fd;
-    int k;
+    int k, only = argc > 4 ? kind_named(argv[4]) : -1;
 
     if (pid1 && mount_volume() == 0)
         file = "/mnt/f";
@@ -258,13 +347,36 @@ void start_c(long *sp)
         put_error("open", fd);
         finish(pid1);
     }
-    for (k = 0; k < KINDS; k++)
-        run(k, fd, file, count / 10); /* warm the paths and the TCG blocks */
+    name = enter_dir(file);
+    if (only >= 0) {
+        for (r = 0; r < rounds; r++) {
+            if (only == 6 || only == 7)
+                open_close_apart(name, count, &ps[6][0], &ps[7][0]);
+            else
+                unused = run(only, fd, only == 8 ? "absent" : file, count);
+        }
+        (void)unused;
+        put("barecall: only ");
+        put(names[only]);
+        put(" done\n");
+        finish(pid1);
+    }
+    fewer = count / 20 ? count / 20 : 1;
+    /* warm the paths and the TCG blocks */
+    for (k = 0; k < PATH_KINDS; k++)
+        run(k, fd, file, count / 10);
+    run(5, fd, file, fewer / 10 + 1);
+    open_close_apart(name, fewer / 10 + 1, &ps[6][0], &ps[7][0]);
+    run(8, fd, "absent", fewer / 10 + 1);
     for (r = 0; r < rounds; r++) {
         put("barecall: round ");
         put_num(r);
-        for (k = 0; k < KINDS; k++) {
+        for (k = 0; k < PATH_KINDS; k++)
             ps[k][r] = run(k, fd, file, count);
+        ps[5][r] = run(5, fd, file, fewer);
+        open_close_apart(name, fewer, &ps[6][r], &ps[7][r]);
+        ps[8][r] = run(8, fd, "absent", fewer);
+        for (k = 0; k < KINDS; k++) {
             put(" ");
             put_milli(ps[k][r]);
         }
