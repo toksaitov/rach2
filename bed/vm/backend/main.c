@@ -399,11 +399,12 @@ static void report(struct vd *d, struct src *s, struct vr *r, struct kms *k)
             (unsigned long long)s->wakes[1], (unsigned long long)s->polled);
     fprintf(stderr,
             "backend: result: maps %llu, unmaps %llu, backings %llu, pinned %llu, "
-            "backed %llu, refused %llu, unpinned %llu\n",
+            "backed %llu, refused %llu, unpinned %llu, held %llu, charged %llu\n",
             (unsigned long long)d->n.maps, (unsigned long long)d->n.unmaps,
             (unsigned long long)d->n.backs, (unsigned long long)pc->pinned,
             (unsigned long long)pc->backed, (unsigned long long)pc->refused,
-            (unsigned long long)pc->unpinned);
+            (unsigned long long)pc->unpinned, (unsigned long long)pc->held,
+            (unsigned long long)pc->charged);
     if (s->dev >= 0 && ioctl(s->dev, VGPUSHM_IOC_COUNTS, &mc) == 0) {
         fprintf(stderr, "backend: result: module irqs %llu+%llu, signals %llu+%llu, rings %llu\n",
                 (unsigned long long)mc.irqs[0], (unsigned long long)mc.irqs[1],

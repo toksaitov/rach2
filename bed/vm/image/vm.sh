@@ -33,10 +33,11 @@
 # the VM's memory is taken until MemAvailable reads 0 and held there for
 # 30 s, and the peer then asks for eight backings of 64 MiB of it in turn,
 # for resources it made before, and for a texture of 4 MiB, which the
-# backend counts as 16 MiB, 16 bytes a texel being the most of any format
-# but those of 64-bit channels: it must refuse each with ERR_OUT_OF_MEMORY, where a pin of memory the VM has
-# not got, or a texture the GPU's driver would fill, would wake its OOM
-# killer, and answer the commands after. Once the fill has ended, the backend is moved into a
+# backend charges to its ledger at 8 MiB, twice its blocks, as it charges a
+# resource whose storage it cannot hold: it must refuse each with
+# ERR_OUT_OF_MEMORY, where a pin of memory the VM has not got, or a texture
+# the GPU's driver would fill, would wake its OOM killer, and answer the
+# commands after. Once the fill has ended, the backend is moved into a
 # memory cgroup of 64 MiB and the peer asks for a backing of 1 GiB, which
 # the VM's counts allow and the cgroup cannot hold: the backend must refuse
 # it when its pin's allocation fails, where the cgroup's OOM killer would
@@ -348,7 +349,7 @@ judge()
         expect "a texture refused while MemAvailable read 0" \
             "$(grep -c '^peer: texture: resource [0-9]*, 1024x1024: refused: out of memory$' "$p")" 1
         expect "the texture refused by the VM's counts" \
-            "$(grep -c "^backend: create: resource [0-9]*: refused: 16777216 bytes: no room in the VM's counts$" "$b")" 1
+            "$(grep -c "^backend: create: resource [0-9]*: refused: 8388608 bytes: no room in the VM's counts$" "$b")" 1
         expect "the backing of 1 GiB refused" \
             "$(grep -c '^peer: backing: resource [0-9]*, 1073741824 bytes: refused: out of memory$' "$p")" 1
         expect "the backend moved into a cgroup of 64 MiB" \
