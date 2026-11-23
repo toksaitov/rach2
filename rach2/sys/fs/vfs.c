@@ -2365,7 +2365,7 @@ static int cached_hop_root(const struct vfs_mount *mnt, const void *node)
 #define HOP_NAME_MAX 31u /* the longest name an entry holds */
 
 struct hop_memo {
-    uint32_t stamp;
+    uint64_t stamp;
     void *node; /* NULL for an empty entry */
     char name[HOP_NAME_MAX + 1];
 };
@@ -2390,7 +2390,7 @@ static struct hop_memo *hop_memo_slot(const char *comp)
 
 /** The node an entry of `hop_memos` made at the lookup count `stamp` gives
  * the name `comp`, or NULL. Under the mount table's lock. */
-static void *hop_memo_find(const char *comp, uint32_t stamp)
+static void *hop_memo_find(const char *comp, uint64_t stamp)
 {
     const struct hop_memo *e = hop_memo_slot(comp);
 
@@ -2442,7 +2442,7 @@ static int cached_hop_take(struct vfs_mount *root, const char *comp, const void 
                            struct vfs_ref *cur, int *stacked)
 {
     struct vfs_mount *named = NULL, *over = NULL;
-    uint32_t stamp = krffs_names_stamp();
+    uint64_t stamp = krffs_names_stamp();
     uint32_t flags = spin_lock_irqsave(&mount_table_lock);
     int covers = 0;
     int i, rc = 0;
@@ -2481,7 +2481,8 @@ static void *cached_hop_node(struct vfs_mount *root, const char *comp, uint32_t 
 {
     struct hop_memo *e = hop_memo_slot(comp);
     void *found = NULL;
-    uint32_t stamp, flags;
+    uint64_t stamp;
+    uint32_t flags;
 
     bkl_enter();
     stamp = krffs_names_stamp();

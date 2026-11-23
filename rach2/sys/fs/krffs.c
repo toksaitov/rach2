@@ -27,6 +27,7 @@
 #include "../rtc.h"
 #include "../serial.h"
 #include "../lib/kerrno.h"
+#include "../lib/spinlock.h"
 #include "../mm/kheap.h"
 
 krffs_file_system_t *krffs_fs = NULL;
@@ -354,20 +355,28 @@ struct krffs_name_entry {
 static struct krffs_name_entry krffs_names[KRFFS_NAMES];
 /* Never 0, which marks an empty entry. */
 static uint64_t krffs_names_gen = 1;
-/* The low word of `krffs_names_gen`, one store that a reader without the
- * big lock cannot see half made (`krffs_names_stamp`). */
-static volatile uint32_t krffs_names_word = 1;
+/* Taken by a move of `krffs_names_gen` and by a reader without the big lock
+ * (`krffs_names_stamp`), so that i686 never reads half of the count; the
+ * last lock in the order, held for nothing else. A reader with the big lock
+ * reads the count without it, since every move is made under both. */
+static struct spinlock krffs_names_lock = SPINLOCK_INIT;
 
-/** Make every entry of the lookup cache stale. */
+/** Make every entry of the lookup cache stale. Under the big lock. */
 static void krffs_names_moved(void)
 {
+    uint32_t flags = spin_lock_irqsave(&krffs_names_lock);
+
     krffs_names_gen++;
-    krffs_names_word = (uint32_t)krffs_names_gen;
+    spin_unlock_irqrestore(&krffs_names_lock, flags);
 }
 
-uint32_t krffs_names_stamp(void)
+uint64_t krffs_names_stamp(void)
 {
-    return krffs_names_word;
+    uint32_t flags = spin_lock_irqsave(&krffs_names_lock);
+    uint64_t gen = krffs_names_gen;
+
+    spin_unlock_irqrestore(&krffs_names_lock, flags);
+    return gen;
 }
 
 /**
