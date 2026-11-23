@@ -2442,8 +2442,10 @@ static int cached_hop(struct vfs_mount *root, const char **path, struct vfs_ref 
  * WALK_FULL with nothing taken, for a path the full walk starts at the root
  * of the root mount, one that begins with two slashes, and for a start on a
  * mount the caller's namespace may not see, whose mounts the cached walk
- * does not judge, among others. May sleep, to drop a root that moved
- * (`cached_put`).
+ * does not judge, among others. A root that is the KRFFS boot root's root
+ * directory, which the walk cannot stand on, it leaves for the mount the
+ * path's first name enters (`cached_hop`), with `*path` moved past that
+ * name. May sleep, to drop a root that moved (`cached_put`).
  */
 static int cached_start(const struct vfs_ref *start, const char **path, struct vfs_ref *cur,
                         struct cached_root *seen)
