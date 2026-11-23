@@ -466,14 +466,24 @@ static void fence_watch(struct vd *d, struct src *s, struct vr *r, uint64_t *see
     *next = t + STALL_AGAIN_S;
 }
 
-/** Replace path with a complete snapshot from the serving thread. */
-static void write_profile(const struct vd_profile *p, const char *path)
+/**
+ * Replace path with a complete snapshot of d's profile, from the serving
+ * thread. The renderer's threads add a held command's `held` and
+ * `fence_ns` under d->lock, so the profile is copied under that lock and
+ * the copy formatted after it is let go.
+ */
+static void write_profile(struct vd *d, const char *path)
 {
+    static struct vd_profile copy;
+    const struct vd_profile *p = &copy;
     char *tmp;
     unsigned i;
     int fd;
     FILE *fp;
 
+    pthread_mutex_lock(&d->lock);
+    copy = *d->profile;
+    pthread_mutex_unlock(&d->lock);
     if (asprintf(&tmp, "%s.XXXXXX", path) < 0) {
         return;
     }
@@ -620,7 +630,7 @@ static void serve(struct vd *d, struct src *s, struct vr *r, int once, const cha
 
         if (snapshot) {
             snapshot = 0;
-            write_profile(d->profile, profile);
+            write_profile(d, profile);
         }
         stall_beat("step");
         while ((ret = vd_step(d)) == VD_WORKED && steps++ < 64) {
