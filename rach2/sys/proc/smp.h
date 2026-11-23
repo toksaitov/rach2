@@ -33,13 +33,7 @@ struct page_dir;
 void bkl_enter(void);
 
 /** Nonzero when the running thread holds the big lock: this processor's
- * depth, which goes with the thread across a switch. Any context. A
- * thread no interrupt switches (`sched_spin_pinned`), which every system
- * call's body is, reads the depth with interrupts on, since it stays on
- * its processor between finding it and reading it; it knows itself by its
- * own kernel stack, since another processor's thread may be found by a
- * caller that moved. Any other masks interrupts for the two reads, a pass
- * that QEMU's emulator makes dear on every seek and read. */
+ * depth, which goes with the thread across a switch. Any context. */
 int bkl_held(void);
 
 /** Whether the running thread may spin while processor `cpu`'s thread holds
