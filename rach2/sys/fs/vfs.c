@@ -2349,38 +2349,49 @@ static int cached_hop_root(const struct vfs_mount *mnt, const void *node)
            path_below(mnt) == 0;
 }
 
+/* `cached_hop_take`'s answer when no nameless mount takes the name and a
+ * mount covers a node of the root directory, so that the name's node must
+ * be looked up for the search to answer. */
+#define HOP_LOOKUP 2
+
 /** Whether `m` is a mount `cached_hop` may enter from `root` by the name
- * `comp`: a nameless one entered by it, or one covering the node of that
- * name in the root directory. Under the mount table's lock. */
+ * `comp`: a nameless one entered by it, or, when `node` is not NULL, one
+ * covering `node`, the node that name names now in the root directory.
+ * Under the mount table's lock. */
 static int cached_hop_match(const struct vfs_mount *m, const struct vfs_mount *root,
-                            const char *comp)
+                            const char *comp, const void *node)
 {
     if (!m || m->state == VFS_FREE || m->parent != root) {
         return 0;
     }
     if (m->covered) {
-        return m->covered_path[0] == '/' && streq(m->covered_path + 1, comp);
+        return node && m->covered == node;
     }
     return m->state == VFS_ACTIVE && streq(mount_entry_name(m), comp);
 }
 
 /**
  * `cached_hop`'s search of the mount table, under its lock: the mount the
- * name `comp` enters from `root`, a nameless one before one that covers a
- * node, entered and held into `cur`, with `*stacked` set when a mount is
- * over its root. 0, or WALK_FULL with nothing taken.
+ * name `comp` enters from `root`, a nameless one before one that covers
+ * `node`, the name's node or NULL when it is not yet looked up, entered and
+ * held into `cur`, with `*stacked` set when a mount is over its root. 0;
+ * HOP_LOOKUP with nothing taken, for a `node` of NULL when no nameless
+ * mount takes the name and a mount covers a node of the root directory; or
+ * WALK_FULL with nothing taken.
  */
-static int cached_hop_take(struct vfs_mount *root, const char *comp, struct vfs_ref *cur,
-                           int *stacked)
+static int cached_hop_take(struct vfs_mount *root, const char *comp, const void *node,
+                           struct vfs_ref *cur, int *stacked)
 {
     struct vfs_mount *named = NULL, *over = NULL;
     uint32_t flags = spin_lock_irqsave(&mount_table_lock);
+    int covers = 0;
     int i, rc = 0;
 
     for (i = 1; i < mount_slots && !named && rc == 0; i++) {
         struct vfs_mount *m = mounts[i];
-        int seen = cached_hop_match(m, root, comp) ? vfs_mount_seen_word(m) : 0;
+        int seen = cached_hop_match(m, root, comp, node) ? vfs_mount_seen_word(m) : 0;
 
+        covers |= m && m->state != VFS_FREE && m->parent == root && m->covered;
         if (seen < 0) {
             rc = WALK_FULL;
         } else if (seen) {
@@ -2393,9 +2404,33 @@ static int cached_hop_take(struct vfs_mount *root, const char *comp, struct vfs_
         *stacked = mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == over &&
                    mounts[i]->covered == over->root;
     }
-    rc = rc != 0 || !over ? WALK_FULL : cached_take(over, over->root, cur);
+    if (rc == 0 && !over && !node && covers) {
+        rc = HOP_LOOKUP;
+    }
+    rc = rc != 0 ? rc : !over ? WALK_FULL : cached_take(over, over->root, cur);
     spin_unlock_irqrestore(&mount_table_lock, flags);
     return rc;
+}
+
+/**
+ * The node the name `comp` names now in the root directory of `root`, the
+ * KRFFS boot root, looked up under the big lock, which the core needs and
+ * which the boot root's lookup cache answers without a walk of the ring;
+ * or NULL for a name that is not there or a lookup that failed. KRFFS
+ * counts no holds (`kfs_lookup`), so the node is compared, not held, and
+ * the walk sequence the caller checks at the walk's end covers a change
+ * after the lookup. May sleep.
+ */
+static void *cached_hop_node(struct vfs_mount *root, const char *comp)
+{
+    void *found = NULL;
+
+    bkl_enter();
+    if (root->type->ops->lookup(mount_base(root), root->root, comp, &found) != 0) {
+        found = NULL;
+    }
+    bkl_exit();
+    return found;
 }
 
 /**
@@ -2404,26 +2439,29 @@ static int cached_hop_take(struct vfs_mount *root, const char *comp, struct vfs_
  * keep: into the mount that the first name of the absolute `*path` enters,
  * as the full walk would after its lookup of that name, with `*path` moved
  * past the name. That is a nameless mount entered by the name, as
- * `cached_named` finds one, or else the mount that covers the node of that
- * name, whose recorded path is a slash and the name, since a mount's target
- * is neither renamed nor removed and a KRFFS directory never moves; then
- * the mounts over its root in turn (`cached_cross`), which one search of
- * the table, under its lock, finds whether there are. The search check of
- * the root directory, whose mode is 0755 whatever its header says
- * (`kfs_getattr`), passes for every caller. `root` is compared and not
- * read, so the caller need not hold it. 0 with `cur` entered and held, or
- * WALK_FULL with nothing taken, for a name no mount takes, `.` and `..`
- * among them, a mount the walk may not judge (`vfs_mount_seen_word`) or
- * stand on (`cached_take`), and what `cached_cross` leaves to the full
- * walk. The caller checks the walk sequence before using the answer. May
- * sleep (`cached_put`).
+ * `cached_named` finds one, or else the mount that covers the node the
+ * name names now, which a lookup under the big lock finds
+ * (`cached_hop_node`) only when some mount covers a node of the root
+ * directory; then the mounts over its root in turn (`cached_cross`), which
+ * the search of the table, under its lock, finds whether there are. A
+ * mount's recorded path is not trusted, since a rename through a namespace
+ * that does not see the mount can move the node it covers. The search
+ * check of the root directory, whose mode is 0755 whatever its header says
+ * (`kfs_getattr`), passes for every caller. `root` is the permanent mount
+ * of the boot root. 0 with `cur` entered and held, or WALK_FULL with
+ * nothing taken, for a name no mount takes, `.` and `..` among them, a
+ * mount the walk may not judge (`vfs_mount_seen_word`) or stand on
+ * (`cached_take`), and what `cached_cross` leaves to the full walk. The
+ * caller checks the walk sequence before using the answer. May sleep
+ * (`cached_hop_node`, `cached_put`).
  */
 static int cached_hop(struct vfs_mount *root, const char **path, struct vfs_ref *cur)
 {
     const char *p = *path + 1;
     char comp[VFS_NAME_MAX + 1];
     uint32_t len = 0;
-    int stacked;
+    void *node;
+    int stacked, rc;
 
     while (p[len] != '\0' && p[len] != '/') {
         len++;
@@ -2433,7 +2471,15 @@ static int cached_hop(struct vfs_mount *root, const char **path, struct vfs_ref 
     }
     k_memcpy(comp, p, len);
     comp[len] = '\0';
-    if (streq(comp, ".") || streq(comp, "..") || cached_hop_take(root, comp, cur, &stacked) != 0) {
+    if (streq(comp, ".") || streq(comp, "..")) {
+        return WALK_FULL;
+    }
+    rc = cached_hop_take(root, comp, NULL, cur, &stacked);
+    if (rc == HOP_LOOKUP) {
+        node = cached_hop_node(root, comp);
+        rc = node ? cached_hop_take(root, comp, node, cur, &stacked) : WALK_FULL;
+    }
+    if (rc != 0) {
         return WALK_FULL;
     }
     if (stacked && cached_cross(cur, NULL) != 0) {
