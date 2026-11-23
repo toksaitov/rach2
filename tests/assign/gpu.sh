@@ -54,10 +54,16 @@
 # devices, mappings and pins, of KVM's machines and of the free interrupt
 # vectors as they were at the start.
 #
-# It prints `gpu: ACTION` lines, the console, and `gpu: result: pass: ...`
-# or `gpu: result: fail: REASON`, and exits 0 on a pass, 1 on a failure and
-# 2 on a usage error. DIR, by default a new directory under TMPDIR that a
-# pass removes, keeps the console and QEMU's messages.
+# It prints `gpu: ACTION` lines; `gpu: memory:` lines before QEMU starts
+# and once it has ended, with the free memory and the free part of the
+# window below 64 MiB that the kernel's DMA buffers come from; the console
+# and QEMU's messages; `gpu: stopped: line N: status S: COMMAND` for a
+# command of the script's own whose failure ends it, after bash's message;
+# and `gpu: result: pass: ...` or `gpu: result: fail: REASON`. It exits 0
+# on a pass, 1 on a failure and 2 on a usage error; a stop of the script
+# while QEMU runs kills QEMU, says so and exits with the stop's status.
+# DIR, by default a new directory under TMPDIR that a pass removes, keeps
+# the console and QEMU's messages.
 
 set -eu
 bdf=0000:00:02.0 firmware=seabios accel=kvm cpu='' mib=2048 cpus=2
@@ -130,6 +136,16 @@ counts()
 {
     awk '$1 ~ /^(vfio_(groups|devices|dma_mappings|dma_pages|dma_io_pages)|msi_vectors_free|kvm_(vms|vcpus|slots|tdp_pages|run_mappings))$/ { print }' /proc/stat
 }
+# The memory the VM's pin and VT-d's tables come from, on one line: MemFree,
+# MemAvailable and the window below 64 MiB free now (LowFree) and at its
+# least since the boot (window_free_min), in MiB.
+memory()
+{
+    awk '$1 == "MemFree:" || $1 == "MemAvailable:" || $1 == "LowFree:" {
+             printf "%s %d MiB, ", substr($1, 1, length($1) - 1), $2 / 1024 }
+         $1 == "window_free_min" { w = $2 / 256 }
+         END { printf "window_free_min %d MiB\n", w }' /proc/meminfo /proc/stat
+}
 faults()
 {
     awk '$1 == "iommu_dma_faults" || $1 == "iommu_irq_faults" { print }' /proc/stat
@@ -195,16 +211,32 @@ reaped()
     done
 }
 # cleanup: kill QEMU and give the function back, whatever ended the script.
-# Every signal is ignored from here on, so that a second TERM cannot cut the
-# give-back short. A QEMU that does not end is left, and the give-back,
+# On a stop of the script while QEMU runs, which set -e makes of any failed
+# command, the line says so: status 126 is bash's for a program that could
+# not be run, an execve that failed with ENOMEM among them. Nothing in the
+# trap stops it before the function goes back: a failure of its
+# diagnostics, another exec among them, is let pass, and every signal is
+# ignored from here on, and HUP, INT and TERM from the start of their own
+# traps, so that a second TERM, as a caller's after its group's, cannot cut
+# the give-back short. A QEMU that does not end is left, and the give-back,
 # which vfio-pci refuses while QEMU holds the function, is tried all the
 # same.
 cleanup()
 {
+    local code=$?
+
     trap '' HUP INT TERM QUIT USR1 USR2 PIPE ALRM
+    set +e
+    trap - ERR
     if [ -n "$pid" ]; then
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "gpu: result: fail: the script stopped with status $code while QEMU ran, and killed it; $(memory)" >&2
+            echo "gpu: evidence: $out" >&2
+            failed=1
+        fi
         kill -KILL "$pid" 2>/dev/null || :
         reaped || :
+        cat "$out/qemu.err" >&2
     fi
     if [ "$taken" = 1 ]; then
         if ! give_back; then
@@ -214,6 +246,9 @@ cleanup()
     [ -z "$work" ] || [ "$failed" = 1 ] || rm -rf "$work"
 }
 trap cleanup EXIT
+# The command of the script's own whose failure stops it, with its line and
+# status; bash has written its message, an exec's error among them, before.
+trap 'echo "gpu: stopped: line $LINENO: status $?: $BASH_COMMAND" >&2' ERR
 trap 'trap "" HUP INT TERM; failed=1; exit 129' HUP
 trap 'trap "" HUP INT TERM; failed=1; exit 130' INT
 trap 'trap "" HUP INT TERM; failed=1; exit 143' TERM
@@ -268,6 +303,7 @@ override=$(cat "$dev/driver_override" 2>/dev/null || :)
 [ "$override" != '(null)' ] || override=
 card_before=$(card)
 echo "gpu: before: $bdf on $card_before; $(echo "$before" | tr '\n' ' ')"
+echo "gpu: memory: before: $(memory)"
 ulimit -l unlimited
 
 echo "gpu: unbind: $bdf from i915"
@@ -332,6 +368,7 @@ else
     wait "$pid" || status=$?
 fi
 pid=
+echo "gpu: memory: end: $(memory)"
 cat "$out/console"
 cat "$out/qemu.err" >&2
 [ -z "$token" ] || ! grep -q -F -e "$token" "$out/console" || seen=1

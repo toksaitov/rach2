@@ -4,7 +4,8 @@
 # (bed/measure/Readme.md).
 #
 #   measure.sh [-r RUNG] [-o OUT] [-t SECONDS] [-u USER] [-d] [-p] [-c]
-#              [-L LATENCY] [-v RELAYLOG] [-R REPLAYS] glmark2|piglit|webgl|game
+#              [-L LATENCY] [-v RELAYLOG] [-R REPLAYS] [-M MIB[:llvmpipe]]
+#              glmark2|piglit|webgl|game
 #
 # The scenes, each the same work on every rung:
 #
@@ -13,7 +14,11 @@
 #            each for SECONDS (10)
 #   piglit   the tests of piglit.txt, beside this script, one at a time on
 #            the device EGL's surfaceless platform finds (piglit.sh -g),
-#            once, or with -t again and again until SECONDS have passed
+#            once, or with -t again and again until SECONDS have passed;
+#            with -M, MIB being the memory of the VM that renders them on
+#            its GPU, or on llvmpipe with `:llvmpipe`, a test whose `# need`
+#            comment asks for more is skipped, with `measure: piglit:
+#            skipped: TEST: needs N MiB, and the VM has MIB MiB`
 #   webgl    webgl.html in Chromium, fullscreen at 1280x800, for SECONDS
 #            times 60 frames (600), its frames paced by neither the
 #            display's refresh nor a frame rate limit
@@ -73,8 +78,8 @@
 # in a process group of its own, which the script ends, TERM and then KILL,
 # with the groups of the helpers the scene starts with setsid, on every exit
 # and on SIGTERM, SIGINT or SIGHUP. The status is 0 when the
-# scene ran to its end and gave frames, and 1 otherwise; the script sets no
-# time limit of its own.
+# scene ran to its end and gave frames, and for piglit when every test it
+# ran passed, and 1 otherwise; the script sets no time limit of its own.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -84,14 +89,14 @@ if [ -z "$runners" ]; then
 fi
 runners=$(cd "$runners" && pwd)
 
-rung=unnamed out='' seconds='' user='' own=1 renderer=gl latency='' relay='' inner=0 marks=0
+rung=unnamed out='' seconds='' user='' own=1 renderer=gl latency='' relay='' inner=0 marks=0 vmmib='' vmsoft=0
 replays=/usr/share/games/rach2/replays
 usage()
 {
-    echo "usage: measure.sh [-r RUNG] [-o OUT] [-t SECONDS] [-u USER] [-d] [-p] [-c] [-L LATENCY] [-v RELAYLOG] [-R REPLAYS] glmark2|piglit|webgl|game" >&2
+    echo "usage: measure.sh [-r RUNG] [-o OUT] [-t SECONDS] [-u USER] [-d] [-p] [-c] [-L LATENCY] [-v RELAYLOG] [-R REPLAYS] [-M MIB[:llvmpipe]] glmark2|piglit|webgl|game" >&2
     exit 2
 }
-while getopts r:o:t:u:dpcL:v:R:I o; do
+while getopts r:o:t:u:dpcL:v:R:M:I o; do
     case $o in
         r) rung=$OPTARG ;;
         o) out=$OPTARG ;;
@@ -101,6 +106,10 @@ while getopts r:o:t:u:dpcL:v:R:I o; do
         p) renderer=pixman ;;
         c) marks=1 ;;
         R) replays=$OPTARG ;;
+        M)
+            vmmib=${OPTARG%:llvmpipe}
+            [ "$vmmib" = "$OPTARG" ] || vmsoft=1
+            ;;
         L) latency=$OPTARG ;;
         v) relay=$OPTARG ;;
         I) inner=1 ;;
@@ -112,6 +121,7 @@ shift $((OPTIND - 1))
 scene=$1
 case $scene in glmark2 | piglit | webgl | game) ;; *) usage ;; esac
 case $seconds in *[!0-9]* | 0*) usage ;; esac
+case $vmmib in *[!0-9]* | 0*) usage ;; esac
 [ -n "$out" ] || out=./measure-$scene
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
@@ -156,35 +166,86 @@ scene_glmark2()
     cat "$RUNNER_WORK/hud/"* 2>/dev/null > "$out/frametimes" || true
 }
 
-# scene_piglit: piglit.txt's tests, once or for SECONDS, each passing
-# test's time a frame; `passes` gets a line for each test run, 1 when it
-# passed.
+# piglit_take LIST TAKEN: write to TAKEN the tests of LIST that the VM's
+# memory, -M's MIB, holds, one name a line, and print a line for each test
+# left out because its `# need` comment asks for more; with no -M, every
+# test. The comment `# need N MiB` gives the need of a VM that renders on
+# its GPU, and of one on llvmpipe unless `, llvmpipe M MiB` or `, llvmpipe
+# never` follows.
+piglit_take()
+{
+    awk -v mib="$vmmib" -v soft="$vmsoft" -v taken="$2" '
+        /^# need [0-9]+ MiB/ {
+            need = $3 + 0
+            if (soft == 1 && $5 == "llvmpipe")
+                need = $6 == "never" || $6 == "never:" ? -1 : $6 + 0
+            next
+        }
+        /^#/ || /^$/ { next }
+        {
+            if (mib != "" && need < 0)
+                printf "measure: piglit: skipped: %s: no VM has held it on llvmpipe\n", $0
+            else if (mib != "" && need > mib + 0)
+                printf "measure: piglit: skipped: %s: needs %d MiB, and the VM has %d MiB%s\n",
+                    $0, need, mib, soft == 1 ? " on llvmpipe" : ""
+            else
+                print > taken
+            need = 0
+        }' "$1"
+}
+
+# scene_piglit: piglit.txt's tests that the VM's memory holds, once or for
+# SECONDS, each passing test's time a frame; `passes` gets a line for each
+# test chosen in each round, 1 when it has one result and that passed. The
+# scene fails when a test it chose did not pass, has no result or more than
+# one, or when a result is of a test it did not choose, naming each.
 scene_piglit()
 {
     round=0 began=$(date +%s)
     : > "$out/frametimes"
     : > "$out/passes"
+    : > "$RUNNER_WORK/piglit.txt"
+    : > "$RUNNER_WORK/failed"
+    piglit_take "$here/piglit.txt" "$RUNNER_WORK/piglit.txt" > /dev/null
+    [ -s "$RUNNER_WORK/piglit.txt" ] || runner_die "no test of piglit.txt fits a VM of $vmmib MiB"
     while :; do
         round=$((round + 1))
-        sh "$runners/piglit.sh" -g -o "$out/piglit/$round" -l "$here/piglit.txt" \
+        sh "$runners/piglit.sh" -g -o "$out/piglit/$round" -l "$RUNNER_WORK/piglit.txt" \
             > "$out/piglit-$round.log" 2>&1 ||
             runner_die "piglit.sh failed: $(tail -n 3 "$out/piglit-$round.log")"
         cat "$out/piglit-$round.log" >> "$RUNNER_OUT/record"
-        python3 -I - "$out/frametimes" "$out/passes" "$out/piglit/$round"/piglit*.json << 'EOF'
+        python3 -I - "$out/frametimes" "$out/passes" "$RUNNER_WORK/piglit.txt" \
+            "$out/piglit/$round"/piglit*.json >> "$RUNNER_WORK/failed" << 'EOF'
 import json, sys
 times, passes = open(sys.argv[1], "a"), open(sys.argv[2], "a")
-for path in sys.argv[3:]:
-    tests = json.load(open(path, encoding="utf-8"))["tests"]
-    for name in sorted(tests):
-        t = tests[name].get("time", {})
-        ok = tests[name].get("result") == "pass"
-        passes.write("%d\n" % ok)
-        if ok:
-            times.write("%.3f\n" % ((t.get("end", 0) - t.get("start", 0)) * 1000))
+# piglit names a test in lower case.
+chosen = [l.rstrip("\n").lower() for l in open(sys.argv[3], encoding="utf-8")]
+seen = {}
+for path in sys.argv[4:]:
+    for name, test in json.load(open(path, encoding="utf-8"))["tests"].items():
+        seen.setdefault(name.lower(), []).append(test)
+for name in sorted(set(chosen) | set(seen)):
+    got = seen.get(name, [])
+    if name not in chosen:
+        print("%s not chosen" % name)
+        continue
+    ok = len(got) == 1 and got[0].get("result") == "pass"
+    passes.write("%d\n" % ok)
+    if ok:
+        t = got[0].get("time", {})
+        times.write("%.3f\n" % ((t.get("end", 0) - t.get("start", 0)) * 1000))
+    elif not got:
+        print("%s missing" % name)
+    elif len(got) > 1:
+        print("%s %d results" % (name, len(got)))
+    else:
+        print("%s %s" % (name, got[0].get("result")))
 EOF
         [ -n "$seconds" ] && [ $(($(date +%s) - began)) -lt "$seconds" ] || break
     done
     runner_record "piglit rounds $round passed $(grep -c 1 "$out/passes") of $(grep -c . "$out/passes")"
+    [ ! -s "$RUNNER_WORK/failed" ] ||
+        runner_die "$(grep -c . "$RUNNER_WORK/failed") of $(grep -c . "$out/passes") tests did not pass: $(sort -u "$RUNNER_WORK/failed" | tr '\n' ';' | sed 's/;$//')"
 }
 
 # scene_webgl: webgl.html in Chromium, the time between its frames.
@@ -465,6 +526,10 @@ mkdir -m 700 "$out/taken"
 flags=''
 [ "$own" = 1 ] || flags=-d
 [ "$renderer" = gl ] || flags="$flags -p"
+if [ -n "$vmmib" ]; then
+    flags="$flags -M $vmmib"
+    [ "$vmsoft" = 0 ] || flags="$flags:llvmpipe"
+fi
 harness=$here inner_runners=$runners inner_replays=$replays
 if [ -n "$user" ] && [ "$(id -u)" = 0 ]; then
     # USER may not read the caller's directories, as gfx cannot read
@@ -496,6 +561,9 @@ EOF
     }
 fi
 
+# The tests the VM's memory leaves out, which the scene's half leaves out
+# too, read from root's own copy of the list.
+[ "$scene" != piglit ] || piglit_take "$here/piglit.txt" /dev/null
 [ "$marks" = 0 ] || echo "measure: counts: before"
 { echo before; counts; } > "$out/counts"
 if [ -n "${BED_PROFILE:-}" ]; then

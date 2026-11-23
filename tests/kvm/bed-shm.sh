@@ -60,8 +60,18 @@
 # bed/measure/measure.sh, each scene of SCENES (`glmark2`) runs on the
 # session first, on the rung shm-virgl, or shm-venus for a scene written
 # `venus:SCENE`, whose GL goes through Zink on Venus, and its lines are
-# printed as figures. Then QEMU is stopped, four fenced submissions are
-# left pending and QEMU is killed under the load, which must still run:
+# printed as figures; the scene's check (`scene`) fails when measure.sh
+# fails, as it does for a piglit test that did not pass, or when its wait
+# ends as the load's does. measure.sh gets the VM's MIB with -M, with
+# `:llvmpipe` when no -g gives the VM a GPU, and a piglit test that needs
+# more is skipped: its line `bed-shm: skipped: piglit: TEST: ...` counts
+# it, and the last line says how many were. While a scene runs, a sampler
+# under a keeper of its own reads Rach2's MemAvailable, the VM's pages it
+# maps for its buffers and QEMU's resident memory once a second, beside
+# the VM's own `bed-vm: memory:` lines, and their least and most go in
+# `bed-shm: memory: RUNG-SCENE: ...`. Then QEMU is stopped, four fenced
+# submissions are left pending and QEMU is killed under the load, which
+# must still run:
 # every fence must fail, the load must end, glmark2 before Mesa's virgl
 # has said the kernel refused 100000 of its submissions since the death,
 # and ivshmemd must detach (`death`); and the session must
@@ -108,9 +118,15 @@
 # fails unless the device it names is one.
 #
 # Each check prints one line, `bed-shm: CHECK: pass` or `fail` with the
-# reason, and the last line is `bed-shm: result: pass` or `fail`, after the
-# VM's last 80 lines of console, `bed-shm: vm: LINE`, on a failure. The
-# console of the VM, ivshmemd's output and the counters are kept in DIR.
+# reason, and the last line is `bed-shm: result: pass`, with `: N skipped`
+# when tests were skipped, or `fail`, after the VM's last 80 lines of
+# console, `bed-shm: vm: LINE`, on a failure. A QEMU that ends before
+# virtio-gpu binds is named in a line `bed-shm: vm: QEMU ended before the
+# bind...` with its status, gpu.sh's verdict with -g, and its messages, and
+# every check that needed the bind fails with that line; a gpu.sh still
+# running with no pid file of QEMU's is sent TERM through its keeper, and
+# the line says so. The console of the VM, ivshmemd's output, the counters
+# and the kernel's log at the end are kept in DIR.
 # With -w, so are the services log's tails at and just after the VM's death.
 # Any exit, by its end or by SIGTERM, SIGINT or SIGHUP, stops every
 # keeper, which kills QEMU, and has gpu.sh give the function back.
@@ -209,6 +225,9 @@ fi
 # keeper knows it.
 daemon='' vmk='' gpu='' waiter='' holder='' pid='' load='' fig='' umon='' bad=0
 qemu='' qemu_start=''
+# The keeper of the memory sampler while a scene runs, and the count of the
+# tests measure.sh skipped.
+sampler='' skipped=0
 # The keepers not yet ended, for cleanup; the keeper, bedkeep.c built into
 # DIR; the number of the last keeper made; and of the last signal asked of
 # a keeper.
@@ -223,6 +242,9 @@ crysis_ini=/etc/xdg/weston/weston.ini crysis_ini_saved=''
 # NOCOPY_INTEL, for nocopy: with -g, the GPU's Venus device or a failure.
 intel=''
 [ -z "$bdf" ] || intel=1
+# The VM's memory and renderer, as measure.sh -M takes them.
+vmmem=$mib
+[ -n "$bdf" ] || vmmem=$mib:llvmpipe
 
 pass() { echo "bed-shm: $1: pass${2:+: $2}"; }
 fail() { echo "bed-shm: $1: fail: $2"; bad=$((bad + 1)); }
@@ -510,7 +532,7 @@ cleanup()
     done)
     # shellcheck disable=SC2086 # a list of keepers' numbers
     keep_end $first || survivors=$keep_left
-    load='' fig='' waiter='' holder='' pid='' umon=''
+    load='' fig='' waiter='' holder='' pid='' umon='' sampler=''
     vm=$vmk
     [ -z "$gpu" ] || vm=''
     # shellcheck disable=SC2086 # two keepers' numbers
@@ -981,6 +1003,35 @@ if until_line "$out/ivshmemd.out" 'QEMU connected' 60 vm; then
     done
 fi
 ivshmemd -i > "$out/info-bound.txt" 2>&1
+# vm_end: how QEMU ended when it ended before the bind, which every row then
+# fails with: with -g, gpu.sh's verdict, which gives QEMU's status, once
+# gpu.sh has given the function back; otherwise QEMU's own status. QEMU's
+# messages and gpu.sh's memory lines follow it. A gpu.sh that still runs
+# with no pid file of QEMU's, whose wait gave up, failed to start the VM,
+# and since it waits on a QEMU it started for ever (-w 0), its keeper sends
+# it TERM, on which it kills QEMU and gives the function back.
+vm_end=''
+if [ "$(info bound)" != 1 ] && ! vm_alive; then
+    if [ -n "$gpu" ]; then
+        how='QEMU ended before the bind'
+        if [ -z "$qemu" ] && keep_running "$gpu"; then
+            how='QEMU wrote no pid file and gpu.sh was stopped'
+            keep_signal "$gpu" TERM || how="$how, though its keeper sent no TERM: $keep_why"
+        fi
+        wait_vm
+        vm_end="$how: gpu.sh status $gpu_status: $(grep '^gpu: result:\|^gpu: stopped:' "$out/gpu.log" | tail -n 2 | tr '\n' ' ')"
+    elif [ -n "$vmk" ]; then
+        keep_wait "$vmk" 600 || :
+        vm_status=$(keep_ended "$vmk")
+        wait_vm
+        vm_end="QEMU ended before the bind with status ${vm_status:-unknown}"
+    fi
+    if [ -n "$vm_end" ]; then
+        echo "bed-shm: vm: $vm_end"
+        tail -n 20 "$qemu_err" 2>/dev/null | sed 's/^/bed-shm: vm: qemu: /'
+        [ -z "$bdf" ] || grep '^gpu: memory:' "$out/gpu.log" | sed 's/^/bed-shm: vm: /'
+    fi
+fi
 # With -u, the console's place on the region's card, inside the bind.
 if [ "$unplug" = 1 ]; then
     dmesg | tail -n "+$((klog_from + 1))" > "$out/dmesg-bind.txt"
@@ -1013,6 +1064,18 @@ if [ "$unplug" = 1 ]; then
         fail console "${unbound:+$unbound; }bound $(info bound), card '$card': $(grep 'console: \|virtio_gpu: command' "$out/dmesg-bind.txt" | tail -n 3 | tr '\n' ' ')"
     fi
 fi
+
+# why_unbound: why virtio-gpu has not bound: how QEMU ended, when it ended
+# before the bind, or else the last lines of the VM's console and of QEMU's
+# messages.
+why_unbound()
+{
+    if [ -n "$vm_end" ]; then
+        echo "$vm_end"
+    else
+        tail -n 2 "$console" "$qemu_err" 2>&1 | tr '\n' ' '
+    fi
+}
 
 # figure COMMAND...: one measurement, its lines added to DIR/measure.txt
 # and printed, each as `bed-shm: figure: LINE`, after `bed-shm: measuring:
@@ -1062,7 +1125,7 @@ nocopy_rows()
 {
     if [ "$(info bound)" != 1 ]; then
         for c in build pages coherent release refuse measure revoke leak; do
-            fail "$c" "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$qemu_err" 2>&1 | tr '\n' ' ')"
+            fail "$c" "virtio-gpu did not bind over the region: $(why_unbound)"
         done
         return
     fi
@@ -1397,7 +1460,7 @@ held()
 virgl_rows()
 {
     if [ "$(info bound)" != 1 ]; then
-        fail draw "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$qemu_err" 2>&1 | tr '\n' ' ')"
+        fail draw "virtio-gpu did not bind over the region: $(why_unbound)"
         fail doorbell "no device"
         if [ "$unplug" = 0 ]; then
             fail readback "no device"
@@ -1567,6 +1630,116 @@ desk_return()
     fi
 }
 
+# DIR/sample-memory.sh QEMU: once a second until it is stopped, a line of
+# Rach2's MemAvailable in kB, the VM's pages that Rach2 maps for its
+# buffers, the backings among them (kvm_gpa_map_pages), and the resident kB
+# of QEMU, process QEMU, `-` for one not read. One awk reads the three
+# files, since the shell's read takes a byte at a time and /proc/stat is
+# long, so that the figures pay one awk and one sleep a second. It runs
+# under a keeper of its own while a scene runs.
+cat > "$out/sample-memory.sh" <<'SAMPLER'
+while :; do
+    st=/proc/$1/status
+    [ -n "$1" ] && [ -r "$st" ] || st=/dev/null
+    awk '$1 == "MemAvailable:" { avail = $2 } $1 == "kvm_gpa_map_pages" { pages = $2 }
+         $1 == "VmRSS:" { rss = $2 }
+         END { print (avail == "" ? "-" : avail), (pages == "" ? "-" : pages), (rss == "" ? "-" : rss) }' \
+        /proc/meminfo /proc/stat "$st"
+    sleep 1
+done
+SAMPLER
+
+# memory_record NAME FROM TO: keep the VM's `bed-vm: memory:` lines of the
+# scene, those of its console that begin at or after byte FROM and end by
+# byte TO, with the last one before it, in DIR/memory-NAME.vm, and print
+# the figures of them and of DIR/memory-NAME.rach2, sample_memory's lines:
+# the VM's MemAvailable and i915's memory, and Rach2's MemAvailable, its use
+# apart from QEMU's resident memory, which bed.sh's reserve must hold, and
+# the VM's pages it maps, `-` for a figure no sample gave.
+#
+# The VM writes a line only when a figure has moved 64 MiB since its last
+# one, with the extremes of the seconds since that line. The figures read
+# in the scene are the values of its lines and the extremes of each of them
+# after the first; the first one's may be of seconds before the scene. A
+# second that no line read is within 64 MiB of the line before it, so from
+# the scene's start to the reading of its last line no second is below the
+# least of those lines and the one before the scene less 64 MiB, or above
+# their most plus 64 MiB. After that reading nothing bounds a second: a line
+# the VM wrote in the scene may reach the console after its end, so the
+# bound ends there, and a scene with no line or none before it has none.
+memory_record()
+{
+    mem_total=$(awk '$1 == "MemTotal:" { print $2 }' /proc/meminfo)
+    # The scene begins after the end of the line under way at FROM.
+    cut=0
+    if [ "$2" -gt 0 ]; then
+        cut=$(head -c "$3" "$console" 2>/dev/null | tail -c "+$2" | head -n 1 | wc -c)
+        cut=$(($2 - 1 + cut))
+    fi
+    # Whole lines only, so that a line FROM or TO cut is left out.
+    line='bed-vm: memory: available [0-9]+ kB, least [0-9]+ kB; i915 (none|[0-9]+ objects, [0-9]+ kB, most [0-9]+ kB)$'
+    {
+        head -c "$cut" "$console" 2>/dev/null | tr -d '\r' | grep -aE "$line" | tail -n 1 |
+            sed 's/^.*bed-vm: memory: /before: /'
+        head -c "$3" "$console" 2>/dev/null | tail -c "+$((cut + 1))" | tr -d '\r' |
+            grep -aE "$line" | sed 's/^.*bed-vm: memory: //'
+    } > "$out/memory-$1.vm"
+    # A line: available A kB, least L kB; i915 N objects, K kB, most M kB,
+    # or i915 none; `before: ` before the last one ahead of the scene.
+    vm_mem=$(awk '
+        function mib(v) { return int(v / 1024) }
+        {
+            pre = $1 == "before:"
+            if (pre) { $1 = ""; $0 = $0 }
+            gem = $8 == "none" ? "" : $10 + 0
+            if (pre) { before = $2 + 0; bgem = gem; next }
+            n++
+            if (least == "" || $2 < least) least = $2 + 0
+            if (most == "" || $2 > most) most = $2 + 0
+            if (n > 1 && $5 < least) least = $5 + 0
+            if (gem == "") next
+            if (gmost == "" || gem > gmost) gmost = gem
+            if (n > 1 && $13 > gmost) gmost = $13 + 0
+        }
+        END {
+            if (before == "" && !n) { printf "the VM wrote no sample"; exit }
+            low = least; high = most; ghigh = gmost
+            if (before != "") {
+                if (low == "" || before < low) low = before
+                if (high == "" || before > high) high = before
+                if (bgem != "" && (ghigh == "" || bgem > ghigh)) ghigh = bgem
+            }
+            bound = before != "" && n
+            upto = " until the last line\047s reading, and no bound after it"
+            printf "the VM\047s MemAvailable "
+            if (before != "") printf "%d MiB before the scene, ", mib(before)
+            if (n) printf "least %d MiB and most %d read in %d line%s in it", mib(least), mib(most), n, (n > 1 ? "s" : "")
+            else printf "no line in it"
+            if (bound) printf ", no second below %d MiB or above %d%s", mib(low - 65536), mib(high + 65536 + 1023), upto
+            else printf ", and no bound in it"
+            if (gmost != "") {
+                printf "; i915\047s objects at most %d MiB read", mib(gmost)
+                if (bound) printf ", no second above %d%s", mib(ghigh + 65536 + 1023), upto
+                else printf ", and no bound in it"
+            } else if (bgem != "") printf "; i915\047s objects %d MiB before the scene, and no bound in it", mib(bgem)
+            else printf "; no i915"
+        }' "$out/memory-$1.vm")
+    rach2_mem=$(awk -v total="$mem_total" '
+        function mib(v) { return v == "" ? "-" : int(v / 1024) }
+        $1 ~ /^[0-9]+$/ {
+            n++
+            if (least == "" || $1 < least) least = $1
+            if ($3 ~ /^[0-9]+$/ && (own == "" || total - $1 - $3 > own)) own = total - $1 - $3
+        }
+        $2 ~ /^[0-9]+$/ && (pages == "" || $2 > pages) { pages = $2 }
+        END {
+            if (!n) { printf "Rach2 gave no sample"; exit }
+            printf "Rach2\047s MemAvailable least %s MiB of %s, its use apart from QEMU at most %s MiB, the VM\047s pages it maps at most %s MiB, in %d samples",
+                mib(least), mib(total), mib(own), pages == "" ? "-" : mib(pages * 4), n
+        }' "$out/memory-$1.rach2")
+    echo "bed-shm: memory: $1: $vm_mem; $rach2_mem"
+}
+
 # crysis_counts: the same counters as the bed's shm-virgl figures.
 crysis_counts()
 {
@@ -1634,7 +1807,7 @@ desk_rows()
     done
     if [ "$(info bound)" != 1 ] || [ -z "$card" ]; then
         for c in session load death fallback; do
-            fail "$c" "virtio-gpu did not bind over the region: card '$card', $(tail -n 2 "$console" "$qemu_err" 2>&1 | tr '\n' ' ')"
+            fail "$c" "virtio-gpu did not bind over the region: card '$card', $(why_unbound)"
         done
         [ "$loadscene" != crysis ] || crysis_return
         return
@@ -1672,18 +1845,32 @@ desk_rows()
     for scene in ${measure:+$scenes}; do
         rung=shm-virgl zink=''
         case $scene in venus:*) rung=shm-venus scene=${scene#venus:} zink="MESA_LOADER_DRIVER_OVERRIDE=zink VK_DRIVER_FILES=$icd" ;; esac
-        figout=$out/measure-$rung-$scene.out
+        sname=$rung-$scene
+        figout=$out/measure-$sname.out
+        sfrom=$(command stat -c %s "$console" 2>/dev/null || echo 0)
+        keep_new "the memory sampler of $sname"
+        "$keep" "$$" "$kb" sh "$out/sample-memory.sh" "$qemu" <> "$kb.ctl" > "$out/memory-$sname.rach2" 2>&1 &
+        sampler=$keepn
         keep_new "the figure $scene"
         # shellcheck disable=SC2086 # assignments
         "$keep" "$$" "$kb" env $desktop_env $zink sh "$measure/measure.sh" -r "$rung" \
-            -u desktop -d -o "$out/measure/$rung-$scene" "$scene" <> "$kb.ctl" > "$figout" 2>&1 &
+            -u desktop -d -M "$vmmem" -o "$out/measure/$sname" "$scene" <> "$kb.ctl" > "$figout" 2>&1 &
         fig=$keepn
         await "$fig" ||
             echo "bed-shm: figure: $scene: status $await_status${await_why:+: $await_why}" >&2
         fig=''
+        sto=$(command stat -c %s "$console" 2>/dev/null || echo 0)
+        keep_end "$sampler" || echo "bed-shm: memory: $sname: the sampler's keeper is not done: $keep_left" >&2
+        sampler=''
         sed 's/^/bed-shm: figure: /' "$figout"
-        if [ "$profile_only" = 1 ] && { [ -n "$await_why" ] || [ "$await_status" != 0 ]; }; then
-            fail figure "$scene exited with status $await_status${await_why:+: $await_why}"
+        grep "^measure: $scene: skipped: " "$figout" |
+            sed "s/^measure: $scene: skipped: /bed-shm: skipped: $scene: /"
+        skipped=$((skipped + $(grep -c "^measure: $scene: skipped: " "$figout")))
+        memory_record "$sname" "$sfrom" "$sto"
+        if [ -z "$await_why" ] && [ "$await_status" = 0 ] && grep -q "^measure: result: $scene $rung " "$figout"; then
+            pass scene "$scene on $rung"
+        else
+            fail scene "$scene on $rung: measure.sh status $await_status${await_why:+: $await_why}: $(grep 'failed\|runner: ' "$figout" | tail -n 2 | tr '\n' ' ')"
         fi
     done
     if [ "$profile_only" = 1 ]; then
@@ -1709,7 +1896,7 @@ desk_rows()
         loadout=$out/load.out loadline=$out/load/scene.log loadpat="measure: scene: $loadscene: started"
         keep_new 'the load'
         # shellcheck disable=SC2086 # two assignments
-        "$keep" "$$" "$kb" env $desktop_env sh "$measure/measure.sh" -r shm-virgl -u desktop -d -t 600 \
+        "$keep" "$$" "$kb" env $desktop_env sh "$measure/measure.sh" -r shm-virgl -u desktop -d -t 600 -M "$vmmem" \
             -o "$out/load" "$loadscene" <> "$kb.ctl" > "$loadout" 2>&1 &
         load=$keepn
     fi
@@ -1866,12 +2053,17 @@ else
     virgl_rows
 fi
 handoff
+dmesg > "$out/dmesg.txt" 2>&1
 # The way out, here before the result, so that its steps count; the exit's
 # trap then finds it done.
 cleanup end
 
 if [ "$bad" -eq 0 ]; then
-    echo "bed-shm: result: pass"
+    if [ "$skipped" -gt 0 ]; then
+        echo "bed-shm: result: pass: $skipped skipped"
+    else
+        echo "bed-shm: result: pass"
+    fi
 else
     for log in services-death services-after-death; do
         [ -f "$out/$log.txt" ] || continue
