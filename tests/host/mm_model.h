@@ -1,8 +1,8 @@
 /**
  * A model of what mm/paging.c reaches outside itself, for the host tests
- * that include it whole: pin_hosttest.c, mmnotify_hosttest.c and
- * tlb_hosttest.c, each on i686's `cpu.h` and, with RACH2_HOST_X86_64, on
- * x86-64's.
+ * that include it whole: pin_hosttest.c, mmnotify_hosttest.c,
+ * tlb_hosttest.c and rss_hosttest.c, each on i686's `cpu.h` and, with
+ * RACH2_HOST_X86_64, on x86-64's, and thp64_hosttest.c.
  *
  * A user page directory is a run of leaf tables over a window of user
  * space, which is all `mmu_user_table` and `mmu_user_skip` are asked for;

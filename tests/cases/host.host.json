@@ -1431,6 +1431,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "rss",
+          "checks": "tests/host/rss_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rss64",
+          "checks": "tests/host/rss64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "rtc",
           "checks": "tests/host/rtc_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
