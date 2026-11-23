@@ -2340,8 +2340,8 @@ struct cached_root {
 static int cached_cross(struct vfs_ref *cur, const struct vfs_mount **uncovered);
 
 /** Whether `mnt` with its node `node` is the root directory of the KRFFS
- * boot root at the top of the mount table, or of a namespace's copy of it,
- * where the cached walk may step to a mount without a lookup
+ * boot root at the top of the mount table, or of a namespace's copy or a
+ * bind of it, where the cached walk may step to a mount without a lookup
  * (`cached_hop`). The caller holds a lock that keeps `mnt`. */
 static int cached_hop_root(const struct vfs_mount *mnt, const void *node)
 {
@@ -2516,8 +2516,9 @@ static void *cached_hop_node(struct vfs_mount *root, const char *comp, uint32_t 
  * rename through a namespace that does not see the mount can move the node
  * it covers. The search check of the root directory, whose mode is 0755
  * whatever its header says (`kfs_getattr`), passes for every caller.
- * `root` is the permanent mount of the boot root. 0 with `cur` entered and
- * held, or WALK_FULL with
+ * `root`, the caller's root mount, a namespace's copy or a bind of the
+ * boot root among them, is entered by the caller (`vfs_enter`), which keeps
+ * it from being freed. 0 with `cur` entered and held, or WALK_FULL with
  * nothing taken, for a name no mount takes, `.` and `..` among them, a
  * mount the walk may not judge (`vfs_mount_seen_word`) or stand on
  * (`cached_take`), and what `cached_cross` leaves to the full walk. The
@@ -2575,9 +2576,11 @@ static int cached_hop(struct vfs_mount *root, const char **path, struct vfs_ref 
  * of the root mount, one that begins with two slashes, and for a start on a
  * mount the caller's namespace may not see, whose mounts the cached walk
  * does not judge, among others. A root that is the KRFFS boot root's root
- * directory, which the walk cannot stand on, it leaves for the mount the
- * path's first name enters (`cached_hop`), with `*path` moved past that
- * name. May sleep, to drop a root that moved (`cached_put`).
+ * directory, which the walk cannot stand on, it enters, under the lock it
+ * was read under, so that no unmount frees it while the step looks its
+ * first name up, and leaves for the mount that name enters (`cached_hop`),
+ * with `*path` moved past the name. May sleep, to drop a root that moved
+ * (`cached_put`).
  */
 static int cached_start(const struct vfs_ref *start, const char **path, struct vfs_ref *cur,
                         struct cached_root *seen)
@@ -2602,7 +2605,9 @@ static int cached_start(const struct vfs_ref *start, const char **path, struct v
             root.mnt = fs->root_mnt;
             root.node = fs->root_node;
             hop = p[0] == '/' && cached_hop_root(root.mnt, root.node);
-            rc = hop ? 0 : cached_take(root.mnt, root.node, cur);
+            rc = !hop ? cached_take(root.mnt, root.node, cur)
+                 : vfs_enter(root.mnt) == 0 ? 0
+                                            : WALK_FULL;
         }
         spin_unlock_irqrestore(&fs->lock, flags);
     }
@@ -2611,7 +2616,9 @@ static int cached_start(const struct vfs_ref *start, const char **path, struct v
         root.mnt = mounts[0];
         root.node = mounts[0]->root;
         hop = p[0] == '/' && cached_hop_root(root.mnt, root.node);
-        rc = hop ? 0 : cached_take(root.mnt, root.node, cur);
+        rc = !hop ? cached_take(root.mnt, root.node, cur)
+             : vfs_enter(root.mnt) == 0 ? 0
+                                        : WALK_FULL;
         spin_unlock_irqrestore(&mount_table_lock, flags);
     }
     if (rc != 0) {
@@ -2620,12 +2627,16 @@ static int cached_start(const struct vfs_ref *start, const char **path, struct v
     if (seen->taken && (seen->mnt != root.mnt || seen->node != root.node)) {
         if (!hop) {
             cached_put(cur->mnt, cur->node);
-            vfs_leave(cur->mnt);
         }
+        vfs_leave(hop ? root.mnt : cur->mnt);
         return WALK_FULL;
     }
-    if (hop && cached_hop(root.mnt, path, cur) != 0) {
-        return WALK_FULL;
+    if (hop) {
+        rc = cached_hop(root.mnt, path, cur);
+        vfs_leave(root.mnt);
+        if (rc != 0) {
+            return WALK_FULL;
+        }
     }
     seen->taken = 1;
     seen->mnt = root.mnt;
