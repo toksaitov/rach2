@@ -289,6 +289,15 @@ void kfree(void *p)
     (void)p;
 }
 
+/** The root's move hook as `kfs_mount` registers it (`kfs_moved`): a move
+ * repoints the moved node's holders once it has its new place. */
+static void moved(krffs_node_t *from, krffs_node_t *to)
+{
+    if (to && to != from) {
+        vfs_repoint(&mount, from, to);
+    }
+}
+
 /**
  * Lay a fresh file system into the image, mount it as the root, and put
  * two files into it, `alpha` and then `beta` right after it.
@@ -322,6 +331,7 @@ static void setup(void)
     waiter.pid = 2;
     current_proc = &writer;
     mount.ns.holder = -1;
+    krffs_root_on_move(moved);
 }
 
 /** Watch the image for the operation `op`. */
