@@ -133,8 +133,11 @@
 #
 # With -w -g -l crysis, run the two-loop Crysis flyby once the region's
 # session is ready, in native/crysis.sh's private data fixture and, through
-# `crysis.sh seal`, in its read-only namespace. The VM stops after the
-# figure, and the same return and handoff checks apply.
+# `crysis.sh seal`, in its read-only namespace. After the figure the
+# backend is stopped through the VM's second serial port, whose
+# `backend: result:` lines are printed and must hold the account's
+# (`account`); then the VM stops, and the same return and handoff checks
+# apply.
 # CRYSIS_LOOPS=1 selects one loop for a profile.
 # BED_VM_PROFILE_PORT forwards a loopback port to a profiling VM's SSH
 # server. BED_VM_PROFILE_CRC=1 asks that VM to enable the flush readback.
@@ -867,11 +870,11 @@ fi
 # The VM's second serial port, ttyS1, a pipe whose input this script
 # keeps open, read and written, so that a word sent never waits, even with
 # QEMU gone: bed-vm-control in the VM does each word to the backend
-# (vm_ctl).
+# (vm_ctl). With -g too, where the flyby's end stops the backend through it.
 mkfifo "$out/ctl.in" "$out/ctl.out"
 exec 7<> "$out/ctl.in"
+set -- "$@" -chardev pipe,path="$out/ctl",id=ctl -device isa-serial,chardev=ctl,index=1
 if [ -z "$bdf" ]; then
-    set -- "$@" -chardev pipe,path="$out/ctl",id=ctl -device isa-serial,chardev=ctl,index=1
     keep_new QEMU
     TMPDIR=$out "$keep" "$$" "$kb" qemu-system-x86_64 -accel kvm -machine q35,kernel-irqchip=split -cpu host -smp "$cpus" \
         -m "${mib}M" -nodefaults -no-reboot -display none -monitor none \
@@ -1797,12 +1800,42 @@ crysis_figure()
     fi
 }
 
-# crysis_return: stop the VM after the flyby and check the restored session.
+# crysis_account: stop the VM's backend with SIGTERM through the control
+# port, so that it prints its `backend: result:` lines before the VM is
+# killed, wait 120 s at most for the service's `backend: ended:` line on
+# the console while the VM lives, print the result lines, and fail
+# `account` without the account's line (`backend: result: account judged`).
+crysis_account()
+{
+    if ! vm_alive; then
+        fail account 'the VM ended before its backend was stopped'
+        return
+    fi
+    vm_ctl term || echo 'bed-shm: account: no word from the VM that the backend was sent TERM' >&2
+    n=120
+    until tr -d '\r' < "$console" | grep -q 'bed-vm: backend: ended: status'; do
+        n=$((n - 1))
+        { [ "$n" -gt 0 ] && vm_alive; } || break
+        sleep 1
+    done
+    tr -d '\r' < "$console" | grep -aE 'bed-vm: backend: (result|ended): ' |
+        sed 's/^.*bed-vm: /bed-shm: vm: /'
+    line=$(tr -d '\r' < "$console" | grep -a 'bed-vm: backend: result: account ' | tail -n 1)
+    if [ -n "$line" ]; then
+        pass account "${line#*backend: result: account }"
+    else
+        fail account "no account line on the VM's console: $(tr -d '\r' < "$console" | tail -n 2 | tr '\n' ' ')"
+    fi
+}
+
+# crysis_return: stop the backend and then the VM after the flyby, and
+# check the restored session.
 crysis_return()
 {
     crysis_restore_ini || fail return 'could not restore weston.ini'
     dead=$(command stat -c %s "$services" 2>/dev/null || echo 0)
     tail -c 16384 "$services" > "$out/services-death.txt"
+    crysis_account
     kill_vm
     desk_return
 }
