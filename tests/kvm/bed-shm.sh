@@ -1271,8 +1271,9 @@ refusals() { tr -d '\r' < "$console" 2>/dev/null | grep -c 'backend: map: resour
 # serial port, refuses, which the region's heap must back: its bytes must
 # go to the device and come back through its map, and the backend's one
 # refusal as asked must name its resource. Then one of the VM's pages the
-# same way, one too large for either, and more held untaken than the
-# driver's cap on pending asks.
+# same way, which the probe fails unless it added one map of the VM's pages
+# to the transport's count, one too large for either, and more held
+# untaken than the driver's cap on pending asks.
 defer()
 {
     asked0=$(tr -d '\r' < "$console" | grep -c 'backend: back: resource [0-9]*: refused: [0-9]* bytes: as asked')

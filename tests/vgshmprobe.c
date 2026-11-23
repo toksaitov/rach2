@@ -6,6 +6,7 @@
 #include "probe.h"
 #include "../rach2/sys/drm/uapi.h"
 #include "../rach2/sys/drm/virtio_gpu.h"
+#include "../rach2/sys/virtio/vgpushm.h"
 
 /* virgl's commands and objects, from virglrenderer's src/virgl_protocol.h,
  * and gallium's targets, binds and clear bits, as bed/shm/peer.c writes its
@@ -647,13 +648,32 @@ static void round_trip(uint32_t bo, uint32_t bytes, const char *what)
 }
 
 /**
+ * The transport's count of blobs mapped from the VM's pages since the
+ * attach, as vgpu-shm(4)'s VGS_IOC_INFO gives it to a privileged caller.
+ * Fails the probe when it cannot be read.
+ */
+static uint64_t vm_maps(void)
+{
+    struct vgs_info in;
+    long fd = syscall3(SYS_OPEN, (long)"/dev/vgpu-shm", 0, 0);
+
+    if (fd < 0 || call((int)fd, VGS_IOC_INFO, &in) != 0) {
+        fail("read the transport's maps from /dev/vgpu-shm");
+    }
+    syscall1(SYS_CLOSE, fd);
+    return in.maps;
+}
+
+/**
  * The resources whose backing of the VM's pages the driver asks for at the
  * create and takes later. First a buffer whose backing the VM refuses, as
  * the caller has the backend do to the next new backing (bed-vm-control's
  * `refuse`), which the driver backs from the region's heap when the map
  * takes it: its round trip (`round_trip`) proves that backing, and its
  * resource's id, printed, lets the caller match the backend's refusal to
- * it. Then a buffer of the VM's backing, the same round trip; one of 1 GiB
+ * it. Then a buffer of the VM's backing, the same round trip, which must
+ * add one map of the VM's pages to the transport's count, since a backing
+ * from the heap adds none; one of 1 GiB
  * and a page, past the largest backing the VM gives and the heap's room,
  * whose map fails, and whose submission fails once the refusal has come, as
  * one after the failed map must, but, made before, goes with the backing
@@ -665,6 +685,7 @@ static void defer(void)
 {
     struct drm_virtgpu_map m;
     uint32_t bo, bos[DEFER_HELD], i, bytes = 65536;
+    uint64_t maps;
     long r, at;
     char text[12];
 
@@ -676,10 +697,17 @@ static void defer(void)
     round_trip(bo, bytes, "the refused buffer");
     probe_line("VGSHMPROBE DEFER: refused, backed from the heap, written, sent and read back", 0,
                0);
+    maps = vm_maps();
     if (resource(PIPE_BUFFER, VIRGL_FORMAT_R8_UNORM, bytes, 1, bytes, &bo) != 0) {
         fail("a buffer");
     }
     round_trip(bo, bytes, "the buffer of the VM's pages");
+    maps = vm_maps() - maps;
+    probe_line("VGSHMPROBE DEFER: maps of the VM's pages for the second buffer: ",
+               dec(text, (long)maps), 0);
+    if (maps != 1) {
+        fail("the second buffer was not backed by one map of the VM's pages");
+    }
     probe_line("VGSHMPROBE DEFER: mapped at once, written, sent and read back", 0, 0);
     if (resource(PIPE_BUFFER, VIRGL_FORMAT_R8_UNORM, (1u << 30) + 4096u, 1, (1u << 30) + 4096u,
                  &bo) != 0) {
