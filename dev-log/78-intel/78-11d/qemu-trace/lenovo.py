@@ -9,7 +9,7 @@ import signal
 import subprocess
 import sys
 import tempfile
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(Path("tests/graphics/lenovo").resolve()))
@@ -47,12 +47,15 @@ def client_command(user, args):
                                "graphics", *args])
 
 
-def collect(case, work, settle, weston, account, env, joined=False, kernel=True):
+def collect(case, work, settle, weston, account, env, joined=False, kernel=True,
+            cache_root=None):
     """Record the picture, with the kernel from just before readback until it answers.
 
     JOINED adds Weston's timeline and drm-backend streams, and on Rach2 the
     DRM frame trace. Without KERNEL, on Debian or for a probe-free picture,
     no kernel trace is written; the browser's trace handshake still runs.
+    CACHE_ROOT puts this picture's fresh Mesa cache outside the browser's
+    work directory without moving its profile or Weston's cache.
     """
     case.mkdir()
     out = case / "out"
@@ -61,7 +64,8 @@ def collect(case, work, settle, weston, account, env, joined=False, kernel=True)
     (out / "weston.pid").write_text("%d\n" % weston)
     command = client_command(account.pw_name, [sys.executable, "-u", HERE / "picture.py",
                                               out, work, settle])
-    env = dict(env, TMPDIR=str(work), MESA_SHADER_CACHE_DIR=str(work / "mesa"))
+    cache = work / "mesa" if cache_root is None else cache_root / case.name
+    env = dict(env, TMPDIR=str(work), MESA_SHADER_CACHE_DIR=str(cache))
     streams = (weston_streams(case, env, lambda args: user_command(account.pw_name, args))
                if joined else nullcontext())
     traces = [(TRACE, "kernel.bin")] if kernel else []
@@ -117,24 +121,26 @@ def missed(case, name):
     return early > 33.4 or late > 0
 
 
-def bare_pictures(out, work, weston, account, env, count):
+def bare_pictures(out, work, weston, account, env, count, cache_root):
     """Draw COUNT fresh immediate pictures with no trace of any kind."""
     env = dict(env, RACH2_BROWSER_TRACE="0")
     for index in range(1, count + 1):
         name = "bare-%d" % index
         print("webgpu: measure " + name + " without probes", flush=True)
-        collect(out / name, work / name, 0, weston, account, env, kernel=False)
+        collect(out / name, work / name, 0, weston, account, env, kernel=False,
+                cache_root=cache_root)
         missed(out / name, name)
 
 
-def profiled_pictures(out, work, weston, account, env, kernel, every):
+def profiled_pictures(out, work, weston, account, env, kernel, every, cache_root):
     """Trace fresh immediate pictures until a frame misses its bound, or all four with EVERY."""
     env = dict(env, RACH2_BROWSER_TRACE="1")
     what = "Chromium, Weston and DRM" if kernel else "Chromium and Weston"
     for index in range(1, 5):
         name = "immediate-%d" % index
         print("webgpu: measure %s with %s tracing" % (name, what), flush=True)
-        collect(out / name, work / name, 0, weston, account, env, joined=True, kernel=kernel)
+        collect(out / name, work / name, 0, weston, account, env, joined=True, kernel=kernel,
+                cache_root=cache_root)
         if missed(out / name, name) and not every:
             break
 
@@ -151,6 +157,8 @@ def main():
                         help="trace all four pictures, not only up to the first miss")
     parser.add_argument("--linux", action="store_true",
                         help="Debian's reference: no Rach2 kernel traces")
+    parser.add_argument("--mesa-cache-parent", type=Path, metavar="DIR",
+                        help="put the pictures' fresh Mesa caches under DIR")
     args = parser.parse_args()
     user = args.user
     account = pwd.getpwnam(user)
@@ -169,9 +177,15 @@ def main():
     desktop_dir(display, account)
     for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: sys.exit(1))
-    with tempfile.TemporaryDirectory(prefix="webgpu-", dir=os.environ["TMPDIR"]) as scratch:
-        work = Path(scratch)
+    with ExitStack() as stack:
+        work = Path(stack.enter_context(tempfile.TemporaryDirectory(
+            prefix="webgpu-", dir=os.environ["TMPDIR"])))
         os.chown(work, account.pw_uid, account.pw_gid)
+        cache_root = None
+        if args.mesa_cache_parent is not None:
+            cache_root = Path(stack.enter_context(tempfile.TemporaryDirectory(
+                prefix="webgpu-mesa-", dir=args.mesa_cache_parent))).resolve()
+            os.chown(cache_root, account.pw_uid, account.pw_gid)
         runtime = work / "run"
         desktop_dir(runtime, account)
         env = dict(os.environ, XDG_RUNTIME_DIR=str(runtime), WAYLAND_DISPLAY="wayland-hasvk",
@@ -184,13 +198,14 @@ def main():
             pid = weston_pid()
             run(client_command(user, ["vkcube", "--wsi", "wayland", "--c", "300"]),
                 display / "cube.log", env)
-            bare_pictures(out, work, pid, account, env, args.bare)
+            bare_pictures(out, work, pid, account, env, args.bare, cache_root)
             if args.profiled:
-                profiled_pictures(out, work, pid, account, env, not args.linux, args.all)
+                profiled_pictures(out, work, pid, account, env, not args.linux, args.all, cache_root)
             elif not args.bare:
                 for name, delay in (("immediate", 0), ("settled", 5)):
                     print("webgpu: measure " + name, flush=True)
-                    collect(out / name, work / name, delay, pid, account, env)
+                    collect(out / name, work / name, delay, pid, account, env,
+                            cache_root=cache_root)
         finally:
             stop(weston)
 
