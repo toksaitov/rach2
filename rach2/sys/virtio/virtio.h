@@ -266,8 +266,8 @@ struct virtio_map;
  *     the physical address.
  * put: the driver has let go of `d` for good, after its removal (below);
  *     the transport may free its record.
- * dma_frames: `pages` consecutive frames of any memory, zeroed, for a
- *     buffer the device reads or writes and the kernel reaches only
+ * dma_frames: `pages` consecutive frames of any memory, not zeroed, for
+ *     a buffer the device reads or writes and the kernel reaches only
  *     through a mapping of its own (`kmap_cpu`), the device's address of
  *     the first in `*addr`, which is also its physical address; 0, or
  *     -ENOMEM when no such run is free. For a transport whose dma_alloc
