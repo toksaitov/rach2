@@ -15,8 +15,12 @@
  * SUBMIT_3D that follows them, whose fenced answer waits for its fence; a
  * stream the VM has no memory for, a part out of order, a part of another
  * context and a joined SUBMIT_3D with no stream are refused, the joined
- * SUBMIT_3D behind its fence; and a device whose driver did not accept the
- * parts refuses a part and a joined SUBMIT_3D.
+ * SUBMIT_3D behind its fence; a device whose driver did not accept the
+ * parts refuses a part and a joined SUBMIT_3D; a command whose fence the
+ * renderer refuses to make stays held behind the work before it, until
+ * the renderer takes its fence when asked again or a later fence on its
+ * timeline retires; and CTX_DESTROY frees the stream its context was
+ * sending, and the context's later parts allocate nothing.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -72,6 +76,12 @@ static struct {
 } asked[64];
 static unsigned nasked;
 static uint32_t submits, submitted, submitted_sum;
+/* The renderer refuses to make a fence while `fence_fails`, and fence
+ * `fail_id` always, counting the refusals; a refused fence is not in
+ * `asked`. */
+static int fence_fails;
+static uint64_t fail_id;
+static unsigned refused;
 
 /* The driver: the region, its layout and block, the queue's indices, the
  * heap's next free byte, the chains in flight by head and their answers. */
@@ -182,6 +192,10 @@ static int op_submit(void *c, uint32_t ctx, void *buf, uint32_t bytes)
 static int op_fence(void *c, uint32_t ctx, int per_ctx, uint32_t ring, uint64_t id)
 {
     (void)c;
+    if (fence_fails || (fail_id != 0 && id == fail_id)) {
+        refused++;
+        return 12;
+    }
     if (nasked < sizeof(asked) / sizeof(asked[0])) {
         asked[nasked].ctx = ctx;
         asked[nasked].per_ctx = (uint32_t)per_ctx;
@@ -339,7 +353,9 @@ static int start(int parts)
     avail_idx = used_idx = 0;
     brk = lay.heap_off;
     next_head = 0;
-    nasked = 0;
+    nasked = refused = 0;
+    fence_fails = 0;
+    fail_id = 0;
     submits = submitted = submitted_sum = 0;
     memset(answered, 0, sizeof(answered));
     return 0;
@@ -429,11 +445,11 @@ static struct vd_hdr hdr_of(uint32_t type, uint32_t flags, uint64_t fence, uint3
     return h;
 }
 
-/** CTX_CREATE of context CTX, answered OK at once. */
-static void make_context(void)
+/** CTX_CREATE of context `ctx`, answered OK at once. */
+static void make_context_id(uint32_t ctx)
 {
     uint8_t req[sizeof(struct vd_hdr) + sizeof(struct c_ctx_create)];
-    struct vd_hdr h = hdr_of(CMD_CTX_CREATE, 0, 0, CTX, 0);
+    struct vd_hdr h = hdr_of(CMD_CTX_CREATE, 0, 0, ctx, 0);
     uint32_t head;
 
     memset(req, 0, sizeof(req));
@@ -441,6 +457,22 @@ static void make_context(void)
     head = put(req, sizeof(req), 0, 0);
     serve_all();
     CHECK(answered[head] == VD_RESP_OK_NODATA, "the context is made");
+}
+
+/** CTX_CREATE of context CTX, answered OK at once. */
+static void make_context(void)
+{
+    make_context_id(CTX);
+}
+
+/** CTX_DESTROY of context `ctx`, answered OK at once. */
+static void destroy_context(uint32_t ctx)
+{
+    struct vd_hdr h = hdr_of(CMD_CTX_DESTROY, 0, 0, ctx, 0);
+    uint32_t head = put(&h, sizeof(h), 0, 0);
+
+    serve_all();
+    CHECK(answered[head] == VD_RESP_OK_NODATA, "the context is destroyed");
 }
 
 /** A SUBMIT_3D of `size` bytes of `data`, or with `joined` of the stream
@@ -591,6 +623,7 @@ static void row_broken(const uint8_t *data)
     serve_all();
     CHECK(answered[p] == VD_RESP_ERR_PARAMETER && answered[s] == VD_RESP_ERR_PARAMETER,
           "a part out of order breaks its stream");
+    make_context_id(CTX + 1);
     part(CTX, 0, 8192, data, 4096);
     p = part(CTX + 1, 4096, 8192, data, 4096);
     s = submit(0, 0, 0, 0, 8192, 1);
@@ -615,6 +648,119 @@ static void row_broken(const uint8_t *data)
           "without the parts accepted a part and a join are refused");
 }
 
+/** A fenced submission whose fence the renderer refuses to make, behind a
+ * fenced one whose work is pending, on the global timeline (`ring` 0 and
+ * no ring flag) or a context's ring: it stays held after the earlier fence
+ * retires, is asked again while it is the newest held, and is answered at
+ * its fence once the renderer takes it; then, with the renderer refusing
+ * still, one held behind a later fence is not asked again and retires with
+ * that fence. */
+static void fence_refused(uint32_t flags, uint8_t ring, const uint8_t *data)
+{
+    int per_ctx = (flags & VD_FLAG_INFO_RING_IDX) != 0;
+    uint32_t tctx = per_ctx ? CTX : 0, tring = per_ctx ? ring : 0;
+    uint32_t a, b, c, e;
+    unsigned before;
+
+    a = submit(flags, 1, ring, data, 4096, 0);
+    serve_all();
+    fence_fails = 1;
+    b = submit(flags, 2, ring, data, 4096, 0);
+    serve_all();
+    CHECK(submits == 2 && refused >= 1 && nasked == 1, "the renderer refuses the second fence");
+    CHECK(answered[a] == 0 && answered[b] == 0,
+          "a refused fence answers nothing while the work before it runs");
+    CHECK(dev.npend == 2 && dev.nunfenced == 1, "the command of a refused fence stays held");
+    vd_fence_retired(&dev, tctx, per_ctx, tring, 1);
+    serve_all();
+    CHECK(fenced_answer(a, VD_RESP_OK_NODATA, 1) && answered[b] == 0,
+          "the earlier fence answers its own command alone");
+    before = refused;
+    serve_all();
+    CHECK(refused > before, "the newest command of a refused fence asks again");
+    fence_fails = 0;
+    serve_all();
+    CHECK(nasked == 2 && asked[1].id == 2 && asked[1].per_ctx == (uint32_t)per_ctx &&
+              asked[1].ctx == tctx && asked[1].ring == tring && dev.nunfenced == 0,
+          "the renderer takes the fence when asked again");
+    CHECK(answered[b] == 0, "a fence taken again answers nothing before it retires");
+    vd_fence_retired(&dev, tctx, per_ctx, tring, 2);
+    serve_all();
+    CHECK(fenced_answer(b, VD_RESP_OK_NODATA, 2), "the command comes at its fence");
+
+    fail_id = 3;
+    c = submit(flags, 3, ring, data, 4096, 0);
+    serve_all();
+    e = submit(flags, 4, ring, data, 4096, 0);
+    serve_all();
+    before = refused;
+    serve_all();
+    serve_all();
+    CHECK(refused == before && nasked == 3 && asked[2].id == 4 && answered[c] == 0 &&
+              answered[e] == 0 && dev.nunfenced == 1,
+          "a command held behind a later fence is not asked again");
+    vd_fence_retired(&dev, tctx, per_ctx, tring, 4);
+    serve_all();
+    CHECK(fenced_answer(c, VD_RESP_OK_NODATA, 3) && fenced_answer(e, VD_RESP_OK_NODATA, 4) &&
+              dev.npend == 0 && dev.nunfenced == 0,
+          "a later fence retires the command whose fence was refused");
+}
+
+/** A refused fence on the global timeline and on a context's ring. */
+static void row_fence_refused(const uint8_t *data)
+{
+    CHECK(start(0) == 0, "the device runs");
+    make_context();
+    fence_refused(VD_FLAG_FENCE, 0, data);
+    CHECK(start(0) == 0, "the device runs again");
+    make_context();
+    fence_refused(FLAGS_FR, 2, data);
+}
+
+/** CTX_DESTROY frees the stream its context was sending in parts and keeps
+ * another context's; a part of the dead context is refused and allocates
+ * nothing. */
+static void row_destroy(const uint8_t *data)
+{
+    uint32_t p, s;
+
+    CHECK(start(1) == 0, "the device runs with parts");
+    make_context();
+    make_context_id(CTX + 1);
+    p = part(CTX, 0, 2u << 20, data, 4096);
+    serve_all();
+    CHECK(answered[p] == VD_RESP_OK_NODATA && dev.join != 0, "a stream begun holds its buffer");
+    destroy_context(CTX);
+    CHECK(dev.join == 0 && !dev.join_open, "CTX_DESTROY frees its context's stream");
+    p = part(CTX, 0, 2u << 20, data, 4096);
+    serve_all();
+    CHECK(answered[p] == VD_RESP_ERR_CONTEXT_ID && dev.join == 0,
+          "a part of a dead context is refused and allocates nothing");
+    p = part(CTX + 1, 0, 8192, data, 4096);
+    serve_all();
+    make_context();
+    destroy_context(CTX);
+    CHECK(answered[p] == VD_RESP_OK_NODATA && dev.join != 0 && dev.join_ctx == CTX + 1,
+          "CTX_DESTROY keeps another context's stream");
+    p = part(CTX + 1, 4096, 8192, data + 4096, 4096);
+    serve_all();
+    {
+        uint8_t req[sizeof(struct vd_hdr) + sizeof(struct c_submit)];
+        struct vd_hdr h = hdr_of(CMD_SUBMIT_3D, VGS_FLAG_JOINED, 0, CTX + 1, 0);
+        struct c_submit c;
+
+        c.size = 8192;
+        c.padding = 0;
+        memcpy(req, &h, sizeof(h));
+        memcpy(req + sizeof(h), &c, sizeof(c));
+        s = put(req, sizeof(req), 0, 0);
+    }
+    serve_all();
+    CHECK(answered[p] == VD_RESP_OK_NODATA && answered[s] == VD_RESP_OK_NODATA && submits == 1 &&
+              submitted_sum == fnv1a(data, 8192),
+          "the other context's stream reaches the renderer whole");
+}
+
 /** Run the rows over the real device. */
 int main(void)
 {
@@ -632,6 +778,8 @@ int main(void)
     row_parts(data, 8192, 4096);
     row_parts(data, (3u << 20) + 4, 896u << 10);
     row_broken(data);
+    row_fence_refused(data);
+    row_destroy(data);
     if (base) {
         vd_fini(&dev);
         free(base);
