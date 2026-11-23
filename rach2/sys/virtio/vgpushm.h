@@ -51,11 +51,12 @@
 #define VGS_DOORBELL(peer, vec) ((((uint32_t)(peer)) << 16) | (uint32_t)(vec))
 
 /* Transport features, negotiated apart from virtio's. */
-#define VGS_TF_DOORBELL 0x1u /* both sides ring doorbells instead of polling */
-#define VGS_TF_PAGES    0x2u /* RESOURCE_MAP_BLOB is answered with the VM's pages */
-#define VGS_TF_BACKING  0x4u /* a resource's backing is the VM's pages; needs PAGES */
-#define VGS_TF_BEAT     0x8u /* the device advances vgs_device.heartbeat */
-#define VGS_TF_ALL      (VGS_TF_DOORBELL | VGS_TF_PAGES | VGS_TF_BACKING | VGS_TF_BEAT)
+#define VGS_TF_DOORBELL 0x1u  /* both sides ring doorbells instead of polling */
+#define VGS_TF_PAGES    0x2u  /* RESOURCE_MAP_BLOB is answered with the VM's pages */
+#define VGS_TF_BACKING  0x4u  /* a resource's backing is the VM's pages; needs PAGES */
+#define VGS_TF_BEAT     0x8u  /* the device advances vgs_device.heartbeat */
+#define VGS_TF_PARTS    0x10u /* the device joins a submission sent in parts */
+#define VGS_TF_ALL      (VGS_TF_DOORBELL | VGS_TF_PAGES | VGS_TF_BACKING | VGS_TF_BEAT | VGS_TF_PARTS)
 
 /*
  * With VGS_TF_BEAT accepted, the device adds 1 to its block's heartbeat
@@ -234,6 +235,36 @@ struct vgs_backing {
     uint64_t first; /* the page the answer's runs start at */
 };
 
+/*
+ * With VGS_TF_PARTS accepted, the driver may send a SUBMIT_3D whose command
+ * stream the heap cannot hold at once in parts, each a VGS_CMD_PART chain
+ * that carries a `struct vgs_part` after virtio-gpu's 24-byte header and
+ * then the next bytes of the stream, and after them the SUBMIT_3D itself,
+ * its header's flags holding VGS_FLAG_JOINED, with no bytes after its body:
+ * its stream is the parts' bytes, joined in the order their chains came on
+ * the control queue. A part at `offset` 0 begins a stream, dropping one
+ * not yet submitted; every later part must start where the one before it
+ * ended and stay within `total`, the stream's bytes, the same in each part
+ * and equal to the SUBMIT_3D's size. The device copies each part out of the
+ * heap and answers it at once, unfenced, so that the driver may reuse its
+ * pages: RESP_OK_NODATA, or ERR_OUT_OF_MEMORY when the VM has no memory for
+ * the stream, or ERR_INVALID_PARAMETER for a part out of order. The
+ * SUBMIT_3D is answered as any: its stream submitted whole, or refused with
+ * ERR_OUT_OF_MEMORY or ERR_INVALID_PARAMETER when a part was, a part is
+ * missing or no stream was begun, with a fenced refusal answered only once
+ * the renderer's earlier work on its timeline is done, as every fenced
+ * answer is. Other commands may come between the parts and are served in
+ * their place; the driver sends one stream at a time.
+ */
+#define VGS_CMD_PART    0x0f01u
+#define VGS_FLAG_JOINED 0x80000000u
+
+/* VGS_CMD_PART's request, after virtio-gpu's 24-byte header. */
+struct vgs_part {
+    uint64_t offset; /* where in the stream this part's bytes go */
+    uint64_t total;  /* the stream's bytes */
+};
+
 /* The device's block, at VGS_DEVICE_OFF; written only by the device. */
 struct vgs_device {
     uint32_t epoch;              /* the driver's epoch this block answers */
@@ -391,6 +422,7 @@ VGS_ASSERT(info_size, sizeof(struct vgs_info) == 128);
 VGS_ASSERT(pages_size, sizeof(struct vgs_pages) == 32);
 VGS_ASSERT(run_size, sizeof(struct vgs_run) == 16);
 VGS_ASSERT(backing_size, sizeof(struct vgs_backing) == 24);
+VGS_ASSERT(part_size, sizeof(struct vgs_part) == 16);
 
 #ifndef VGS_MB
 #define VGS_MB() __sync_synchronize()

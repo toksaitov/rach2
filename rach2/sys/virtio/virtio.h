@@ -110,6 +110,10 @@ struct virtq_used_elem {
 #define VIRTQ_INDIRECT_LEN    16
 #define VIRTQ_INDIRECT_MAX    256
 
+/* A transport's `dma_max` for runs of any length the memory holds: the most
+ * whole pages a 32-bit count of bytes, a descriptor's length, carries. */
+#define VIRTIO_DMA_ANY 0xfffff000u
+
 /* The queues a device may have, QEMU's most (VIRTIO_QUEUE_MAX): a virtio
  * console of 511 ports has 1024, and virtio-net's control queue follows
  * every pair a device has, however few the driver sets up. */
@@ -342,7 +346,8 @@ struct virtio_dev {
      * shared INTx line and the other transports keep it. */
     int irq_unlocked;
     /* The most bytes one dma_alloc gives, in whole pages that follow each
-     * other in the device's addresses; 0 for one page. */
+     * other in the device's addresses; 0 for one page, VIRTIO_DMA_ANY for
+     * a run of any length the memory holds. */
     uint32_t dma_max;
     /* The device maps its buffers from its own pages (`map_pages`), as
      * the transport and the device have agreed; set by the transport. */
@@ -351,6 +356,9 @@ struct virtio_dev {
      * asked for by the transport's command (VGS_TF_BACKING), in place of
      * the pages `backing_fill` gives; set by the transport. */
     int backing;
+    /* The device joins a submission sent in parts (VGS_TF_PARTS), as the
+     * transport and the device have agreed; set by the transport. */
+    int parts;
     /* `notify` is one register write that takes no lock and wakes no
      * thread, so a driver may make it without the big lock; set by the
      * transport, as virtio-pci sets it. */

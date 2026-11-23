@@ -799,17 +799,44 @@ static void vp_irq_release(struct virtio_dev *d)
     vp->mode = VP_IRQ_NONE;
 }
 
-/* The most pages one vp_dma_alloc gives as a run: kalloc_contig's largest. */
-#define VP_DMA_RUN_PAGES 256u
+/** `pages` consecutive frames, mapped, with the first's physical address
+ * in `*phys`: where the direct map reaches every frame (x86-64), frames
+ * from any memory (`alloc_frames`), reached there; elsewhere a run of the
+ * kernel heap (`kalloc_contig`), as Linux's vmalloc area bounds what one
+ * allocation of i686 holds. NULL when no such run is free. */
+static void *vp_run_alloc(uint32_t pages, uintptr_t *phys)
+{
+#ifdef ARCH_DIRECT_MAP_ALL
+    *phys = alloc_frames(pages);
+    return *phys ? phys_to_virt(*phys) : 0;
+#else
+    return kalloc_contig(pages, phys);
+#endif
+}
+
+/** Give back the `pages` frames `vp_run_alloc` gave at `p`. */
+static void vp_run_free(void *p, uint32_t pages)
+{
+#ifdef ARCH_DIRECT_MAP_ALL
+    uintptr_t phys = (uintptr_t)virt_to_phys(p);
+    uint32_t i;
+
+    for (i = 0; i < pages; i++) {
+        free_frame(phys + (uintptr_t)i * PAGE_SIZE);
+    }
+#else
+    kfree_pages(p, pages);
+#endif
+}
 
 /** Zeroed memory the device reads by its physical address. A page comes
  * from any memory the kernel reaches (`alloc_dma64_frame`): every address
  * of virtio 1.x is 64 bits wide, rings and buffers alike, as Linux's
  * virtio-pci sets a DMA mask of 64 bits, so the device's pages leave the
  * 64 MiB pool below HARD_MEMORY_LIMIT to the devices whose registers take
- * 32 bits. More than a page, up to VP_DMA_RUN_PAGES, is a run of
- * consecutive frames (`kalloc_contig`), for a buffer one descriptor
- * carries, given back whole. */
+ * 32 bits. More than a page is a run of consecutive frames of any length
+ * (`vp_run_alloc`), for a buffer one descriptor carries, given back whole;
+ * `dma_max` is VIRTIO_DMA_ANY. */
 static void *vp_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
 {
     uint32_t pages = bytes / PAGE_SIZE + (bytes % PAGE_SIZE != 0);
@@ -817,11 +844,11 @@ static void *vp_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
     void *frame;
 
     (void)d;
-    if (bytes == 0 || pages > VP_DMA_RUN_PAGES) {
+    if (bytes == 0) {
         return 0;
     }
     if (pages > 1) {
-        frame = kalloc_contig(pages, &phys);
+        frame = vp_run_alloc(pages, &phys);
         if (!frame) {
             return 0;
         }
@@ -844,7 +871,7 @@ static void vp_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
 {
     (void)d;
     if (bytes > PAGE_SIZE) {
-        kfree_pages(p, (bytes + PAGE_SIZE - 1u) / PAGE_SIZE);
+        vp_run_free(p, bytes / PAGE_SIZE + (bytes % PAGE_SIZE != 0));
     } else {
         free_dma64_frame(p);
     }
@@ -853,26 +880,13 @@ static void vp_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
 /**
  * The memory of a queue's rings: a page from `vp_dma_alloc`, or, for the
  * larger queue a legacy device states, a run of consecutive frames
- * (`kalloc_contig`), zeroed, since the device reads the rings as one piece
+ * (`vp_run_alloc`), zeroed, since the device reads the rings as one piece
  * by the address of their first frame; `ring_alloc` of virtio.h.
  */
 static void *vp_ring_alloc(struct virtio_dev *d, uint16_t index, uint32_t bytes, uint64_t *addr)
 {
-    uint32_t pages = (bytes + PAGE_SIZE - 1u) / PAGE_SIZE;
-    uintptr_t phys;
-    void *run;
-
     (void)index;
-    if (bytes <= PAGE_SIZE) {
-        return vp_dma_alloc(d, bytes, addr);
-    }
-    run = kalloc_contig(pages, &phys);
-    if (!run) {
-        return 0;
-    }
-    k_memset(run, 0, pages * PAGE_SIZE);
-    *addr = (uint64_t)phys;
-    return run;
+    return vp_dma_alloc(d, bytes, addr);
 }
 
 /** Shared memory region `id` from the capabilities read at attach; 0, or
@@ -1376,7 +1390,7 @@ static int vp_attach_legacy(struct virtio_pci *vp)
     vp->io_len = (uint16_t)(r.end - r.start + 1u);
     vp->dev.legacy = 1;
     vp->dev.ops = &vp_legacy_ops;
-    vp->dev.dma_max = VP_DMA_RUN_PAGES * PAGE_SIZE;
+    vp->dev.dma_max = VIRTIO_DMA_ANY;
     vp->claimed = pci_owner(p->bus, (uint8_t)(p->device << 3 | p->function)) == NULL;
     pci_enable_memory_space(&vp->pci);
     cmd = pci_read_config16(p->bus, p->device, p->function, PCI_COMMAND);
@@ -1523,7 +1537,7 @@ static int vp_probe_one(const pci_device_t *p, struct virtio_pci **out)
     }
     vp->pci = *p;
     vp->dev.ops = &vp_ops;
-    vp->dev.dma_max = VP_DMA_RUN_PAGES * PAGE_SIZE;
+    vp->dev.dma_max = VIRTIO_DMA_ANY;
     vp->dev.notify_unlocked = 1;
     vp->dev.config_atomic = 1;
     vp->dev.transport = vp;
