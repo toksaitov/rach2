@@ -1358,7 +1358,8 @@ static int fc_unlocked(void *arg)
  * had. A marked page reached, read or locked, starts the next window
  * (`fc_async_ra`) before the page is had or waited for, as
  * `filemap_get_pages` starts it before it waits on the folio's lock
- * (mm/filemap.c:2584-2593).
+ * (mm/filemap.c:2584-2593). When `p` is NULL, take only a hit that
+ * needs no wait or readahead, or return 0 and leave the cache alone.
  */
 static uintptr_t fc_get(struct open_file *ofd, const struct fc_file *f, uint32_t pgoff,
                         uint32_t last, struct fc_page **p)
@@ -1375,6 +1376,10 @@ static uintptr_t fc_get(struct open_file *ofd, const struct fc_file *f, uint32_t
         marked = locked = 0;
         flags = spin_lock_irqsave(&fc_lock);
         hit = pages ? fc_lookup(f, pgoff) : NULL;
+        if (!p && (!hit || (hit->pfn & (FC_MARK | FC_LOCK)))) {
+            spin_unlock_irqrestore(&fc_lock, flags);
+            return 0;
+        }
         if (hit) {
             marked = (hit->pfn & FC_MARK) != 0;
             hit->pfn &= ~FC_MARK;
@@ -1490,6 +1495,54 @@ static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint
         fc_free(p);
     }
     return rc != 0 ? rc : (int32_t)take;
+}
+
+int filecache_read_hit(struct open_file *ofd, char __user *buf, uint32_t count, uint64_t offset,
+                       int32_t *got)
+{
+    struct fc_file f;
+    uint64_t size;
+    uint32_t pg, in, done;
+    uintptr_t phys;
+    uint8_t *page;
+
+    if (!buckets || count == 0 || !fc_file_of(ofd->vmnt, ofd->vnode, &f)) {
+        return 0;
+    }
+    *got = 0;
+    if (offset >= f.size) {
+        return 1;
+    }
+    if (count > f.size - offset) {
+        count = (uint32_t)(f.size - offset);
+    }
+    in = (uint32_t)(offset % PAGE_SIZE);
+    if (count > PAGE_SIZE - in || (f.size - 1u) / PAGE_SIZE > 0xFFFFFFFFu) {
+        return 0;
+    }
+    pg = (uint32_t)(offset / PAGE_SIZE);
+    phys = fc_get(ofd, &f, pg, pg, NULL);
+    page = phys ? kmap_temp(phys) : NULL;
+    if (!page) {
+        if (phys) {
+            free_frame(phys);
+        }
+        return 0;
+    }
+    size = fc_size_now(ofd, f.size);
+    if (size > offset) {
+        if (count > size - offset) {
+            count = (uint32_t)(size - offset);
+        }
+        done = count - (uint32_t)copy_to_user_left(buf, page + in, count);
+        if (done > 0) {
+            ofd->ra.prev_pos = offset + done;
+        }
+        *got = done > 0 ? (int32_t)done : -EFAULT;
+    }
+    kunmap_temp(page);
+    free_frame(phys);
+    return 1;
 }
 
 int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count, uint64_t offset,

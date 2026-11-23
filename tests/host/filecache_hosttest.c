@@ -180,6 +180,12 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return -EFAULT;
 }
 
+/** No row copies past a fault. */
+size_t copy_to_user_left(void __user *dst, const void *src, size_t n)
+{
+    return copy_to_user(dst, src, n) == 0 ? 0 : n;
+}
+
 /** The kernel log; the records are dropped. */
 void klog(int level, const char *sys, const char *fmt, ...)
 {
