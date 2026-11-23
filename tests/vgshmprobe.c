@@ -655,8 +655,10 @@ static void round_trip(uint32_t bo, uint32_t bytes, const char *what)
  * resource's id, printed, lets the caller match the backend's refusal to
  * it. Then a buffer of the VM's backing, the same round trip; one of 1 GiB
  * and a page, past the largest backing the VM gives and the heap's room,
- * whose submission and map fail; DEFER_HELD buffers held untaken and then
- * named by one submission; and buffers freed before any use.
+ * whose map fails, and whose submission fails too once the refusal has come
+ * but, made before, goes with the backing still to come, as Linux's
+ * execbuffer waits on no ATTACH_BACKING; DEFER_HELD buffers held untaken
+ * and then named by one submission; and buffers freed before any use.
  */
 static void defer(void)
 {
@@ -689,8 +691,8 @@ static void defer(void)
     probe_line("VGSHMPROBE DEFER: unbacked: submission error ", dec(text, r), 0);
     probe_line("VGSHMPROBE DEFER: unbacked: map error ", dec(text, at), 0);
     bo_close(bo);
-    if (r == 0 || at == 0) {
-        fail("a resource with no backing was used");
+    if (at == 0) {
+        fail("a resource with no backing was mapped");
     }
     for (i = 0; i < DEFER_HELD; i++) {
         if (resource(PIPE_BUFFER, VIRGL_FORMAT_R8_UNORM, 4096, 1, 4096, &bos[i]) != 0) {
