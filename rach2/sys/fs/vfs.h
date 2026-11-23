@@ -1311,10 +1311,9 @@ void vfs_write_unlock(const struct vfs_ref *ref);
  * Hold and lock the node named `name` in the directory `dir`, whose lock
  * (`vfs_node_lock`) the caller holds, into `child`, on a type that sets
  * `file_locked`, so that a check of the node's owner or flags and the change
- * it allows see one node. 0 with `child->node` NULL on any other type and
- * for a name the directory does not have, 0 with the node held and locked,
- * or the lookup's error. The caller gives both back with
- * `vfs_child_unlock`.
+ * it allows see one node. 0 with `child->node` NULL on any other type, 0
+ * with the node held and locked, or the lookup's error, including -ENOENT
+ * when the name is absent. The caller gives both back with `vfs_child_unlock`.
  */
 int vfs_child_lock(const struct vfs_ref *dir, const char *name, struct vfs_ref *child);
 /** Unlock and put what `vfs_child_lock` gave `child`, if anything, and
@@ -1886,8 +1885,10 @@ uint64_t vfs_data_at(struct vfs_mount *mnt, void *handle, uint64_t offset, uint6
  * append-only, or the type's error. A file that backs a loop device loses
  * its name and the attachment's open keeps the node, as Linux's loop device
  * keeps the inode; the KRFFS root, whose attachment holds no count, is
- * refused by the caller (`unlink_root_name`). */
-int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name);
+ * refused by the caller (`unlink_root_name`). If `missing` is set, the
+ * caller has already found that the name is absent and still holds the
+ * directory's node lock. */
+int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name, int missing);
 /** The type's mkdir of `name` in `dir`: 0, -EROFS for a type without
  * `mkdir`, or the type's error. */
 int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode);
