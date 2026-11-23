@@ -227,6 +227,14 @@ struct vd {
     uint8_t *cmd;     /* a chain's readable part, cmd_cap bytes, grown to a chain's */
     uint32_t cmd_cap; /* at most offer.limits.max_cmd */
     uint32_t room;    /* the writable bytes of the chain being served */
+    /* The stream a SUBMIT_3D with VGS_FLAG_JOINED takes, joined from its
+     * VGS_CMD_PART chains (vgpushm.h): join_total bytes allocated at the
+     * first part, join_len of them come; join_err is the refusal of a part
+     * that broke it, which the SUBMIT_3D answers; join_ctx its context. */
+    uint8_t *join;
+    uint64_t join_len, join_total;
+    uint32_t join_err, join_ctx;
+    int join_open; /* a stream was begun and not yet submitted */
     uint8_t resp[VD_RESP_MAX];
     const struct vd_ops *ops;
     void *cookie;

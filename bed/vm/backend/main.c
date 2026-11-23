@@ -364,7 +364,7 @@ static void make_offer(struct vd_offer *f, const struct src *s, const struct opt
     if (edid) {
         f->features |= 1ULL << VD_F_EDID;
     }
-    f->transport_features = VGS_TF_BEAT | (s->efd[0] >= 0 ? VGS_TF_DOORBELL : 0);
+    f->transport_features = VGS_TF_BEAT | VGS_TF_PARTS | (s->efd[0] >= 0 ? VGS_TF_DOORBELL : 0);
     /* Page lists need the module, which pins blobs and backings, and Rach2
        finds the VM by its doorbell. */
     if (s->dev >= 0 && s->efd[0] >= 0 && !o->nopages) {
@@ -715,11 +715,12 @@ int main(int argc, char **argv)
     dev.ring_cookie = &s;
     dev.verbose = o.verbose;
     dev.profile = o.profile ? &profile : NULL;
-    fprintf(stderr, "backend: serving %llu bytes as peer %u, %s%s%s, %u capsets, %s\n",
+    fprintf(stderr, "backend: serving %llu bytes as peer %u, %s%s%s%s, %u capsets, %s\n",
             (unsigned long long)s.size, (unsigned)off.peer,
             off.transport_features & VGS_TF_DOORBELL ? "doorbells" : "polling",
             off.transport_features & VGS_TF_PAGES ? ", page lists" : "",
-            off.transport_features & VGS_TF_BACKING ? ", backings" : "", (unsigned)off.num_capsets,
+            off.transport_features & VGS_TF_BACKING ? ", backings" : "",
+            off.transport_features & VGS_TF_PARTS ? ", parts" : "", (unsigned)off.num_capsets,
             k ? "on the display" : "no display");
     stall_start(&dev);
     beat_start(&beater, &dev);
