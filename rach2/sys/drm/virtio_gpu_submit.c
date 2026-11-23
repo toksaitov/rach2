@@ -68,14 +68,41 @@ static void submit_done(struct virtio_gpu_cmd *cmd)
 #define VIRGL_CCMD_COPY_TRANSFER3D       45u
 #define VIRGL_BOX_DWORDS                 11u
 
-/** Dword `i` of the command buffer in `cmd`'s payload, which holds it a page
- * at a time. */
-static uint32_t payload_dword(const struct virtio_gpu_cmd *cmd, uint32_t i)
-{
-    uint32_t off = i * 4u;
+/* The command stream submit_copied reads: `cmd`'s payload pages, or, for a
+ * stream that goes in parts (`vgpu_cmd_parts`) and so has no pages yet,
+ * the caller's memory, a page at a time through `window`. */
+struct submit_stream {
+    const struct virtio_gpu_cmd *cmd;
+    uint8_t *window; /* a page of the caller's stream, or NULL */
+    uint32_t base;   /* the stream's offset of `window` */
+    uint32_t have;   /* bytes of the stream in `window`, 0 for none */
+    int failed;      /* a read of the caller's memory faulted */
+};
 
-    return *(const uint32_t *)(const void *)((const uint8_t *)cmd->payload[off / PAGE_SIZE].page +
-                                             off % PAGE_SIZE);
+/** Dword `i` of the stream `st`, whose `4 * i + 4` bytes the stream holds;
+ * 0, with `failed` set, where the caller's memory cannot be read. */
+static uint32_t payload_dword(struct submit_stream *st, uint32_t i)
+{
+    const struct virtio_gpu_cmd *cmd = st->cmd;
+    uint32_t off = i * 4u, size = cmd->stream_bytes;
+
+    if (!cmd->stream_bytes) {
+        return *(
+            const uint32_t *)(const void *)((const uint8_t *)cmd->payload[off / PAGE_SIZE].page +
+                                            off % PAGE_SIZE);
+    }
+    if (off < st->base || off - st->base >= st->have) {
+        st->base = off & ~(uint32_t)(PAGE_SIZE - 1u);
+        st->have = size - st->base < PAGE_SIZE ? size - st->base : PAGE_SIZE;
+        if (copy_from_user(st->window,
+                           (const void __user *)(uintptr_t)(cmd->stream_user + st->base),
+                           st->have)) {
+            st->have = 0;
+            st->failed = 1;
+            return 0;
+        }
+    }
+    return *(const uint32_t *)(const void *)(st->window + (off - st->base));
 }
 
 /* A listed buffer's resource and format, which submit_copied looks up by
@@ -123,13 +150,13 @@ static void box_res_sort(struct vgpu_box_res *t, uint32_t n)
     }
 }
 
-/** The bytes of the box of the copy whose header is dword `i` of `cmd`'s
- * command buffer, at the format of its resource, which must be one of the
+/** The bytes of the box of the copy whose header is dword `i` of the
+ * stream `st`, at the format of its resource, which must be one of the
  * `n` entries of the sorted table `t`; 0 otherwise. */
-static uint64_t submit_box_bytes(const struct virtio_gpu_cmd *cmd, const struct vgpu_box_res *t,
-                                 uint32_t n, uint32_t i)
+static uint64_t submit_box_bytes(struct submit_stream *st, const struct vgpu_box_res *t, uint32_t n,
+                                 uint32_t i)
 {
-    uint32_t res = payload_dword(cmd, i + 1), lo = 0, hi = n, mid;
+    uint32_t res = payload_dword(st, i + 1), lo = 0, hi = n, mid;
 
     while (lo < hi) {
         mid = lo + (hi - lo) / 2u;
@@ -142,24 +169,26 @@ static uint64_t submit_box_bytes(const struct virtio_gpu_cmd *cmd, const struct 
     if (lo == n || t[lo].res_id != res) {
         return 0;
     }
-    return vgpu_box_bytes(t[lo].format, payload_dword(cmd, i + 9), payload_dword(cmd, i + 10),
-                          payload_dword(cmd, i + 11));
+    return vgpu_box_bytes(t[lo].format, payload_dword(st, i + 9), payload_dword(st, i + 10),
+                          payload_dword(st, i + 11));
 }
 
 /**
  * Set `cmd->copied` to the bytes that submission `s`, whose `size` bytes of
- * commands are in `cmd`'s payload, has the device copy, when the file's
- * context `ctx` speaks virgl. Mesa's virgl encodes its uploads and readbacks
- * in the submission when the host offers encoded transfers, as TRANSFER3D
- * from a resource's backing or COPY_TRANSFER3D from a staging buffer, and
- * small ones as RESOURCE_INLINE_WRITE; each box counts at its resource's
- * format. A Venus or native context's stream is another protocol and counts
- * nothing. Each copy looks its resource up by binary search in a sorted copy
- * of the buffer list, so a parse costs commands times log buffers; Linux
- * sends the commands unread and allocates nothing to count them
- * (virtgpu_submit.c:308, :355, :421 of 6.12.115). The count never fails the
- * submission: when the sorted copy cannot be allocated, the submission
- * counts nothing.
+ * commands are in `cmd`'s payload or, for a stream that goes in parts, in
+ * the caller's memory, has the device copy, when the file's context `ctx`
+ * speaks virgl. Mesa's virgl encodes its uploads and readbacks in the
+ * submission when the host offers encoded transfers, as TRANSFER3D from a
+ * resource's backing or COPY_TRANSFER3D from a staging buffer, and small
+ * ones as RESOURCE_INLINE_WRITE; each box counts at its resource's format.
+ * A Venus or native context's stream is another protocol and counts
+ * nothing. Each copy looks its resource up by binary search in a sorted
+ * copy of the buffer list, so a parse costs commands times log buffers;
+ * Linux sends the commands unread and allocates nothing to count them
+ * (virtgpu_submit.c:308, :355, :421 of 6.12.115). The count never fails
+ * the submission: when the sorted copy or a page for the caller's stream
+ * cannot be allocated, or the caller's stream cannot be read, which the
+ * parts' copy then answers with EFAULT, the submission counts nothing.
  */
 static void submit_copied(struct virtio_gpu_cmd *cmd, const struct vgpu_submit *s,
                           const struct vgpu_context *ctx, uint32_t size)
@@ -167,6 +196,7 @@ static void submit_copied(struct virtio_gpu_cmd *cmd, const struct vgpu_submit *
     uint32_t n = size / 4u, i = 0, k, nt = 0, hdr, op, len;
     uint32_t capset = ctx->context_init & VIRTIO_GPU_CONTEXT_INIT_CAPSET_ID_MASK;
     uint64_t bytes = 0, box;
+    struct submit_stream st;
     struct vgpu_box_res *t;
     struct virtio_gpu_object *bo;
 
@@ -175,8 +205,17 @@ static void submit_copied(struct virtio_gpu_cmd *cmd, const struct vgpu_submit *
         !s->nbos || (uint64_t)s->nbos * sizeof(*t) > (uint64_t)(size_t)-1) {
         return;
     }
+    k_memset(&st, 0, sizeof(st));
+    st.cmd = cmd;
+    if (cmd->stream_bytes) {
+        st.window = kmalloc(PAGE_SIZE);
+        if (!st.window) {
+            return;
+        }
+    }
     t = kmalloc((size_t)s->nbos * sizeof(*t));
     if (!t) {
+        kfree(st.window);
         return;
     }
     for (k = 0; k < s->nbos; k++) {
@@ -188,14 +227,14 @@ static void submit_copied(struct virtio_gpu_cmd *cmd, const struct vgpu_submit *
         }
     }
     box_res_sort(t, nt);
-    while (i < n) {
-        hdr = payload_dword(cmd, i);
+    while (i < n && !st.failed) {
+        hdr = payload_dword(&st, i);
         op = hdr & 0xffu;
         len = hdr >> 16;
         if ((op == VIRGL_CCMD_TRANSFER3D || op == VIRGL_CCMD_COPY_TRANSFER3D ||
              op == VIRGL_CCMD_RESOURCE_INLINE_WRITE) &&
             len >= VIRGL_BOX_DWORDS && len < n - i) {
-            box = submit_box_bytes(cmd, t, nt, i);
+            box = submit_box_bytes(&st, t, nt, i);
             if (bytes + box >= bytes) {
                 bytes += box;
             }
@@ -203,7 +242,8 @@ static void submit_copied(struct virtio_gpu_cmd *cmd, const struct vgpu_submit *
         i += 1u + len;
     }
     kfree(t);
-    cmd->copied = bytes;
+    kfree(st.window);
+    cmd->copied = st.failed ? 0 : bytes;
 }
 
 /**
@@ -549,6 +589,9 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
         goto out;
     }
     rc = submit_dependencies(vg, file, s, context);
+    if (!rc) {
+        rc = vgpu_cmd_parts(cmd);
+    }
     if (rc) {
         goto out;
     }

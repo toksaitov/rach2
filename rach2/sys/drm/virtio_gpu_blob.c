@@ -831,7 +831,8 @@ static int32_t blob_verify(struct virtio_gpu_device *vg,
 /**
  * Queue the commands a blob of host memory is made from, `size` bytes at
  * the user's `user`, as a SUBMIT_3D in the file's context, ahead of the
- * CREATE_BLOB that names them by blob id. 0, -ENOMEM, -EFAULT or -E2BIG.
+ * CREATE_BLOB that names them by blob id. 0, -ENOMEM, -EFAULT, -ENODEV,
+ * or -EINTR at SIGKILL between the parts of a long stream.
  */
 static int32_t blob_commands(struct virtio_gpu_device *vg, uint32_t ctx_id, uint64_t user,
                              uint32_t size)
@@ -848,6 +849,9 @@ static int32_t blob_commands(struct virtio_gpu_device *vg, uint32_t ctx_id, uint
     req->hdr.ctx_id = ctx_id;
     req->size = size;
     rc = vgpu_cmd_payload(cmd, user, size, 0);
+    if (rc == 0) {
+        rc = vgpu_cmd_parts(cmd);
+    }
     if (rc != 0) {
         vgpu_cmd_free(cmd);
         return rc;

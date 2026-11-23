@@ -605,10 +605,13 @@ struct virtio_gpu_cmd {
     int fence_listed; /* on the device's list of unsignalled fences */
     int done;
     int waited;
-    int sleepable; /* its sender may sleep: the notify lets the big lock go */
-    int quiet;     /* published with no notify; a later command's carries it */
-    int joined;    /* its stream went ahead in parts (VGS_TF_PARTS): it holds
-                      the device's `join_lock` until it is started or freed */
+    int sleepable;         /* its sender may sleep: the notify lets the big lock go */
+    int quiet;             /* published with no notify; a later command's carries it */
+    int joined;            /* its stream went ahead in parts (VGS_TF_PARTS): it holds
+                              the device's `join_lock` until it is started or freed */
+    uint64_t stream_user;  /* with `stream_bytes`, the caller's stream that
+                              goes in parts at `vgpu_cmd_parts` */
+    uint32_t stream_bytes; /* that stream's bytes, 0 for a payload of pages */
     void (*complete)(struct virtio_gpu_cmd *cmd);
     void *arg; /* for `complete` */
 };
@@ -911,9 +914,18 @@ void vgpu_cmd_give_up(struct virtio_gpu_cmd *cmd);
  * Give `cmd` a payload of `bytes`: the user's command stream at `user`, or
  * pages for the device's answer when `response` is nonzero. 0 or -errno.
  * The payload's pages reach the device with the command, but for a stream
- * the device joins from parts it sends first (VGS_TF_PARTS). Process
+ * the device joins from parts (VGS_TF_PARTS), which only notes the stream
+ * in `stream_user` and `stream_bytes` for `vgpu_cmd_parts`. Process
  * context; may sleep. */
 int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes, int response);
+/*
+ * Send the parts of the stream `vgpu_cmd_payload` noted for `cmd`, if any,
+ * right before `cmd` is sent: from here `cmd` holds the device's
+ * `join_lock` until it is started or freed, so its sender calls this after
+ * every wait for another submission's fence. 0 or -errno, as
+ * `vgpu_cmd_payload` gives them, and EINTR at SIGKILL. Process context;
+ * may sleep. */
+int32_t vgpu_cmd_parts(struct virtio_gpu_cmd *cmd);
 /** Copy `bytes` of a completed response after its header to `to`; 0 or
  * -EIO when the response is shorter. */
 int32_t vgpu_caps_copy(struct virtio_gpu_cmd *cmd, unsigned char *to, uint32_t bytes);
