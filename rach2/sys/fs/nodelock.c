@@ -103,7 +103,7 @@ int vfs_child_lock(const struct vfs_ref *dir, const char *name, struct vfs_ref *
     }
     rc = base->type->ops->lookup(base, ref_node(dir), name, &found);
     if (rc != 0) {
-        return rc == -ENOENT ? 0 : rc;
+        return rc;
     }
     child->node = found;
     sleep_lock_subclass(2);

@@ -3540,20 +3540,16 @@ static int inode_read_only(struct vfs_mount *mnt, uint32_t mode, int want)
            (vfs_sb_rdonly(mnt) || halted_root_mount(mnt));
 }
 
-int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real)
+/** Apply inode permission checks to the attributes already read from `r`. */
+static int32_t cred_access_attrs(const struct vfs_ref *r, const struct vfs_stat *st, int want,
+                                 int use_real)
 {
-    struct vfs_stat st;
-    int rc = vfs_getattr(r->mnt, r->node, &st);
-
-    if (rc != 0) {
-        return rc;
-    }
-    if (inode_read_only(r->mnt, st.mode, want))
+    if (inode_read_only(r->mnt, st->mode, want))
         return -EROFS;
-    if ((want & CRED_W) && st.flags_known && (st.flags & VFS_FL_IMMUTABLE)) {
+    if ((want & CRED_W) && st->flags_known && (st->flags & VFS_FL_IMMUTABLE)) {
         return -EPERM; /* before the mode, as Linux's inode_permission */
     }
-    if ((want & CRED_X) && (st.mode & 0170000u) != 0040000u && !(st.mode & 0111u)) {
+    if ((want & CRED_X) && (st->mode & 0170000u) != 0040000u && !(st->mode & 0111u)) {
         return -EACCES;
     }
     if (r->mnt->type == &vfs_procfs_type) {
@@ -3561,7 +3557,15 @@ int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real)
         if (own)
             return proc_held_dir_permission(vfs_synth_vpath(r->mnt, r->node), own, want, use_real);
     }
-    return vfs_may_access(r->mnt, r->node, &st, want, use_real);
+    return vfs_may_access(r->mnt, r->node, st, want, use_real);
+}
+
+int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real)
+{
+    struct vfs_stat st;
+    int rc = vfs_getattr(r->mnt, r->node, &st);
+
+    return rc == 0 ? cred_access_attrs(r, &st, want, use_real) : rc;
 }
 
 /** Whether the inode flags of `node` on `mnt` forbid a change of its size,
@@ -5210,7 +5214,7 @@ static int open_mounted_node(struct vfs_ref *ref, int flags)
         }
         want |= CRED_W;
     }
-    rc = (int)cred_access_ref(ref, want, 0);
+    rc = (int)cred_access_attrs(ref, &vst, want, 0);
     if (rc != 0) {
         vfs_ref_release(ref);
         return rc;
@@ -6571,7 +6575,7 @@ static int32_t open_unlocked(int dirfd, const char *raw, int flags)
     } else if ((st.mode & S_IFMT) != S_IFDIR && (flags & O_DIRECTORY)) {
         rc = -ENOTDIR;
     } else {
-        rc = cred_access_ref(&ref, CRED_R, 0);
+        rc = cred_access_attrs(&ref, &st, CRED_R, 0);
     }
     if (rc != 0) {
         vfs_name_put(entry);
@@ -6604,7 +6608,7 @@ static int32_t open_unlocked(int dirfd, const char *raw, int flags)
  */
 static int32_t open_from_user(int dirfd, const char __user *upath, int flags, uint32_t mode)
 {
-    char *path, *raw;
+    char *path;
     int end, big;
     int32_t rc;
 
@@ -6618,31 +6622,30 @@ static int32_t open_from_user(int dirfd, const char __user *upath, int flags, ui
     if (!upath) {
         return -EFAULT;
     }
-    rc = user_text(upath, &raw);
+    rc = user_text(upath, &path);
     if (rc != 0) {
         return rc;
     }
     big = !bkl_held();
-    rc = big ? open_unlocked(dirfd, raw, flags) : CALL_LOCKED;
+    rc = big ? open_unlocked(dirfd, path, flags) : CALL_LOCKED;
     if (rc != CALL_LOCKED) {
-        path_buf_put(raw);
+        path_buf_put(path);
         return rc;
     }
     if (big) {
         bkl_enter();
     }
-    rc = path_from_text_dir(dirfd, raw, &path, &end);
-    if (rc == 0) {
+    rc = join_path_at(path, VFS_PATH_MAX, dirfd, (int)k_strlen(path), &end);
+    if (rc >= 0) {
         rc = open_named(path_name(path), flags, mode, end);
         if (rc >= 0 && !open_is_tmpfile(flags)) {
             open_done(rc, path_name(path), flags);
         }
-        path_buf_put(path);
     }
+    path_buf_put(path);
     if (big) {
         bkl_exit();
     }
-    path_buf_put(raw);
     return rc;
 }
 
@@ -19861,7 +19864,7 @@ static int32_t unlink_root_name(const struct vfs_ref *parent, const char *leaf, 
         }
         return 0;
     }
-    return vfs_unlink_name(parent->mnt, parent->node, leaf);
+    return vfs_unlink_name(parent->mnt, parent->node, leaf, 0);
 }
 
 /**
@@ -19891,7 +19894,8 @@ static int32_t unlink_root_name(const struct vfs_ref *parent, const char *leaf, 
  * under them (`dir_recheck`). With every lock of the removal held, and
  * before it, the removal checks that nothing has changed what a path names
  * since the walk (`walk_handoff`), and runs again from the walk when
- * something has.
+ * something has. An absent name has no owner, flags or watch to read.
+ * The directory stays locked through the file system's unlink.
  */
 static int32_t unlink_named(const char *path, int end)
 {
@@ -19933,23 +19937,25 @@ again:
         rc = unlink_root_name(&parent, leaf, end == PATH_END_SLASH, &st);
     } else {
         struct vfs_ref victim;
+        int missing;
 
         vfs_name_lock_changes(parent.mnt);
         vfs_node_lock(&parent);
         rc = vfs_child_lock(&parent, leaf, &victim);
-        if (rc == 0) {
+        missing = rc == -ENOENT;
+        if (rc == 0 || missing) {
             rc = dir_recheck(&parent, leaf, RECHECK_WRITE | RECHECK_MOUNT, &st);
         }
         if (rc == 0 && end == PATH_END_SLASH) {
             rc = leaf_dir_check(&parent, leaf);
             rc = rc == 0 ? -EISDIR : rc;
         } else if (rc == 0) {
-            rc = cred_remove_ref(&parent, leaf);
+            rc = missing ? 0 : cred_remove_ref(&parent, leaf);
             if (rc == 0) {
                 rc = walk_handoff(&st);
             }
             if (rc == 0) {
-                rc = vfs_unlink_name(parent.mnt, parent.node, leaf);
+                rc = vfs_unlink_name(parent.mnt, parent.node, leaf, missing);
             }
         }
         vfs_child_unlock(&victim);
@@ -20580,7 +20586,7 @@ again:
         vfs_name_lock_changes(parent.mnt);
         vfs_node_lock(&parent);
         rc = vfs_child_lock(&parent, leaf, &victim);
-        if (rc == 0) {
+        if (rc == 0 || rc == -ENOENT) {
             rc = dir_recheck(&parent, leaf, RECHECK_WRITE | RECHECK_MOUNT | RECHECK_ROOT, &st);
         }
         if (rc == 0) {
