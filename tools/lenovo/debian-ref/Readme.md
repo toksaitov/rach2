@@ -13,7 +13,7 @@ In order, from the repository's root on the Mac:
 | Rehearse | `sh tools/lenovo/debian-ref/mac.sh rehearse-up`, then `push` and the script steps below with `REHEARSE=1`, then `rehearse-down` | the guest's `/proc/cmdline` ends in `intel_iommu=off`; every script ends; steps that need the GPU, KVM or the game print why they skip |
 | Take the machine | `mac.sh lock` | "lock taken for 2560" |
 | Boot Debian | `mac.sh arm`, `mac.sh wait-debian` | `p1-before.sha256` saved; "staged" and "armed" from bootctl; Debian answers about 40 s after the reboot |
-| Copy | `mac.sh push` | three "OK" lines from `sha256sum -c` |
+| Copy | `mac.sh push` | the private Wayland runtime directory exists for `gfx`; three "OK" lines from `sha256sum -c` |
 | Facts | `mac.sh run facts boot` | `intel_iommu=off` on the command line, no IOMMU group, i915 with a `stolen-system` region |
 | Packages | `mac.sh run setup` | Mesa, the kernel and the browsers unchanged in `packages-diff.txt` |
 | KVM exits | `mac.sh run kvm-unit` | each `vmexit_*` case PASS, with its cycles, three rounds |

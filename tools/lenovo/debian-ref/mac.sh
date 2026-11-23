@@ -106,6 +106,7 @@ push)
 	# The games' fixed replays are the games layer's, which Rach2 plays too.
 	tar --no-xattrs --no-mac-metadata -cf - -C $T/vendor/gnu/games replays | tssh 'tar xf - -C /root/ref80'
 	[ "${REHEARSE:-0}" = 1 ] && tssh 'touch /root/ref80/rehearse'
+	tssh 'set -e; . /root/ref80/lib.sh; gfx true'
 	cut -d' ' -f3 $D/SHA256SUMS | while read -r f; do
 		tssh "test -s /srv/ref80/cache/$f" < /dev/null 2> /dev/null || cat $C/$f | tssh "cat > /srv/ref80/cache/$f"
 	done
