@@ -524,8 +524,8 @@ done
 # QEMU's firmware entry opt/rach2/vgpu-profile, which bed-shm.sh gives with
 # BED_VM_PROFILE_PORT, has the backend count into /run/vgpu-profile, and
 # read back each flush with its CRC when the entry is 1. The second serial
-# port, which only Rach2's test of the backend's loss gives the VM, arms the
-# hold that its row of a long command asks for.
+# port, which bed-shm.sh gives the VM, arms the hold that its row of a long
+# command asks for.
 set --
 modprobe qemu_fw_cfg 2> /dev/null || :
 cfg=/sys/firmware/qemu_fw_cfg/by_name/opt/rach2/vgpu-profile/raw
@@ -672,9 +672,11 @@ sudo tee /usr/local/sbin/bed-vm-control > /dev/null <<'RUN'
 # them: `stop`, `cont` and `kill` send it SIGSTOP, SIGCONT and SIGKILL,
 # `hold` sends it SIGUSR2, which has it hold the next new backing 45 s,
 # and `refuse` SIGWINCH, which has it refuse the next new backing, both
-# under the -H that bed-vm-backend gives it when this port is there, and
-# `start` starts its service again. Each done is said on the console as
-# `bed-vm: control: WORD: done`. A VM without the port has nothing to do.
+# under the -H that bed-vm-backend gives it when this port is there,
+# `term` sends it SIGTERM, which has it print its `backend: result:` lines
+# and end, and `start` starts its service again. Each done is said on the
+# console as `bed-vm: control: WORD: done`. A VM without the port has
+# nothing to do.
 stty -F /dev/ttyS1 raw -echo 2> /dev/null || exit 0
 exec < /dev/ttyS1
 stty raw -echo
@@ -685,6 +687,7 @@ while read -r word; do
         kill) pkill -KILL -x vgpu-backend ;;
         hold) pkill -USR2 -x vgpu-backend ;;
         refuse) pkill -WINCH -x vgpu-backend ;;
+        term) pkill -TERM -x vgpu-backend ;;
         start) systemctl restart bed-vm-backend.service ;;
         *) echo "bed-vm: control: $word: unknown" > /dev/ttyS0; continue ;;
     esac
