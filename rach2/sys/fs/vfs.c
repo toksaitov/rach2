@@ -467,9 +467,9 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
  * file-system ones (`proc_fsuid`, `proc_fsgid`); `use_real` judges by the
  * real ids, for access(2). A node of a type without `getattr` is
  * searchable, and so is every directory to the kernel when no process
- * runs.
+ * runs. With `mode` given, record the directory mode used for the check.
  */
-static int may_search(struct vfs_mount *mnt, void *node, int use_real)
+static int may_search(struct vfs_mount *mnt, void *node, int use_real, uint32_t *mode)
 {
     const struct vpath *vp = mnt->type->ops->lookup_rest ? vfs_synth_vpath(mnt, node) : NULL;
     struct vfs_stat st;
@@ -496,6 +496,9 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real)
     }
     if (!VFS_IS_DIR(st.mode)) {
         return -ENOTDIR;
+    }
+    if (mode) {
+        *mode = st.mode;
     }
     if (!current_proc) {
         return 0;
@@ -2179,7 +2182,7 @@ static int walk_finish(const struct vfs_ref *cur, int flags)
         return -EIO;
     }
     return (flags & VFS_WALK_PARENT)
-               ? may_search(cur->mnt, cur->node, (flags & VFS_WALK_REAL_IDS) != 0)
+               ? may_search(cur->mnt, cur->node, (flags & VFS_WALK_REAL_IDS) != 0, NULL)
                : 0;
 }
 
@@ -2228,26 +2231,11 @@ static void cached_put(struct vfs_mount *mnt, void *node)
     }
 }
 
-/** Record the directory entry `leaf` of `parent` in `*entry` when `found`,
- * the walk's last node, is a regular file, as `walk_record_entry` does for
- * the full walk; `seq` is the walk sequence the walk began at
- * (`vfs_seq_read`). 0, or nonzero with nothing recorded, for the full walk. */
-static int cached_entry(const struct vfs_ref *parent, void *found, const char *leaf, uint64_t seq,
-                        struct vfs_name **entry)
-{
-    struct vfs_stat st;
-    int rc = parent->mnt->type->ops->getattr(mount_base(parent->mnt), found, &st);
-
-    if (rc != 0 || (st.mode & 0170000u) != 0100000u) {
-        return rc;
-    }
-    return vfs_name_capture_at(parent, leaf, seq, entry);
-}
-
-/* Where the cached walk records the last name's entry, NULL for nowhere,
- * and the walk sequence it began at (`vfs_seq_read`). */
+/* The last name's optional entry, the current directory's mode and the
+ * sequence the walk began at (`vfs_seq_read`). */
 struct cached_record {
     struct vfs_name **entry;
+    uint32_t mode;
     uint64_t seq;
 };
 
@@ -2257,24 +2245,26 @@ struct cached_record {
 /**
  * The cached walk's checks on `found`, the node of the name `leaf` it just
  * looked up in `cur`, with `rest` the path after it: 0, with a regular
- * file's entry recorded at the last name as `rec` asks (`cached_entry`);
+ * file's entry recorded at the last name as `rec` asks;
  * WALK_LINK, with `found` held, for a symbolic link the walk follows,
  * which fs.protected_symlinks allows at the last name (`may_follow_link`),
  * as Linux's pick_link asks (fs/namei.c:1837); or WALK_FULL, with `found`
  * put, for a link it refuses, a failed `getattr` or an entry it cannot
- * record.
+ * record, including a lookup for O_CREAT in a sticky directory.
  */
 static int cached_found(const struct vfs_ref *cur, void *found, const char *leaf, const char *rest,
                         int flags, const struct cached_record *rec)
 {
     struct vfs_stat st;
+    int record = rec->entry && !*rest;
 
-    if (cur->mnt->type->ops->readlink) {
+    if (cur->mnt->type->ops->readlink || record) {
         if (cur->mnt->type->ops->getattr(mount_base(cur->mnt), found, &st) != 0) {
             cached_put(cur->mnt, found);
             return WALK_FULL;
         }
-        if ((st.mode & VFS_S_IFMT) == VFS_S_IFLNK && (*rest || !(flags & VFS_WALK_NOFOLLOW))) {
+        if (cur->mnt->type->ops->readlink && (st.mode & VFS_S_IFMT) == VFS_S_IFLNK &&
+            (*rest || !(flags & VFS_WALK_NOFOLLOW))) {
             if (*rest ||
                 may_follow_link(cur->mnt, cur->node, &st, (flags & VFS_WALK_REAL_IDS) != 0) == 0) {
                 return WALK_LINK;
@@ -2283,9 +2273,12 @@ static int cached_found(const struct vfs_ref *cur, void *found, const char *leaf
             return WALK_FULL;
         }
     }
-    if (rec->entry && !*rest && cached_entry(cur, found, leaf, rec->seq, rec->entry) != 0) {
-        cached_put(cur->mnt, found);
-        return WALK_FULL;
+    if (record && (st.mode & VFS_S_IFMT) == VFS_S_IFREG) {
+        if (((flags & VFS_WALK_CREATE) && (rec->mode & 01000u)) ||
+            vfs_name_capture_at(cur, leaf, rec->seq, rec->entry) != 0) {
+            cached_put(cur->mnt, found);
+            return WALK_FULL;
+        }
     }
     return 0;
 }
@@ -2499,7 +2492,8 @@ static void cached_dots_push(struct cached_dots *dd, const struct vfs_ref *cur)
 /**
  * Move the cached walk at `cur` to `found`, held, on the same mount, and
  * cross the mounts over it (`cached_cross`); the directory it leaves is
- * kept in `dd` for a `..`. A file bound over the last name's entry in
+ * kept in `dd` for a `..`, or put if `dd` is NULL, in which case one entry
+ * on the mount covers both nodes. A file bound over the last name's entry in
  * `*entry` moves the walk onto another mount, which the entry does not
  * name, so the entry is dropped, as the full walk's `walk_record_cross`
  * drops it and Linux's `__follow_mount_rcu` replaces the mount and the
@@ -2512,11 +2506,15 @@ static int cached_move(struct vfs_ref *cur, void *found, struct vfs_name **entry
 {
     struct vfs_mount *from = cur->mnt;
 
-    if (vfs_enter(cur->mnt) != 0) {
-        cached_put(cur->mnt, found);
-        return WALK_FULL;
+    if (dd) {
+        if (vfs_enter(cur->mnt) != 0) {
+            cached_put(cur->mnt, found);
+            return WALK_FULL;
+        }
+        cached_dots_push(dd, cur);
+    } else {
+        cached_put(cur->mnt, cur->node);
     }
-    cached_dots_push(dd, cur);
     cur->node = found;
     if (cached_cross(cur) != 0) {
         return WALK_FULL;
@@ -2594,12 +2592,13 @@ static int cached_dotdot(struct vfs_ref *cur, struct cached_dots *dd)
  * Take the name `comp` at `cur` in the cached walk when it names no entry
  * of the directory: `.`, `..` (`cached_dotdot`), or a nameless mount, from
  * its parent's root (`cached_named`), whose root the walk moves to, keeping
- * `cur` in `dd`, and crosses the mounts over that root (`cached_cross`), as
- * the full walk's `walk_enter` does and Linux's `__follow_mount_rcu` follows
+ * `cur` in `dd` when given, and crosses the mounts over that root
+ * (`cached_cross`), as the full walk's `walk_enter` does and Linux's
+ * `__follow_mount_rcu` follows
  * mounts stacked on a mount's root (fs/namei.c:1544). 0 when taken; -1 for
  * any other name, which the caller looks up; or WALK_FULL, with `cur` held
  * where the walk reached and `dd` keeping what it kept, for the caller to
- * let go of both.
+ * let go of both. With no `dd`, `..` goes to the full walk.
  */
 static int cached_dots_step(struct vfs_ref *cur, const char *comp, struct cached_dots *dd)
 {
@@ -2610,11 +2609,16 @@ static int cached_dots_step(struct vfs_ref *cur, const char *comp, struct cached
         return 0;
     }
     if (streq(comp, "..")) {
-        return cached_dotdot(cur, dd);
+        return dd ? cached_dotdot(cur, dd) : WALK_FULL;
     }
     rc = cur->node == cur->mnt->root ? cached_named(cur->mnt, comp, &next) : 0;
     if (rc == WALK_NAMED) {
-        cached_dots_push(dd, cur);
+        if (dd) {
+            cached_dots_push(dd, cur);
+        } else {
+            cached_put(cur->mnt, cur->node);
+            vfs_leave(cur->mnt);
+        }
         *cur = next;
         return cached_cross(cur);
     }
@@ -2676,6 +2680,14 @@ static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struc
     return 0;
 }
 
+/** Release the directories and path pages the cached walk kept. */
+static void cached_walk_drop(struct cached_dots *dd, const struct cached_links *lk)
+{
+    cached_dots_drop(dd);
+    path_buf_put(lk->linkpath);
+    path_buf_put(lk->target);
+}
+
 /**
  * Resolve `path` from the name cache alone, without the big lock, as Linux
  * first walks a path under RCU and walks it again with references when that
@@ -2708,7 +2720,9 @@ static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struc
  * before it leaves RCU (fs/namei.c `try_to_unlazy` and `complete_walk` in
  * 6.12); a change, a mount, a rename, or a chroot or chdir of a thread that
  * shares the caller's root and working directory, sends the path to the full
- * walk.
+ * walk. With VFS_WALK_CREATE, this is the positive lookup for O_CREAT.
+ * It uses the full walk for `..` so it can reuse the same mount entry
+ * across components.
  */
 static int resolve_cached(const struct vfs_ref *start, uint64_t seq, const char *path, int flags,
                           struct vfs_ref *out, struct vfs_name **entry)
@@ -2719,6 +2733,7 @@ static int resolve_cached(const struct vfs_ref *start, uint64_t seq, const char 
     struct cached_record rec;
     struct cached_links lk;
     struct cached_dots dd;
+    struct cached_dots *keep = (flags & VFS_WALK_CREATE) ? NULL : &dd;
     uint32_t found_names = 0;
     int rc;
 
@@ -2726,6 +2741,7 @@ static int resolve_cached(const struct vfs_ref *start, uint64_t seq, const char 
     dd.n = 0;
     dd.seq = seq;
     rec.entry = entry;
+    rec.mode = 0;
     rec.seq = seq;
     if (cached_start(start, path, &cur, &lk.root) != 0) {
         return WALK_FULL;
@@ -2742,7 +2758,7 @@ static int resolve_cached(const struct vfs_ref *start, uint64_t seq, const char 
         if (*p == '\0') {
             break;
         }
-        if (vfs_mount_gone(cur.mnt) || may_search(cur.mnt, cur.node, use_real) != 0) {
+        if (vfs_mount_gone(cur.mnt) || may_search(cur.mnt, cur.node, use_real, &rec.mode) != 0) {
             goto full;
         }
         while (p[len] != '\0' && p[len] != '/') {
@@ -2754,7 +2770,7 @@ static int resolve_cached(const struct vfs_ref *start, uint64_t seq, const char 
         k_memcpy(comp, p, len);
         comp[len] = '\0';
         p += len;
-        rc = cached_dots_step(&cur, comp, &dd);
+        rc = cached_dots_step(&cur, comp, keep);
         if (rc == 0) {
             continue;
         }
@@ -2766,9 +2782,7 @@ static int resolve_cached(const struct vfs_ref *start, uint64_t seq, const char 
             dcache_count_hits(found_names + 1);
             cached_put(cur.mnt, cur.node);
             vfs_leave(cur.mnt);
-            cached_dots_drop(&dd);
-            path_buf_put(lk.linkpath);
-            path_buf_put(lk.target);
+            cached_walk_drop(&dd, &lk);
             return rc;
         }
         if (rc != 0) {
@@ -2788,7 +2802,7 @@ static int resolve_cached(const struct vfs_ref *start, uint64_t seq, const char 
         if (rc != 0) {
             goto full;
         }
-        if (cached_move(&cur, found, entry, &dd) != 0) {
+        if (cached_move(&cur, found, entry, keep) != 0) {
             goto full;
         }
     }
@@ -2797,21 +2811,17 @@ static int resolve_cached(const struct vfs_ref *start, uint64_t seq, const char 
     }
     dcache_count_hits(found_names);
     *out = cur;
-    cached_dots_drop(&dd);
-    path_buf_put(lk.linkpath);
-    path_buf_put(lk.target);
+    cached_walk_drop(&dd, &lk);
     return 0;
 
 full:
     cached_put(cur.mnt, cur.node);
     vfs_leave(cur.mnt);
-    cached_dots_drop(&dd);
+    cached_walk_drop(&dd, &lk);
     if (entry) {
         vfs_name_put(*entry);
         *entry = NULL;
     }
-    path_buf_put(lk.linkpath);
-    path_buf_put(lk.target);
     return WALK_FULL;
 }
 
@@ -3150,7 +3160,7 @@ begin:
             continue;
         }
 
-        rc = may_search(cur.mnt, cur.node, use_real);
+        rc = may_search(cur.mnt, cur.node, use_real, NULL);
         if (rc != 0) {
             goto out_err;
         }
@@ -3393,7 +3403,7 @@ int vfs_resolve_cached(const struct vfs_ref *start, uint64_t seq, const char *pa
     }
     if (!path || (path[0] != '/' && !start) || !vfs_root_mounted() ||
         path_buf_start(path, &held, &rest) != 0 ||
-        (flags & ~(VFS_WALK_NOFOLLOW | VFS_WALK_REAL_IDS | VFS_WALK_LOCK)) ||
+        (flags & ~(VFS_WALK_NOFOLLOW | VFS_WALK_REAL_IDS | VFS_WALK_LOCK | VFS_WALK_CREATE)) ||
         (current_proc && current_proc->walk_replay)) {
         return VFS_CACHED_MISS;
     }
