@@ -758,58 +758,19 @@ int vfs_named_mount(const struct vfs_mount *parent, int n, const char **name, ui
     return 0;
 }
 
-/**
- * Whether `m` is a mount over a node of the file system that `mnt` shows,
- * on `mnt` itself or on another mount of that file system, a bind of it or
- * the mount it binds, which `vfs_leaf_mount` counts. A mount on another
- * mount of the file system counts when the caller's namespace sees it, as
- * Linux's `is_local_mountpoint` (fs/namespace.c) refuses to rename or
- * remove a dentry that any mount of the caller's namespace stands on,
- * through whichever mount the call names it.
- */
-static int mount_over_same(const struct vfs_mount *m, struct vfs_mount *mnt)
-{
-    if (!m || m->state == VFS_FREE || !m->covered || !m->parent) {
-        return 0;
-    }
-    return m->parent == mnt || mount_base(m->parent) == mount_base(mnt);
-}
-
-/**
- * Whether the mount `m`, over the node `found` of `mnt` that the name
- * `name` names, stands on that name, as Linux's mount stands on a dentry
- * (`d_mountpoint`, fs/mount.h): always for a directory or a file of one
- * link, whose node has the one name; for a file of several links, a bind
- * over one of them, only for the name it was bound at, the last component
- * of its recorded path, which a rename in a namespace that sees the mount
- * cannot change. `*links` caches the node's link count across the calls
- * of one search, 0 until read.
- */
-static int mount_on_name(const struct vfs_mount *m, struct vfs_mount *mnt, void *found,
-                         const char *name, uint32_t *links)
-{
-    struct vfs_stat st;
-
-    if (*links == 0) {
-        *links = vfs_getattr(mnt, found, &st) == 0 && !VFS_IS_DIR(st.mode) && st.nlink > 1
-                     ? st.nlink
-                     : 1;
-    }
-    return *links == 1 || streq(path_last(m->covered_path), name);
-}
-
 struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *name)
 {
     void *found;
     struct vfs_mount *m = mount_named(mnt, node, name);
-    uint32_t links = 0;
     int i;
 
     if (m) {
         return m;
     }
     for (i = 1; i < mount_slots; i++) {
-        if (mount_over_same(mounts[i], mnt)) {
+        struct vfs_mount *child = mounts[i];
+
+        if (child && child->state != VFS_FREE && child->parent == mnt && child->covered) {
             break;
         }
     }
@@ -821,12 +782,9 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
         return 0;
     }
     for (i = 1; i < mount_slots; i++) {
-        struct vfs_mount *child = mounts[i];
-
-        if (mount_over_same(child, mnt) && child->covered == found &&
-            (child->parent == mnt ? mount_in_view(child) : vfs_mount_seen(child)) &&
-            mount_on_name(child, mnt, found, name, &links)) {
-            m = child;
+        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt &&
+            mounts[i]->covered == found && mount_in_view(mounts[i])) {
+            m = mounts[i];
         }
     }
     if (mnt->type->ops->put) {
@@ -2538,13 +2496,14 @@ static void *cached_hop_node(struct vfs_mount *root, const char *comp, uint32_t 
  * of the root directory; then the mounts over its root in turn
  * (`cached_cross`), which the search of the table, under its lock, finds
  * whether there are. A mount's recorded path is not trusted, since a
- * rename through a namespace that does not see the mount can move the node
- * it covers. The search check of the root directory, whose mode is 0755
- * whatever its header says (`kfs_getattr`), passes for every caller.
- * `root`, the caller's root mount, a namespace's copy or a bind of the
- * boot root among them, is entered by the caller (`vfs_enter`), which keeps
- * it from being freed. 0 with `cur` entered and held, or WALK_FULL with
- * nothing taken, for a name no mount takes, `.` and `..` among them, a
+ * rename through a namespace that does not see the mount, or through a
+ * bind of the root, can move the node it covers. The search check of the
+ * root directory, whose mode is 0755 whatever its header says
+ * (`kfs_getattr`), passes for every caller. `root`, the caller's root
+ * mount, a namespace's copy or a bind of the boot root among them, is
+ * entered by the caller (`vfs_enter`), which keeps it from being freed. 0
+ * with `cur` entered and held, or WALK_FULL with nothing taken, for a name
+ * no mount takes, `.` and `..` among them, a
  * mount the walk may not judge (`vfs_mount_seen_word`) or stand on
  * (`cached_take`), and what `cached_cross` leaves to the full walk. The
  * caller checks the walk sequence before using the answer. May sleep
