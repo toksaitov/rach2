@@ -1067,6 +1067,13 @@ void wait_queue_init(wait_queue_t *wq)
     wq->head = NULL;
 }
 
+/** No row has a waiter on any queue. */
+int wq_active(const wait_queue_t *wq)
+{
+    (void)wq;
+    return 0;
+}
+
 /** No row has a waiter to wake. */
 void wq_wake_all(wait_queue_t *wq)
 {

@@ -2343,6 +2343,12 @@ void bkl_yield(void)
 void arch_relax(void)
 {}
 
+/** Whether a parked call waits on `wq`. */
+int wq_active(const wait_queue_t *wq)
+{
+    return parked_on && wq == parked_on;
+}
+
 /** Count a wake of the queue a parked call waits on. */
 void wq_wake_all(wait_queue_t *wq)
 {
@@ -5348,6 +5354,13 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
 /** The model keeps no name cache. */
 void dcache_drain(void)
 {}
+
+/** The model keeps no name cache, so each lookup asks the type, as
+ * `dcache_lookup` does on a miss. */
+int dcache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
+{
+    return mnt->type->ops->lookup(mnt, dir, name, node);
+}
 
 /** Walk a path below /fl to its node, or to its parent and last name with
  * VFS_WALK_PARENT, holding nothing, as a walk on a file-locked type does. */

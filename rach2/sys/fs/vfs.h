@@ -1324,6 +1324,13 @@ void vfs_write_unlock(const struct vfs_ref *ref);
  * it allows see one node. 0 with `child->node` NULL on any other type, 0
  * with the node held and locked, or the lookup's error, including -ENOENT
  * when the name is absent. The caller gives both back with `vfs_child_unlock`.
+ * The name is looked up through the name cache (`dcache_lookup`), as Linux's
+ * `lookup_one_qstr_excl` looks in the dcache first (fs/namei.c): a type
+ * changes a directory's names only under its lock, and the change forgets
+ * the name, so the cache's answer holds while the caller keeps the lock,
+ * and an unlink of a name already found absent reads no directory. While
+ * the caller holds the lock, the cache defers the release of the entries
+ * it gives up (`vfs_ns_held_other`).
  */
 int vfs_child_lock(const struct vfs_ref *dir, const char *name, struct vfs_ref *child);
 /** Unlock and put what `vfs_child_lock` gave `child`, if anything, and
