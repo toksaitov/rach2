@@ -3210,46 +3210,16 @@ static void procfs_waketime(struct procfs_text *t, const process_t *p)
     ap_ch(t, '\n');
 }
 
-/**
- * Count the resident pages of `mm` by Linux's three kinds, for the RssAnon,
- * RssFile and RssShmem of status, by the rule of smaps: a private region's
- * pages are anonymous, but for the unwritten ones of a region read from a
- * file, which are the file's still; a shared region's are the file's. A
- * file's pages are counted as shared memory when the file is in memory (a
- * tmpfs file, a memfd, shared anonymous memory), and as file pages
- * otherwise, device memory among them. This walks the regions' page
- * tables and each frame's anonymous mark, which fork and copy-on-write
- * preserve independently of the dirty bit; the three sum to VmRSS.
- */
-static void rss_by_kind(struct mm *mm, unsigned long *anon, unsigned long *file,
-                        unsigned long *shmem)
-{
-    const vma_t *r;
-
-    *anon = 0;
-    *file = 0;
-    *shmem = 0;
-    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
-        unsigned long present, dirty, own, copies;
-        int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
-
-        paging_user_count(mm, r->start, r->end, &present, &dirty, &copies);
-        own = r->type == VM_SHARED ? 0 : of_file ? copies : present;
-        *anon += own;
-        if (filemap_in_memory(r->file)) {
-            *shmem += present - own;
-        } else {
-            *file += present - own;
-        }
-    }
-}
-
 /** Append the memory sizes to the status record. Hold a reference to `mm`
- * across the walk. Give up the big lock before taking the regions' lock,
- * and give back the regions' lock before taking the big lock again. */
+ * across the walk of its regions. Give up the big lock before taking the
+ * regions' lock, and give back the regions' lock before taking the big
+ * lock again. The resident sizes are the space's counts (`mm_rss_snapshot`),
+ * as Linux's task_mem reads get_mm_counter: no page table is walked and
+ * no page-table lock taken. */
 static void procfs_status_memory(struct procfs_text *t, struct mm *mm)
 {
-    unsigned long size, rss, anon, file, shmem;
+    unsigned long rss[MM_RSS_KINDS];
+    unsigned long size;
     unsigned long pinned = mm->pinned;
     uint32_t flags;
     int depth;
@@ -3260,17 +3230,16 @@ static void procfs_status_memory(struct procfs_text *t, struct mm *mm)
     kirq_restore(flags);
     mmap_read_lock(mm);
     size = vm_total(&mm->vm);
-    rss = mm_resident(mm) * PAGE_SIZE;
-    rss_by_kind(mm, &anon, &file, &shmem);
+    mm_rss_snapshot(mm, rss);
     ap_kb(t, "VmPeak", size);
     ap_kb(t, "VmSize", size);
     ap_kb(t, "VmLck", vm_locked(&mm->vm));
     ap_kb(t, "VmPin", pinned * PAGE_SIZE);
     ap_kb(t, "VmHWM", mm_resident_peak(mm) * PAGE_SIZE);
-    ap_kb(t, "VmRSS", rss);
-    ap_kb(t, "RssAnon", anon * PAGE_SIZE);
-    ap_kb(t, "RssFile", file * PAGE_SIZE);
-    ap_kb(t, "RssShmem", shmem * PAGE_SIZE);
+    ap_kb(t, "VmRSS", (rss[MM_RSS_ANON] + rss[MM_RSS_FILE] + rss[MM_RSS_SHMEM]) * PAGE_SIZE);
+    ap_kb(t, "RssAnon", rss[MM_RSS_ANON] * PAGE_SIZE);
+    ap_kb(t, "RssFile", rss[MM_RSS_FILE] * PAGE_SIZE);
+    ap_kb(t, "RssShmem", rss[MM_RSS_SHMEM] * PAGE_SIZE);
     ap_kb(t, "VmData", mm_bytes(mm, VM_DATA) + mm_bytes(mm, VM_HEAP) + mm_bytes(mm, VM_ANON));
     ap_kb(t, "VmStk", mm_bytes(mm, VM_STACK));
     ap_kb(t, "VmExe", mm_bytes(mm, VM_CODE));
@@ -3328,7 +3297,8 @@ static void procfs_status_rest(struct procfs_text *t, const process_t *p)
  * those capget(2) reports (`cap_word`, `cap_eff_word`).
  * VmPeak is the present size, since the kernel keeps no peak of it; VmHWM
  * is the most pages the address space has had resident. RssAnon, RssFile
- * and RssShmem divide VmRSS as `rss_by_kind` says; Wine's working set and
+ * and RssShmem divide VmRSS by the kinds mm.h names (MM_RSS_ANON), from
+ * one snapshot, so that the three sum to it; Wine's working set and
  * pagefile figures are read from them.
  * Cpus_allowed and its list are the thread's affinity among the processors
  * started, which sched_getaffinity(2) reports.

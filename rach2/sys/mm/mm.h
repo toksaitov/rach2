@@ -55,6 +55,18 @@ struct vfs_ref;
  * syscall_proc.c checks. */
 #define MM_AUXV_WORDS 48
 
+/* The kinds of a resident page, Linux's MM_ANONPAGES, MM_FILEPAGES and
+ * MM_SHMEMPAGES, which /proc/PID/status reports as RssAnon, RssFile and
+ * RssShmem. A page is anonymous in a private region that maps no file, and
+ * in one that does when its frame is a private copy; else it is the file's,
+ * shared memory's when the file is in memory (a tmpfs file, a memfd, shared
+ * anonymous memory) and a file page otherwise, device memory among them
+ * (paging.c, `rss_kind`). */
+#define MM_RSS_ANON  0
+#define MM_RSS_FILE  1
+#define MM_RSS_SHMEM 2
+#define MM_RSS_KINDS 3
+
 struct mm {
     uint32_t users;
     uint32_t holds;
@@ -159,12 +171,15 @@ struct mm {
      * (`arch_mm_release`). */
     void *ldt;
     uint32_t ldt_entries; /* the entries up to the highest written */
-    /* The present user pages of the page tables, VmRSS, which every change
-     * of an entry's present bit keeps (`mm_resident_add`), and the most
-     * there were before any went, as Linux's hiwater_rss; a fork's copy
-     * counts its own from none. `rss_lock` covers their writers, which
-     * processors faulting in the space at once are; a reader reads each
-     * word once without it. */
+    /* The present user pages of the page tables, VmRSS, by their kind
+     * (MM_RSS_ANON and on), as Linux's rss_stat, which every change of an
+     * entry's present bit or of its page's kind keeps (`mm_resident_add`);
+     * their sum; and the most there were before any went, as Linux's
+     * hiwater_rss. A fork's copy counts its own from none. `rss_lock`
+     * covers their writers, which processors faulting in the space at once
+     * are, and a reader of the kinds together (`mm_rss_snapshot`); a reader
+     * of the sum or the peak reads each word once without it. */
+    unsigned long rss[MM_RSS_KINDS];
     unsigned long resident;
     unsigned long resident_peak;
     struct spinlock rss_lock;
@@ -388,20 +403,29 @@ void mm_drop(struct process *p);
  * as `mm_resident_add` has counted them, at no cost of a walk. */
 unsigned long mm_resident(const struct mm *mm);
 
+/** Copy the resident pages of `mm` by kind into `pages`, indexed by
+ * MM_RSS_ANON and on, which sum to `mm_resident`, as Linux's
+ * get_mm_counter reads them: no walk, and no lock but the space's count
+ * lock, so that any context may ask while faults run. */
+void mm_rss_snapshot(struct mm *mm, unsigned long pages[MM_RSS_KINDS]);
+
 /** The most pages `mm` has had in memory at once, VmHWM and what
  * `ru_maxrss` reports of it. Needs no lock. */
 unsigned long mm_resident_peak(const struct mm *mm);
 
 /**
- * Count `pages` more present user pages, or fewer for a negative count, in
- * the address space whose directory is `dir`. Each writer of a user entry
- * calls it for the present bits it set or cleared, so that `getrusage` and
- * /proc read the size without walking the tables. Takes the lock of the
- * table of spaces by directory, when `dir` is not the running thread's, and
- * then the space's count lock; both are below every other lock. Any
- * context. Nothing for a directory no address space has.
+ * Count `change[k]` more present user pages of the kind k, or fewer for a
+ * negative count, in the address space whose directory is `dir`. Each
+ * writer of a user entry calls it for the present bits it set or cleared
+ * and for each page whose kind it changed, once its change has succeeded,
+ * so that `getrusage` and /proc read the sizes without walking the tables.
+ * Takes the lock of the table of spaces by directory, when `dir` is not
+ * the running thread's, and then the space's count lock; both are below
+ * every other lock. Any context. Nothing for a directory no address space
+ * has. A count that would go below zero stays at zero, and stops the debug
+ * kernel (RACH2_RSS_CHECK).
  */
-void mm_resident_add(const struct page_dir *dir, long pages);
+void mm_resident_add(const struct page_dir *dir, const long change[MM_RSS_KINDS]);
 
 /**
  * A description of the file at `ref` for an address space to keep its

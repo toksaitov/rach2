@@ -73,7 +73,7 @@ static void region(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t prot)
 static void drop(struct mm *mm, uintptr_t start, uintptr_t end)
 {
     vm_remove(&mm->vm, start, end);
-    unmap_user_range(mm->dir, start, end);
+    unmap_user_range(mm, start, end);
 }
 
 /** Whether a write fault at `va` of a fresh region over the 2 MiB from A
@@ -151,7 +151,7 @@ static void split_rows(void)
     region(&mm_a, A, A + H, RW);
     check(resolve_held(&mm_a, A, 1, LIM) == 1 && is_huge(&dir_a, A), "a huge page");
     base = (uintptr_t)PTE_ADDR(mmu_user_huge(&dir_a, A));
-    unmap_user_range(&dir_a, A + 3 * P, A + 4 * P);
+    unmap_user_range(&mm_a, A + 3 * P, A + 4 * P);
     check(mmu_user_huge(&dir_a, A) == 0 && thp_mapped() == 0 &&
               thp_count(THP_SPLIT_PMD) == splits + 1,
           "an unmap of one page splits the huge page");

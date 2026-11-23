@@ -327,10 +327,17 @@ void sched_take_preempt(void)
 {}
 
 /** Nothing: the test has no address space that counts its resident pages. */
-void mm_resident_add(const struct page_dir *dir, long pages)
+void mm_resident_add(const struct page_dir *dir, const long change[MM_RSS_KINDS])
 {
     (void)dir;
-    (void)pages;
+    (void)change;
+}
+
+/** No file of the test is in memory: its pages count as file pages. */
+int filemap_in_memory(const struct vm_file *f)
+{
+    (void)f;
+    return 0;
 }
 
 /** Nothing. */
@@ -833,7 +840,7 @@ static int model_mkwrite(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
     shared_marks++;
     if (mark_retry) {
         mark_retry = 0;
-        unmap_user_range(mm_a.dir, VA_FILE, VA_FILE + PAGE_SIZE);
+        unmap_user_range(&mm_a, VA_FILE, VA_FILE + PAGE_SIZE);
         mm_a.zaps++;
         check(frame_count(phys) == 2, "the callback keeps the frame alive after its PTE goes");
         return -EAGAIN;
@@ -926,7 +933,7 @@ static void file_rows(void)
           "each shared page holds a reference to the frame lent");
 
     vm_remove(&mm_a.vm, VA_FILE, VA_FILE + 8 * PAGE_SIZE);
-    unmap_user_range(&dir_a, VA_FILE, VA_FILE + 8 * PAGE_SIZE);
+    unmap_user_range(&mm_a, VA_FILE, VA_FILE + 8 * PAGE_SIZE);
     vm_file_reap();
     check(frame_count((uintptr_t)SHARE_FRAME * PAGE_SIZE) == 1 && fill_free.vf.refs == 1 &&
               share_locked.vf.refs == 1,
@@ -968,7 +975,7 @@ static void shared_access_rows(void)
               shared_copies == 3 && shared_bytes[7] == byte && !mark_retry,
           "a removed page is resolved and marked again before the kernel copies");
     vm_remove(&mm_a.vm, VA_FILE, VA_FILE + PAGE_SIZE);
-    unmap_user_range(&dir_a, VA_FILE, VA_FILE + PAGE_SIZE);
+    unmap_user_range(&mm_a, VA_FILE, VA_FILE + PAGE_SIZE);
     vm_file_reap();
     check(frame_count(SHARE_FRAME * PAGE_SIZE) == 1 && m.vf.refs == 1,
           "the callbacks and unmap give every frame and file reference back");
@@ -1034,7 +1041,7 @@ static void fork_rows(void)
     check(frame_count(ram_obj.frame[0]) == 2, "a page left out of the child takes no reference");
 
     vm_remove(&mm_b.vm, VA_RAM, VA_RAM + OBJ_PAGES * PAGE_SIZE);
-    unmap_user_range(&dir_b, VA_RAM, VA_RAM + OBJ_PAGES * PAGE_SIZE);
+    unmap_user_range(&mm_b, VA_RAM, VA_RAM + OBJ_PAGES * PAGE_SIZE);
     vm_file_reap();
     check(frame_count(ram_obj.frame[2]) == 2 && vm_find(&mm_a.vm, VA_RAM)->file->refs == 1 &&
               ram_obj.puts == 0,
@@ -1109,16 +1116,16 @@ static void zap_rows(void)
 static void exit_rows(void)
 {
     vm_remove(&mm_a.vm, VA_DEV, VA_DEV + PAGE_SIZE);
-    unmap_user_range(&dir_a, VA_DEV, VA_DEV + PAGE_SIZE);
+    unmap_user_range(&mm_a, VA_DEV, VA_DEV + PAGE_SIZE);
     vm_file_reap();
     check(dev_obj.puts == 0, "munmap of part of a region keeps the object");
 
     vm_free(&mm_b.vm);
-    unmap_user_range(&dir_b, WIN_BASE, WIN_BASE + WIN_TABLES * SPAN);
+    unmap_user_range(&mm_b, WIN_BASE, WIN_BASE + WIN_TABLES * SPAN);
     vm_file_reap();
     check(dev_obj.puts == 0 && ram_obj.puts == 0, "the child's exit keeps what the parent maps");
 
-    unmap_user_range(&dir_a, WIN_BASE, WIN_BASE + WIN_TABLES * SPAN);
+    unmap_user_range(&mm_a, WIN_BASE, WIN_BASE + WIN_TABLES * SPAN);
     vm_free(&mm_a.vm);
     vm_file_reap();
     check(dev_obj.puts == 1 && dev_obj.refs == 0 && ram_obj.puts == 2 && ram_obj.refs == 0,

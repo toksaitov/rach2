@@ -71,11 +71,11 @@ static void map_rows(void)
           "two pages fault in");
     check(alloc_user_page(&dir_a, WIN_BASE + 2 * P) != 0, "a page is allocated");
     check(shootdowns == before, "a page where none was costs no shootdown");
-    check(map_user_frame(&dir_a, WIN_BASE + 2 * P, second, PTE_P | PTE_U) == 0 &&
+    check(map_user_frame(&dir_a, WIN_BASE + 2 * P, second, PTE_P | PTE_U, MM_RSS_ANON) == 0 &&
               shootdowns == before + 1,
           "a page mapped over a present one costs one");
     vm_remove(&mm_a.vm, WIN_BASE, WIN_BASE + 4 * P);
-    unmap_user_range(&dir_a, WIN_BASE, WIN_BASE + 4 * P);
+    unmap_user_range(&mm_a, WIN_BASE, WIN_BASE + 4 * P);
     check(frame_maps(second / PAGE_SIZE) == 0, "the unmap frees the page mapped over");
 }
 
@@ -95,7 +95,7 @@ static void unmap_rows(unsigned int count)
     held_count = count;
     shot_check = unmap_check;
     before = shootdowns;
-    unmap_user_range(&dir_a, WIN_BASE - 2 * P, end + 2 * P);
+    unmap_user_range(&mm_a, WIN_BASE - 2 * P, end + 2 * P);
     shot_check = NULL;
     held_count = 0;
     check(shootdowns == before + 1, "an unmap costs one shootdown");
@@ -108,7 +108,7 @@ static void unmap_rows(unsigned int count)
         check(frame_maps(held[i] / PAGE_SIZE) == 0 && pte_of(&dir_a, WIN_BASE + i * P) == 0,
               "each frame is freed and its entry cleared after the shootdown");
     }
-    unmap_user_range(&dir_a, WIN_BASE, end);
+    unmap_user_range(&mm_a, WIN_BASE, end);
     check(shootdowns == before + 1, "an unmap of nothing costs none");
 }
 
@@ -136,9 +136,9 @@ static void protect_fork_rows(void)
               (pte_of(&dir_a, WIN_BASE + 5 * P) & PTE_COW),
           "a fork costs one shootdown for the parent's copy-on-write pages");
     vm_remove(&mm_a.vm, WIN_BASE, end);
-    unmap_user_range(&dir_a, WIN_BASE, end);
+    unmap_user_range(&mm_a, WIN_BASE, end);
     vm_remove(&mm_b.vm, WIN_BASE, end);
-    unmap_user_range(&dir_b, WIN_BASE, end);
+    unmap_user_range(&mm_b, WIN_BASE, end);
 }
 
 /** The protection keys are off in the host test, as on a processor without

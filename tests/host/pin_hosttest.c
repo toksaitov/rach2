@@ -322,7 +322,7 @@ static void follow_change_rows(void)
 
     forgets = 0;
     mmn_notify(&mm_a, MMN_DROP, VA + 20 * P, VA + 21 * P);
-    unmap_user_range(&dir_a, VA + 20 * P, VA + 21 * P);
+    unmap_user_range(&mm_a, VA + 20 * P, VA + 21 * P);
     check(forgets == 1 && forget_saw == 0 && pin_phys(p, 0) == 0 && pin_live(p) &&
               frame_word(f_follow) == 0 && released == 0,
           "a dropped page is let go after the forget, which no longer sees it");
@@ -337,7 +337,7 @@ static void follow_change_rows(void)
     check(pin_refill(p, 0) == 0 && pin_phys(p, 0) == f1, "a refill takes the same frame again");
     vm_remove(&mm_a.vm, VA + 20 * P, VA + 23 * P);
     mmn_notify(&mm_a, MMN_UNMAP, VA + 20 * P, VA + 23 * P);
-    unmap_user_range(&dir_a, VA + 20 * P, VA + 23 * P);
+    unmap_user_range(&mm_a, VA + 20 * P, VA + 23 * P);
     check(forgets == 3 && pin_phys(p, 0) == 0 && pin_live(p) && released == 0 &&
               frame_word(f1) == 0,
           "an unmap lets the page go and leaves the pin live");
@@ -400,7 +400,7 @@ static void ram_frame_rows(void)
     check(paging_user_ram_frame(&ended, plain) == 0,
           "no frame is given once the address space has ended");
     vm_remove(&mm_a.vm, plain, secret + P);
-    unmap_user_range(&dir_a, plain, secret + P);
+    unmap_user_range(&mm_a, plain, secret + P);
 }
 
 /** A run of frames read in one walk (`paging_user_ram_frames`) crosses a
@@ -436,7 +436,7 @@ static void ram_run_rows(void)
     check(paging_user_ram_frames(&mm_a, VB + 3 * P, 1, frames) == 0,
           "a run past the last region gives nothing");
     vm_remove(&mm_a.vm, from, VB + 3 * P);
-    unmap_user_range(&dir_a, from, VB + 3 * P);
+    unmap_user_range(&mm_a, from, VB + 3 * P);
 }
 
 /** A fork copies a pinned private page for the child; a pin of a page
@@ -482,7 +482,7 @@ static void release_rows(void)
 
     vm_remove(&mm_a.vm, VA + P, VA + 2 * P);
     mmn_notify(&mm_a, MMN_UNMAP, VA + P, VA + 2 * P);
-    unmap_user_range(&dir_a, VA + P, VA + 2 * P);
+    unmap_user_range(&mm_a, VA + P, VA + 2 * P);
     check(released == 1 && released_pin == p_range && !pin_live(p_range) &&
               pin_phys(p_range, 0) == 0 && mm_a.pinned == 1,
           "an unmap of one pinned page tells the holder and takes the whole pin back");
@@ -529,7 +529,7 @@ static void keep_rows(void)
     check(pin_live(p) && pin_phys(p, 0) == f && released == before && mm_b.pinned == 0 &&
               mm_b.notify == NULL,
           "the end of B leaves the keeping pin live, untold, and drops B's charge");
-    unmap_user_range(&dir_b, VA, VA + P);
+    unmap_user_range(&mm_b, VA, VA + P);
     check(frame_word(f) == FRAME_PIN_BIAS, "the frame stays pinned once B's mapping goes");
     unpin(p);
     check(frame_word(f) == 0 && mm_b.pinned == 0 && released == before,
@@ -620,7 +620,7 @@ static void file_keep_rows(void)
     check(pin_live(p) && disk.vf.refs == 3 && released == before + 1,
           "the end of B leaves the keeping pin live with the mapping held");
     vm_remove(&mm_b.vm, addr, addr + 2 * P);
-    unmap_user_range(&dir_b, addr, addr + 2 * P);
+    unmap_user_range(&mm_b, addr, addr + 2 * P);
     vm_file_reap();
     check(disk.releases == 0 && disk.vf.refs == 1 &&
               frame_word(disk.page[0]) == 1 + FRAME_PIN_BIAS &&
@@ -703,7 +703,7 @@ static void io_lifetime(uintptr_t addr, uintptr_t phys, vma_t *vma)
     unpin(tmp);
     unpin(p);
     vm_remove(&mm_a.vm, addr, addr + 2 * P);
-    unmap_user_range(&dir_a, addr, addr + 2 * P);
+    unmap_user_range(&mm_a, addr, addr + 2 * P);
     vm_file_reap();
     check(io_object.puts == 1, "the last mapping releases the device reference");
     memlock(0xFFFFFFFFu);

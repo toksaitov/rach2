@@ -83,6 +83,7 @@ struct page_dir {
     pte_t *tables[WIN_TABLES];
     pte_t huge[WIN_TABLES]; /* the 2 MiB page over each table, 0 for none */
     long resident;          /* the pages `mm_resident_add` counted */
+    long rss[MM_RSS_KINDS]; /* of them, those of each kind */
 };
 
 /** The leaf table of `dir` for `va`, made with `create`; NULL outside the
@@ -368,10 +369,39 @@ void bkl_enter(void)
 void bkl_exit(void)
 {}
 
-/** Count `pages` in the directory's own count, which a row may read. */
-void mm_resident_add(const struct page_dir *dir, long pages)
+/* Set by a row whose counts went below zero, as the debug kernel stops. */
+static int model_rss_below;
+
+/** Count `change` in the directory's own counts, which a row may read. */
+void mm_resident_add(const struct page_dir *dir, const long change[MM_RSS_KINDS])
 {
-    ((struct page_dir *)dir)->resident += pages;
+    struct page_dir *d = (struct page_dir *)dir;
+    uint32_t k;
+
+    for (k = 0; k < MM_RSS_KINDS; k++) {
+        d->rss[k] += change[k];
+        d->resident += change[k];
+        model_rss_below |= d->rss[k] < 0;
+    }
+}
+
+/** The counts `mm_resident_add` kept in the directory of `mm`. */
+void mm_rss_snapshot(struct mm *mm, unsigned long pages[MM_RSS_KINDS])
+{
+    uint32_t k;
+
+    for (k = 0; k < MM_RSS_KINDS; k++) {
+        pages[k] = (unsigned long)mm->dir->rss[k];
+    }
+}
+
+/* The file a row counts as in memory, a tmpfs file's or a memfd's. */
+static const struct vm_file *model_shmem;
+
+/** Whether `f` is the row's file in memory. */
+int filemap_in_memory(const struct vm_file *f)
+{
+    return f && f == model_shmem;
 }
 
 /** Nothing. */

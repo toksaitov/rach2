@@ -23,6 +23,7 @@
 #include "rseq.h"
 #include "lib/kerrno.h"
 #include "lib/kstring.h"
+#include "mm/mm.h"
 #include "mm/paging.h"
 #include "mm/usercopy.h"
 #include "arch/i686/mmu.h"
@@ -128,8 +129,9 @@ int paging_zero_frame(uintptr_t phys)
 
 /** Record the mapping of the frame at `phys` at `virt` with `flags` in the
  * test's directory; -1 once `maps_left` is spent. */
-int map_user_frame(page_dir_t *d, uintptr_t virt, uintptr_t phys, uint32_t flags)
+int map_user_frame(page_dir_t *d, uintptr_t virt, uintptr_t phys, uint32_t flags, int kind)
 {
+    CHECK(kind == MM_RSS_ANON, "an argument page counts as anonymous");
     CHECK(d == &dir, "a frame is mapped into the directory given");
     if (maps_left == 0) {
         return -1;

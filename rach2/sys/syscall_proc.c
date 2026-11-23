@@ -9501,7 +9501,7 @@ static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, 
     if (vm_guard_copy(vm, addr, moved, to) != 0) {
         return -ENOMEM;
     }
-    if (paging_move_range(_curr_dir, addr, to, moved) != 0) {
+    if (paging_move_range(current_proc->mm, addr, to, moved) != 0) {
         (void)vm_guard_set(vm, to, to + moved, 0);
         return -ENOMEM;
     }
@@ -9509,18 +9509,17 @@ static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, 
     vm_file_get(like.file);
     (void)vm_policy_get(like.policy);
     (void)vm_detach(vm, addr, addr + len);
-    unmap_user_range(_curr_dir, addr, addr + len);
+    unmap_user_range(current_proc->mm, addr, addr + len);
     vm_release_detached(vm);
     mm_note_anon(current_proc->mm, to, to + new_len);
     rc = vm_insert_like(vm, to, to + new_len, &like, pgoff);
-    vm_file_put(like.file);
-    vm_policy_put(like.policy);
     if (rc != 0) {
         (void)vm_guard_set(vm, to, to + moved, 0);
-        unmap_user_range(_curr_dir, to, to + moved);
-        return -ENOMEM;
+        unmap_user_range_as(current_proc->mm, to, to + moved, &like);
     }
-    return (long)to;
+    vm_file_put(like.file);
+    vm_policy_put(like.policy);
+    return rc != 0 ? -ENOMEM : (long)to;
 }
 
 /**
@@ -9995,7 +9994,7 @@ static long madvise_locked(isr_params_t *params, vm_space_t *vm)
             madvise_guard_identity(vm, addr, end);
             paging_zap_note(current_proc->mm);
             mmn_notify(current_proc->mm, MMN_DROP, addr, end);
-            unmap_user_range(_curr_dir, addr, end);
+            unmap_user_range(current_proc->mm, addr, end);
         }
     } else if (madvise_mark_bit(advice) != 0 || advice == MADV_HUGEPAGE ||
                advice == MADV_NOHUGEPAGE) {
@@ -10005,7 +10004,7 @@ static long madvise_locked(isr_params_t *params, vm_space_t *vm)
     } else if (advice == MADV_DONTNEED || advice == MADV_DONTNEED_LOCKED || advice == MADV_FREE) {
         mm_note_anon(current_proc->mm, addr, end);
         mmn_notify(current_proc->mm, MMN_DROP, addr, end);
-        unmap_user_range(_curr_dir, addr, end);
+        unmap_user_range(current_proc->mm, addr, end);
     }
     return end < addr + len ? -EPERM : 0;
 }

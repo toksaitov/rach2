@@ -116,7 +116,7 @@ On x86-64, `/proc/stat` also reports VT-d's fault counts and VFIO's live resourc
 
 `/proc/stat` includes the scheduler's selection and ready-entry work counters, whose definitions are in [the process Readme](../proc/Readme.md#scheduling).
 
-`/proc/PID/status` copies the process fields under the big lock, then walks the pinned address space with that lock given up (`procfs_status_memory`). Its regions' read lock keeps the mappings in place, and `paging_user_count` reads one span at a time under the page-table lock to classify resident pages. A process reaped during the walk leaves its address space to the reader until the walk ends.
+`/proc/PID/status` copies the process fields under the big lock, then reads the pinned address space with that lock given up (`procfs_status_memory`). Its regions' read lock keeps the regions in place while their sizes are summed; the resident sizes, `VmRSS` and its three kinds, are the address space's counts (`mm_rss_snapshot`), so the read walks no page table and takes no page-table lock. A process reaped during the read leaves its address space to the reader until the read ends.
 
 `procfs_open` writes a file's whole text when it is opened, into a `struct procfs_text`: a heap buffer of 256 bytes (`PROCFS_TEXT_FIRST`) that doubles when an append does not fit. The `ap_*` functions format the numbers, since the kernel has no `snprintf`, and 64-bit numbers go through `diskinfo_u64_dec`, since the i686 kernel has no 64-bit division. A text has every row there is, every mount, connection and vector. When the heap cannot grow the buffer, the text is dropped, the open fails with `ENOMEM`, and the kernel logs `procfs: NAME: no memory for the text`; no text is served short.
 

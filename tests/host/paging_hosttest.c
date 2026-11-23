@@ -529,10 +529,17 @@ void sched_take_preempt(void)
 {}
 
 /** Nothing: the test has no address space that counts its resident pages. */
-void mm_resident_add(const struct page_dir *dir, long pages)
+void mm_resident_add(const struct page_dir *dir, const long change[MM_RSS_KINDS])
 {
     (void)dir;
-    (void)pages;
+    (void)change;
+}
+
+/** No file of the test is in memory: its pages count as file pages. */
+int filemap_in_memory(const struct vm_file *f)
+{
+    (void)f;
+    return 0;
 }
 
 /* The drops of one page's translation, and the last page dropped. */

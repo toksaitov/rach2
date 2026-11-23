@@ -9,6 +9,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
+#include "../mm/mm.h"
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
 
@@ -456,8 +457,8 @@ int uimage_map(struct uimage *u, struct page_dir *dir)
     while (u->given < u->nframes) {
         uintptr_t page = u->top - (uintptr_t)(u->given + 1u) * PAGE_SIZE;
 
-        if (map_user_frame(dir, page, u->frames[u->given], PTE_P | PTE_W | PTE_U | PTE_NOEXEC) !=
-            0) {
+        if (map_user_frame(dir, page, u->frames[u->given], PTE_P | PTE_W | PTE_U | PTE_NOEXEC,
+                           MM_RSS_ANON) != 0) {
             return -1;
         }
         u->given++;

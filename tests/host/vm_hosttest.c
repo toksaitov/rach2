@@ -713,11 +713,11 @@ static void other_runs(void)
 /** Take the pages of [start, end) away, which the changer does after the
  * removal and before the insertion: the other thread comes in here, as it
  * would on another processor while the pages go. */
-void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
+void unmap_user_range(struct mm *mm, uintptr_t start, uintptr_t end)
 {
     void (*work)(void) = other_work;
 
-    (void)dir;
+    (void)mm;
     (void)start;
     (void)end;
     unmaps++;

@@ -295,6 +295,24 @@ void mm_reap(void)
     }
 }
 
+/** Count no resident page in `mm`, whose last user lets its pages go, the
+ * peak kept: the architecture's teardown of the tables that follows counts
+ * nothing, as Linux's exit_mmap counts nothing after its unmap. */
+static void rss_clear(struct mm *mm)
+{
+    uint32_t flags = spin_lock_irqsave(&mm->rss_lock);
+    uint32_t k;
+
+    if (mm->resident > mm->resident_peak) {
+        mm->resident_peak = mm->resident;
+    }
+    for (k = 0; k < MM_RSS_KINDS; k++) {
+        mm->rss[k] = 0;
+    }
+    mm->resident = 0;
+    spin_unlock_irqrestore(&mm->rss_lock, flags);
+}
+
 void mm_get(struct mm *mm)
 {
     mm->users++;
@@ -320,7 +338,7 @@ void mm_put(struct mm *mm)
     arch_mm_release(mm);
     dir = mm->dir;
     smp_space_release(dir);
-    mm_resident_add(dir, -(long)mm->resident);
+    rss_clear(mm);
     dir_forget(mm);
     mm->dir = NULL;
     mm->space_root = 0;
@@ -506,18 +524,33 @@ unsigned long mm_resident_peak(const struct mm *mm)
     return now > peak ? now : peak;
 }
 
-/** Count `pages` more, or fewer, present pages in `mm`; its `rss_lock` is
- * held. The peak is kept when pages go, as Linux's update_hiwater_rss. */
-static void rss_add(struct mm *mm, long pages)
+/** Apply `change`, the pages more or fewer of each kind, to `mm`, whose
+ * `rss_lock` is held. The peak is kept when pages go, as Linux's
+ * update_hiwater_rss. A count that would go below zero stays at zero. */
+static void rss_add(struct mm *mm, const long change[MM_RSS_KINDS])
 {
-    if (pages > 0) {
-        mm->resident += (unsigned long)pages;
-        return;
+    unsigned long sum = 0;
+    uint32_t k;
+
+    for (k = 0; k < MM_RSS_KINDS; k++) {
+        unsigned long less = change[k] < 0 ? (unsigned long)-change[k] : 0;
+
+        if (change[k] < 0 && mm->resident > mm->resident_peak) {
+            mm->resident_peak = mm->resident;
+        }
+#ifdef RACH2_RSS_CHECK
+        if (less > mm->rss[k]) {
+            k_panic("mm: rss: a resident count goes below zero");
+        }
+#endif
+        if (change[k] >= 0) {
+            mm->rss[k] += (unsigned long)change[k];
+        } else {
+            mm->rss[k] -= less < mm->rss[k] ? less : mm->rss[k];
+        }
+        sum += mm->rss[k];
     }
-    if (mm->resident > mm->resident_peak) {
-        mm->resident_peak = mm->resident;
-    }
-    mm->resident -= (unsigned long)-pages < mm->resident ? (unsigned long)-pages : mm->resident;
+    mm->resident = sum;
 }
 
 /**
@@ -525,17 +558,17 @@ static void rss_add(struct mm *mm, long pages)
  * while the thread runs; another is found under `dir_lock`, which is held
  * across the count so that the space found is not freed meanwhile.
  */
-void mm_resident_add(const struct page_dir *dir, long pages)
+void mm_resident_add(const struct page_dir *dir, const long change[MM_RSS_KINDS])
 {
     struct mm *mm = current_proc ? current_proc->mm : NULL;
     uint32_t flags;
 
-    if (pages == 0) {
+    if (change[MM_RSS_ANON] == 0 && change[MM_RSS_FILE] == 0 && change[MM_RSS_SHMEM] == 0) {
         return;
     }
     if (mm && mm->dir == dir) {
         flags = spin_lock_irqsave(&mm->rss_lock);
-        rss_add(mm, pages);
+        rss_add(mm, change);
         spin_unlock_irqrestore(&mm->rss_lock, flags);
         return;
     }
@@ -546,10 +579,21 @@ void mm_resident_add(const struct page_dir *dir, long pages)
     }
     if (mm) {
         spin_lock(&mm->rss_lock);
-        rss_add(mm, pages);
+        rss_add(mm, change);
         spin_unlock(&mm->rss_lock);
     }
     spin_unlock_irqrestore(&dir_lock, flags);
+}
+
+void mm_rss_snapshot(struct mm *mm, unsigned long pages[MM_RSS_KINDS])
+{
+    uint32_t flags = spin_lock_irqsave(&mm->rss_lock);
+    uint32_t k;
+
+    for (k = 0; k < MM_RSS_KINDS; k++) {
+        pages[k] = mm->rss[k];
+    }
+    spin_unlock_irqrestore(&mm->rss_lock, flags);
 }
 
 void mm_note_anon(struct mm *mm, uintptr_t start, uintptr_t end)

@@ -534,7 +534,7 @@ static int whole_page(void *obj, uint32_t pgoff, uintptr_t *phys)
         } else {
             mmap_write_lock(&mm_a);
             vm_remove(&mm_a.vm, W4 + (WPAGES - 4) * P, W4 + WPAGES * P);
-            unmap_user_range(&dir_a, W4 + (WPAGES - 4) * P, W4 + WPAGES * P);
+            unmap_user_range(&mm_a, W4 + (WPAGES - 4) * P, W4 + WPAGES * P);
             mmap_unlock(&mm_a);
         }
         whole_do = WHOLE_NONE;

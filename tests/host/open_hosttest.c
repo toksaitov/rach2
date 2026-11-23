@@ -1727,9 +1727,9 @@ void shmem_free_yielding(struct shmem *sh)
 }
 
 /** Fail the row: no row unmaps a range. */
-void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
+void unmap_user_range(struct mm *mm, uintptr_t start, uintptr_t end)
 {
-    (void)dir;
+    (void)mm;
     (void)start;
     (void)end;
     check(0, "unexpected unmap");
