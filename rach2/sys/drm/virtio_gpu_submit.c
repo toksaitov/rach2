@@ -85,11 +85,11 @@ static uint32_t payload_dword(struct submit_stream *st, uint32_t i)
 {
     const struct virtio_gpu_cmd *cmd = st->cmd;
     uint32_t off = i * 4u, size = cmd->stream_bytes;
+    const uint8_t *page;
 
     if (!cmd->stream_bytes) {
-        return *(
-            const uint32_t *)(const void *)((const uint8_t *)cmd->payload[off / PAGE_SIZE].page +
-                                            off % PAGE_SIZE);
+        page = (const uint8_t *)cmd->payload[off / PAGE_SIZE].page;
+        return *(const uint32_t *)(const void *)(page + off % PAGE_SIZE);
     }
     if (off < st->base || off - st->base >= st->have) {
         st->base = off & ~(uint32_t)(PAGE_SIZE - 1u);
