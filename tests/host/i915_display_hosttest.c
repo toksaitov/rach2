@@ -806,11 +806,13 @@ static void cross_on_surface(struct i915_hw *hw, uint32_t reg, uint32_t value)
     }
 }
 
-/** The vblank just after DSPSURF delivers the event in that frame. */
+/** A vblank just after DSPSURF delivers the event in that frame. A flip
+ * started just before a vblank waits for that latch window to pass. */
 static void row_vblank_crossing(void)
 {
     uint32_t fb, h, before;
-    int n0;
+    int32_t line = 0, start = pa->cfg.mode.vdisplay;
+    int n0, step;
 
     if (!fb_con) {
         h = bo_new(0, 5504u * 768u, I915_TILING_NONE, 0);
@@ -836,6 +838,27 @@ static void row_vblank_crossing(void)
     CHECK(nsent == n0 + 1 && sent[n0].user_data == 0x3504 &&
               sent[n0].sequence == (uint32_t)pa->base.vblank.count,
           "crossing: the first vblank delivered the event with its own count");
+
+    for (step = 0; step < 4096; step++) {
+        line = crtc_scanline(pa, pa->cfg.mode.vtotal);
+        if (line >= start - 3 && line < start) {
+            break;
+        }
+        i915_delay_us(&gpu.hw, 5);
+    }
+    CHECK(line >= start - 3 && line < start, "evasion: the model reached the guard window");
+    before = intel_get_vblank_counter(&pa->base);
+    n0 = nsent;
+    CHECK(page_flip(fb_con, DRM_MODE_PAGE_FLIP_EVENT, 0x3505) == 0, "evasion: PAGE_FLIP");
+    CHECK(intel_get_vblank_counter(&pa->base) == before + 1 &&
+              i915_model_pipes(&model)->pipe[0].primary.surf == BO_GGTT(20),
+          "evasion: the imminent vblank still showed the old surface");
+    take_messages();
+    CHECK(nsent == n0, "evasion: the imminent vblank did not send the event");
+    frame();
+    CHECK(nsent == n0 + 1 && sent[n0].user_data == 0x3505 &&
+              i915_model_pipes(&model)->pipe[0].primary.surf == BO_GGTT(0),
+          "evasion: the following vblank showed the surface and sent the event");
 }
 
 /** A wait that takes the pending interrupts first, as the processor takes
