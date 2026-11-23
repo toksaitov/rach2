@@ -614,8 +614,9 @@ int vfs_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
 }
 
 /** No core file is there before the dump makes one: -ENOENT. */
-int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
+int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name, int missing)
 {
+    (void)missing;
     (void)mnt;
     (void)dir;
     (void)name;

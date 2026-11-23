@@ -555,9 +555,13 @@ static struct bkl_trace_row *trace_append(void)
 void bkl_trace_sched(unsigned int kind, uint32_t tid, uint32_t prev)
 {
     struct bkl_trace_row *row;
-    uint32_t thread = bkl_trace_thread;
+    uint32_t thread;
 
-    if (!bkl_tracing || (thread && thread != tid && thread != prev)) {
+    if (!bkl_tracing) {
+        return;
+    }
+    thread = bkl_trace_thread;
+    if (thread && thread != tid && thread != prev) {
         return;
     }
     spin_lock(&bkl_trace_lock);
@@ -582,9 +586,13 @@ void bkl_trace_sched(unsigned int kind, uint32_t tid, uint32_t prev)
 static void trace_hold(const struct percpu *cpu, int c, uint64_t now, uint64_t waited, int ioctl)
 {
     struct bkl_trace_row *row;
-    uint32_t thread = bkl_trace_thread;
+    uint32_t thread;
 
-    if (!bkl_tracing || (thread && thread != cpu->bkl_trace_tid)) {
+    if (!bkl_tracing) {
+        return;
+    }
+    thread = bkl_trace_thread;
+    if (thread && thread != cpu->bkl_trace_tid) {
         return;
     }
     spin_lock(&bkl_trace_lock);
