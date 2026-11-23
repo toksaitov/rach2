@@ -749,8 +749,9 @@ struct vfs_ref;
  * `ofd`'s own as it was. Needs no memory, since the description brought the
  * count's record when it was made, and does
  * not sleep; the caller holds the node, and transfers that hold to the
- * description or releases the description before the node. The big kernel
- * lock is required. */
+ * description or releases the description before the node. The table of
+ * reservations and read-only remount admission share `ofd_lock`. A type
+ * that sets `writes_unlocked` needs no big lock for this reservation. */
 int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access);
 
 /** Begin a remount of `mnt` read-only: -EBUSY while a description holds a

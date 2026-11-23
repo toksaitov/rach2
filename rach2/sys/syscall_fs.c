@@ -6487,9 +6487,7 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
     e->ofd->ino = st->ino;
     e->ofd->offset = 0;
     if (acc != 0) {
-        bkl_enter();
         rc = fd_ofd_access(e->ofd, ref, 1);
-        bkl_exit();
     }
     if (rc == 0) {
         ofd_record_path(e->ofd, name);
@@ -6555,36 +6553,45 @@ static int open_cached_check(const struct vfs_ref *ref, const struct vfs_name *e
  * `do_filp_open`). The checks are those `open_mounted_node` makes for such
  * an open: ENOTDIR for O_DIRECTORY on a file and the inode permission for
  * the access mode and append flag. Writes require `writes_unlocked` and
- * take the big lock for the write reservation. An O_CREAT cache miss or an
+ * reserve write access under `ofd_lock`. An O_CREAT cache miss or an
  * O_CREAT in a sticky directory goes through the full open. The
  * descriptor is reserved before the walk, as `do_open` reserves it. The
  * descriptor or a negative errno; or CALL_LOCKED with nothing done, for
  * every other open, which `do_open` makes under the big lock. inotify's
  * report of the open takes the big lock while a watch is on the file's
- * file system (`open_install_unlocked`).
+ * file system (`open_install_unlocked`). An absolute `raw` is already
+ * canonical with its ending in `end`.
  */
-static int32_t open_unlocked(int dirfd, const char *raw, int flags)
+static int32_t open_unlocked(int dirfd, const char *raw, int flags, int end)
 {
     struct vfs_name *entry = NULL;
     struct vfs_stat st;
     struct vfs_ref ref;
     const char *name;
-    char *path;
+    const char *path = raw;
+    char *joined = NULL;
     int create = (flags & O_CREAT) != 0;
-    int end = 0, fd;
-    struct unlocked_path up;
+    int fd;
+    struct unlocked_path up = {0, {NULL, NULL}, 0};
     int32_t rc;
 
     if ((flags & OPEN_LOCKED_FLAGS) || (flags & O_ACCMODE) == O_ACCMODE ||
         (create && (flags & O_EXCL))) {
         return CALL_LOCKED;
     }
-    rc = path_from_text_unlocked(dirfd, raw, &path, &end, &up);
-    if (rc != 0) {
-        return rc;
+    if (raw[0] == '/') {
+        if (!vfs_seq_read(&up.seq)) {
+            return CALL_LOCKED;
+        }
+    } else {
+        rc = path_from_text_unlocked(dirfd, raw, &joined, &end, &up);
+        if (rc != 0) {
+            return rc;
+        }
+        path = joined;
     }
     if (end && create) {
-        unlocked_path_drop(path, &up);
+        unlocked_path_drop(joined, &up);
         return CALL_LOCKED;
     }
     if (end) {
@@ -6593,12 +6600,12 @@ static int32_t open_unlocked(int dirfd, const char *raw, int flags)
     name = path_name(path);
     if (device_name(name, "fb") || device_name(name, "mouse") || path_starts(name, "proc/") ||
         path_starts(name, "dev/")) {
-        unlocked_path_drop(path, &up);
+        unlocked_path_drop(joined, &up);
         return CALL_LOCKED;
     }
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
-        unlocked_path_drop(path, &up);
+        unlocked_path_drop(joined, &up);
         return fd;
     }
     rc = resolve_unlocked(path, &up,
@@ -6607,7 +6614,7 @@ static int32_t open_unlocked(int dirfd, const char *raw, int flags)
                           &ref, &entry);
     if (rc != 0) {
         fd_free(current_proc->fds, fd);
-        path_buf_put(path);
+        path_buf_put(joined);
         return rc == VFS_CACHED_MISS || (create && rc == -ENOENT) ? CALL_LOCKED : rc;
     }
     rc = open_cached_check(&ref, entry, flags, &st);
@@ -6615,11 +6622,11 @@ static int32_t open_unlocked(int dirfd, const char *raw, int flags)
         vfs_name_put(entry);
         vfs_ref_release(&ref);
         fd_free(current_proc->fds, fd);
-        path_buf_put(path);
+        path_buf_put(joined);
         return rc;
     }
     rc = open_install_unlocked(&ref, entry, fd, name, flags, &st);
-    path_buf_put(path);
+    path_buf_put(joined);
     return rc;
 }
 
@@ -6637,13 +6644,15 @@ static int32_t open_unlocked(int dirfd, const char *raw, int flags)
  * it. An O_TMPFILE open tells inotify of itself (`open_tmpfile`).
  *
  * A caller without the big lock tries `open_unlocked` first and takes the
- * big lock for what that leaves; the path is copied from the caller once,
- * for both (`user_text`).
+ * big lock for what that leaves. Both use the same copy of the caller's
+ * text (`user_text`). An absolute path is canonicalized in that page with
+ * its directory ending saved. A relative path is joined at each attempt
+ * so its walk starts from the directory the attempt took.
  */
 static int32_t open_from_user(int dirfd, const char __user *upath, int flags, uint32_t mode)
 {
     char *path;
-    int end, big;
+    int end = 0, big, absolute;
     int32_t rc;
 
     if ((flags & (O_CREAT | O_DIRECTORY | O_PATH)) == (O_CREAT | O_DIRECTORY)) {
@@ -6660,8 +6669,12 @@ static int32_t open_from_user(int dirfd, const char __user *upath, int flags, ui
     if (rc != 0) {
         return rc;
     }
+    absolute = path[0] == '/';
+    if (absolute) {
+        (void)canonicalize_named(path, &end);
+    }
     big = !bkl_held();
-    rc = big ? open_unlocked(dirfd, path, flags) : CALL_LOCKED;
+    rc = big ? open_unlocked(dirfd, path, flags, end) : CALL_LOCKED;
     if (rc != CALL_LOCKED) {
         path_buf_put(path);
         return rc;
@@ -6669,7 +6682,7 @@ static int32_t open_from_user(int dirfd, const char __user *upath, int flags, ui
     if (big) {
         bkl_enter();
     }
-    rc = join_path_at(path, VFS_PATH_MAX, dirfd, (int)k_strlen(path), &end);
+    rc = absolute ? 0 : join_path_at(path, VFS_PATH_MAX, dirfd, (int)k_strlen(path), &end);
     if (rc >= 0) {
         rc = open_named(path_name(path), flags, mode, end);
         if (rc >= 0 && !open_is_tmpfile(flags)) {
