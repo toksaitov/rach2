@@ -3557,7 +3557,10 @@ static int32_t devices_add(struct virtio_gpu_device *vg)
 
 /**
  * Initialize both queues and publish negotiated feature information; 0 or
- * -errno.
+ * -errno. On virtio-pci the queues' indirect tables hold 256 descriptors,
+ * the most the core gives, so that a payload goes a page a descriptor up
+ * to 254 pages, as Linux's indirect table gives each page of a submission
+ * a descriptor; QEMU takes a chain of up to 1024 (VIRTQUEUE_MAX_SIZE).
  */
 static int32_t vgpu_queues_init(struct virtio_gpu_device *vg)
 {
@@ -3577,6 +3580,9 @@ static int32_t vgpu_queues_init(struct virtio_gpu_device *vg)
     vg->vdev->priv = vg;
     vg->vdev->config_changed = vgpu_config_changed;
     vg->vdev->removed = vgpu_removed;
+    if (vg->pci) {
+        vg->vdev->indirect_len = VIRTQ_INDIRECT_MAX;
+    }
     rc = virtio_queue_setup(vg->vdev, VIRTIO_GPU_QUEUE_CONTROL, cmd_done, vg, &vg->ctrlq);
     if (rc == 0) {
         rc = virtio_queue_setup(vg->vdev, VIRTIO_GPU_QUEUE_CURSOR, cmd_done, vg, &vg->cursorq);

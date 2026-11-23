@@ -52,31 +52,65 @@ static int32_t payload_room(const struct virtio_gpu_cmd *cmd, uint32_t bytes, in
     return 0;
 }
 
+/** A run of `pages` pages of the DMA pool for `cmd`'s payload, its address
+ * in *addr: at once where the transport has one free; else, unless
+ * *waited says this payload has waited in vain already, after a wait for
+ * the pages started commands hold (`vgpu_dma_alloc_wait`); else the
+ * longest shorter run the transport has free, halving, its pages in
+ * *pages. NULL when not even a page is free. May sleep. */
+static uint8_t *payload_run(struct virtio_gpu_cmd *cmd, uint32_t *pages, int *waited,
+                            uint64_t *addr)
+{
+    uint32_t want = *pages;
+    uint8_t *run = (uint8_t *)virtio_dma_alloc(cmd->vg->vdev, want * PAGE_SIZE, addr);
+
+    if (!run && !*waited) {
+        run = (uint8_t *)vgpu_dma_alloc_wait(cmd->vg, want * PAGE_SIZE, addr);
+        *waited = !run;
+    }
+    while (!run && want > 1 && !cmd->vg->dead) {
+        want /= 2;
+        run = (uint8_t *)virtio_dma_alloc(cmd->vg->vdev, want * PAGE_SIZE, addr);
+    }
+    *pages = want;
+    return run;
+}
+
 /** Take the `n` pages of a payload from the DMA pool into `cmd->payload`,
- * in runs that follow each other in the device's addresses: a page each
- * while the pages fit the `room` descriptors one chain leaves them, else
- * runs of the fewest pages that keep their number within `room`, as one
- * descriptor carries a run. Each run waits for the pool as a command does
- * (`vgpu_dma_alloc_wait`). 0; -ENOMEM where such runs pass the largest
- * the transport gives (`dma_max`: a page alone, or the shared region's
- * 64 MiB; virtio-pci's runs have no bound but the memory's) or the wait
- * gives up; -ENODEV for a device that died. The runs taken stay `cmd`'s to
+ * in runs that follow each other in the device's addresses, one
+ * descriptor each, within the `room` descriptors one chain leaves them: a
+ * page each while the pages left fit the descriptors left, else runs of
+ * the fewest pages that keep them within. Where the transport has no free
+ * run that long, even after a wait, a shorter one is taken
+ * (`payload_run`) and the rest sized again on the descriptors left, so
+ * that scattered free frames carry a payload as far as the chain's
+ * descriptors reach, as Linux's vmalloc'd copy of a submission takes
+ * scattered pages. 0; -ENOMEM where the pages left outrun what the
+ * descriptors left carry in runs of the largest the transport gives
+ * (`dma_max`: a page alone, or the shared region's 64 MiB; virtio-pci's
+ * runs have no bound but the memory's) or the memory has not a page
+ * free; -ENODEV for a device that died. The runs taken stay `cmd`'s to
  * free. May sleep. */
 static int32_t payload_runs(struct virtio_gpu_cmd *cmd, uint32_t n, uint32_t room)
 {
-    uint32_t per = 1, i, k, here;
+    uint32_t most = cmd->vg->vdev->dma_max / PAGE_SIZE, i, k, here, left;
+    int waited = 0;
     uint8_t *run;
     uint64_t addr;
 
-    if (n > room) {
-        per = room ? n / room + (n % room != 0) : 0;
-        if (per == 0 || cmd->vg->vdev->dma_max / PAGE_SIZE < per) {
-            return -ENOMEM;
-        }
+    if (most == 0) {
+        most = 1;
     }
     for (i = 0; i < n; i += here) {
-        here = n - i < per ? n - i : per;
-        run = (uint8_t *)vgpu_dma_alloc_wait(cmd->vg, here * PAGE_SIZE, &addr);
+        left = n - i;
+        if (room == 0 || left / room + (left % room != 0) > most) {
+            return -ENOMEM;
+        }
+        if (cmd->vg->dead) {
+            return -ENODEV;
+        }
+        here = left / room + (left % room != 0);
+        run = payload_run(cmd, &here, &waited, &addr);
         if (!run) {
             return cmd->vg->dead ? -ENODEV : -ENOMEM;
         }
@@ -86,6 +120,7 @@ static int32_t payload_runs(struct virtio_gpu_cmd *cmd, uint32_t n, uint32_t roo
         }
         cmd->payload[i].pages = here;
         cmd->npayload = i + here;
+        room--;
     }
     return 0;
 }
@@ -248,14 +283,16 @@ static int32_t payload_joined(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_
  * frames, the shared region's up to 64 MiB of its heap. The chain is
  * judged whole before it is sent, as `cmd_submit` judges it. On a shared
  * region whose device joins parts (VGS_TF_PARTS), a SUBMIT_3D's stream
- * longer than one part goes ahead of it in parts (`payload_joined`), since
- * the heap, a few MiB, holds no longer stream at once. ENOMEM where the
- * bytes pass what the device takes in one command (`payload_room`), the
- * runs would pass the transport's largest, or the wait for the pool gives
- * up, as Linux answers ENOMEM when it cannot allocate the copy; EFAULT for
- * a bad pointer; EINTR at SIGKILL between parts; ENODEV for every command
- * of a dead device, whose queues are freed, a device that dies while an
- * allocation sleeps among them. Process context. */
+ * longer than one part goes ahead of it in parts, since the heap, a few
+ * MiB, holds no longer stream at once: here it is only noted, and
+ * `vgpu_cmd_parts` sends it once the sender has waited for every fence
+ * its submission depends on. ENOMEM where the bytes pass what the device
+ * takes in one command (`payload_room`), the runs would pass what the
+ * chain's descriptors carry, or the memory has not a page, as Linux
+ * answers ENOMEM when it cannot allocate the copy; EFAULT for a bad
+ * pointer; ENODEV for every command of a dead device, whose queues are
+ * freed, a device that dies while an allocation sleeps among them.
+ * Process context. */
 int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes, int response)
 {
     uint32_t n, each;
@@ -270,9 +307,30 @@ int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t byt
     each = part_bytes(cmd->vq);
     if (!response && cmd->vg->vdev->parts && each != 0 && bytes > each &&
         ((struct virtio_gpu_ctrl_hdr *)(void *)cmd->page)->type == VIRTIO_GPU_CMD_SUBMIT_3D) {
-        return payload_joined(cmd, user, bytes, each);
+        cmd->stream_user = user;
+        cmd->stream_bytes = bytes;
+        return 0;
     }
     return payload_chain(cmd, user, bytes, n, response);
+}
+
+/** Send the parts of the stream noted for `cmd` (`payload_joined`), as
+ * virtio_gpu.h says. Process context. */
+int32_t vgpu_cmd_parts(struct virtio_gpu_cmd *cmd)
+{
+    uint32_t each;
+
+    if (!cmd->stream_bytes) {
+        return 0;
+    }
+    if (cmd->vg->dead) {
+        return -ENODEV;
+    }
+    each = part_bytes(cmd->vq);
+    if (each == 0) {
+        return -ENOMEM;
+    }
+    return payload_joined(cmd, cmd->stream_user, cmd->stream_bytes, each);
 }
 
 /** Copy a completed capset payload into `to`; return 0 or EIO. */
