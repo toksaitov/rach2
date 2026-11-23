@@ -109,13 +109,20 @@ outputs()
         # The files of a closed milestone's claims of WSL's admission, which
         # release.sh's claim_start and claim.pl make in LOCKS, but those of
         # the run that OUT/windows.current names, which a late start reads,
-        # and those of a claim with an attempt whose lock is held; none while
-        # OUT/windows.current cannot be read.
+        # and those of a claim with an attempt whose lock is held. A missing
+        # OUT/windows.current, as before any release has run on Windows,
+        # names no run; none go while it exists and cannot be read, or while
+        # Windows' copy is not there to say.
         echo "closed=' $(closed | tr '\n' ' ')' locks=/home/testing/rach2/build/flow/claims"
-        o=$(awk '$1 == "windows" && $2 == "out" { print $3; exit }' "$(dirname "$0")/machines")
-        echo "current=/mnt/$(echo "$o" | cut -c 1 | tr '[:upper:]' '[:lower:]')$(echo "$o" | cut -c 3-)/windows.current"
+        echo "tree=$(wsl_path "$(windows tree)") current=$(wsl_path "$(windows out)")/windows.current"
         cat << 'END'
-current=$(tr -d '\r' < "$current" 2> /dev/null) || closed=
+if [ -e "$current" ]; then
+    current=$(tr -d '\r' < "$current") || closed=
+elif [ -d "$tree" ]; then
+    current=
+else
+    closed=
+fi
 for m in $closed; do
     for f in "$locks"/milestone"$m"-*-windows-*.*; do
         [ -e "$f" ] || continue
@@ -140,8 +147,7 @@ END
         printf '%s\n' "$stale"
         echo 'b=/d/rach2/build'
         echo "closed=' $(closed | tr '\n' ' ')'"
-        sh "$(dirname "$0")/winjob.sh" "$(awk '$1 == "windows" && $2 == "out" { print $3; exit }' \
-            "$(dirname "$0")/machines")"
+        sh "$(dirname "$0")/winjob.sh" "$(windows out)"
         # A run in build/tmp is live while the job of one of its parts is
         # not absent, as winjob.c says, or one of its parts has a token in
         # OUT and has not ended, as winclean.sh -l lists it, and every run is
@@ -223,6 +229,19 @@ END
         printf '%s\n' "$mh_left" | sed "s/^/$(hostname -s): sweep: keeps the Mac's runs, since a run may still run: /"
     fi
     git worktree prune
+}
+
+# windows NAME: print the value of the machines file's line `windows NAME`.
+windows()
+{
+    awk -v n="$1" '$1 == "windows" && $2 == n { print $3; exit }' "$(dirname "$0")/machines"
+}
+
+# wsl_path PATH: print Windows' PATH, such as D:/rach2, as WSL mounts it on
+# the testing host, /mnt/d/rach2.
+wsl_path()
+{
+    echo "/mnt/$(echo "$1" | cut -c 1 | tr '[:upper:]' '[:lower:]')$(echo "$1" | cut -c 3-)"
 }
 
 # quiet is the shell function that `outputs` runs as root on the testing
