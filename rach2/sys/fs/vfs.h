@@ -1956,8 +1956,9 @@ int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st);
  * mount entered by that name, or a mount over the node the name reaches,
  * a mount still being made included, whether it stands on `mnt` or, seen
  * by the caller's namespace, on another mount of the same file system, a
- * bind of `mnt` or the mount `mnt` binds. Look up the node only if such a
- * mount can cover it. This is how a namespace change sees a
+ * bind of `mnt` or the mount `mnt` binds. A bind over a file of several
+ * links counts only at the name it was bound at. Look up the node only if
+ * such a mount can cover it. This is how a namespace change sees a
  * mount point the type's own lookup cannot know: mkdir answers EEXIST for
  * it, unlink and rmdir and rename answer EBUSY, and a directory cannot be
  * removed or renamed while a constructor sleeps over it.
