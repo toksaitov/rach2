@@ -49,9 +49,10 @@
  * 1000, end 1.05 ms later, where by the tick they ended 3.6 ms later. The
  * slack is Linux's select_estimate_accuracy: the thread's 50 us at a short
  * timeout, a thousandth of a 10 s one, a two-hundredth at a positive nice,
- * at most 100 ms, at least a larger timer slack, and none under SCHED_FIFO
- * or with a zero timer slack, which an ordinary child of a real-time parent
- * with reset-on-fork has: its 1 ms wait ends at its time, not 1 us later.
+ * at most 100 ms, at least a larger timer slack, and none with a zero timer
+ * slack, which a real-time thread has, as does an ordinary child of a
+ * real-time parent with reset-on-fork: its 1 ms wait ends at its time, not
+ * 1 us later. A real-time thread given a slack takes it as any other does.
  * A zero timeout neither sleeps nor arms the timer, a wait without one
  * never arms it, and a signal or a ready descriptor ends a timed wait at
  * once, its timer cleared. The `hrtimer` argument runs these rows alone.
@@ -497,9 +498,13 @@ static void slack_rows(void)
           "a timer slack of 1 ms is more than a 1 ms wait's thousandth, and is taken");
     CHECK(slack_of(-5, 0, 0, PROC_TIMER_SLACK_NS) == 50000,
           "a wait whose end has passed takes the timer slack");
-    CHECK(slack_of(10000000000LL, 0, SCHED_FIFO, PROC_TIMER_SLACK_NS) == 0 &&
-              slack_of(10000000000LL, 0, SCHED_DEADLINE, PROC_TIMER_SLACK_NS) == 0,
-          "a real-time or deadline thread takes none");
+    CHECK(slack_of(10000000000LL, 0, SCHED_FIFO, 0) == 0 &&
+              slack_of(10000000000LL, 0, SCHED_DEADLINE, 0) == 0,
+          "a real-time or deadline thread, whose timer slack is zero, takes none");
+    CHECK(slack_of(10000000000LL, 0, SCHED_FIFO, PROC_TIMER_SLACK_NS) == 10000000 &&
+              slack_of(10000000000LL, 1, SCHED_RR, PROC_TIMER_SLACK_NS) == 50000000 &&
+              slack_of(1000000, 0, SCHED_DEADLINE, PROC_TIMER_SLACK_NS) == 50000,
+          "a real-time or deadline thread with a timer slack takes it as an ordinary one");
     CHECK(slack_of(1000000, 0, 0, 0) == 0 && slack_of(10000000000LL, 1, 0, 0) == 0,
           "an ordinary thread with a zero timer slack takes none");
 }
