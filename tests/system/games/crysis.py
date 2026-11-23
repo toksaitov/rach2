@@ -29,7 +29,9 @@ home, as the native case runs them, in which the home is read-only.
 `flyby` runs Linux's island flyby, `-devmode +map island +exec benchmark_gpu`,
 and ends the game after LOOPS of its four loops; each loop's rate is judged
 against GATE frames a second (24 unless CRYSIS_GATE says), beside Linux's,
-but on the 32-bit game, which need only complete its loops.
+but on the 32-bit game, which need only complete its loops. With
+CRYSIS_LOAD_TRACE=N it samples every thread from the HUD's Nth frame across
+the long frame that ends the level's load, into STATE/NAME-load (LoadTrace).
 `hud` loads a copy of SAVE, a checkpoint before the suit's reboot on the
 first level, made under a name of its own so that the player's save is only
 read, enters the reboot's trigger at the console and reads the HUD back 35 s
@@ -62,6 +64,11 @@ BENCH = GAME / "Game/Levels/island/benchmark_gpu.log"
 RECORD = BASE / "accept.json"
 STATE = Path(os.environ.get("CRYSIS_STATE", "/run/crysis-accept"))
 HUD_PARENT = os.environ.get("CRYSIS_HUD_PARENT")
+# CRYSIS_LOAD_TRACE=N has a flyby sample every thread across the frames that
+# end the level's load, from the HUD's Nth frame (LoadTrace).
+LOAD_TRACE = os.environ.get("CRYSIS_LOAD_TRACE")
+# Rach2's profiling kernel's counts of system calls, page faults and sleeps.
+BKL_CALLS = Path("/sys/kernel/debug/bkl/calls")
 UID = 1001
 HOME = os.environ.get("CRYSIS_HOME")
 ENV = ("export XDG_RUNTIME_DIR=/run/user/1001 DISPLAY=:0 "
@@ -454,20 +461,143 @@ def frame_stats(values):
         at(0.5), at(0.99), s[-1], sum(1 for v in s if v > 50), sum(1 for v in s if v > 100))
 
 
-def profile_dir(name):
-    """Return STATE/NAME-profile, made new, when BED_PROFILE names the reader,
-    or None. STATE is root's, and its parent is too where the profile is
-    taken, so the snapshots root writes there go through no name the desktop
-    account chose, as one in OUT, which that account owns, could."""
-    if not os.environ.get("BED_PROFILE"):
-        return None
-    counts = STATE / (name + "-profile")
+def state_dir(name):
+    """Return STATE/NAME, made new. STATE is root's, and its parent is too
+    where a profile is taken, so the snapshots root writes there go through
+    no name the desktop account chose, as one in OUT, which that account
+    owns, could."""
+    counts = STATE / name
     if counts.is_dir() and not counts.is_symlink():
         shutil.rmtree(counts)
     elif counts.exists() or counts.is_symlink():
         counts.unlink()
     counts.mkdir(mode=0o755)
     return counts
+
+
+def profile_dir(name):
+    """Return STATE/NAME-profile, made new, when BED_PROFILE names the reader,
+    or None."""
+    return state_dir(name + "-profile") if os.environ.get("BED_PROFILE") else None
+
+
+def thread_rows():
+    """Return one line a thread: its ID, its process's, its state, its user
+    and system ticks, its wait channel, its system call's number and its
+    name, read from /proc/PID/task/TID; a thread that ends meanwhile is left
+    out."""
+    rows = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            tids = os.listdir("/proc/%s/task" % pid)
+        except OSError:
+            continue
+        for tid in tids:
+            task = "/proc/%s/task/%s/" % (pid, tid)
+            try:
+                with open(task + "stat") as f:
+                    stat = f.read()
+                with open(task + "wchan") as f:
+                    wchan = f.read().strip() or "0"
+                with open(task + "syscall") as f:
+                    call = (f.read().split() or ["-"])[0]
+            except OSError:
+                continue
+            fields = stat[stat.rfind(")") + 2:].split()
+            rows.append("%s %s %s %s %s %s %s %s" % (
+                tid, pid, fields[0], fields[11], fields[12], wchan, call,
+                stat[stat.find("(") + 1:stat.rfind(")")]))
+    return rows
+
+
+class LoadTrace:
+    """Sample every thread across the frames that end the level's load, the
+    longest of which has taken 1.5 s on Rach2: from the HUD's FIRST frame,
+    every 50 ms, until a frame of 1 s or more and ten frames after it are in
+    the dump, or 30 s have passed. WHERE gets `samples`, each sample a line
+    `sample NS FRAMES`, the monotonic time and the HUD's frame count, then
+    thread_rows(); `calls`, the profiling kernel's bkl/calls over the trace,
+    for every thread, when it has one; and `summary`, which names the long
+    frame and the states, wait channels and system calls in the samples
+    taken during it of each thread of the game's processes and wineserver,
+    and of any other thread running or in a disk wait."""
+
+    def __init__(self, game, where, first):
+        self.game, self.where, self.first = game, where, first
+        self.done = False
+
+    def step(self):
+        """Run the trace once the HUD holds FIRST frames; return whether it
+        has run."""
+        if not self.done and self.game.frames() >= self.first:
+            self.run()
+            self.done = True
+        return self.done
+
+    def times(self):
+        """Return the HUD's frame times so far."""
+        try:
+            with open(self.game.hud / "frametime_(ms)") as f:
+                return [float(line.split()[-1]) for line in f if line.split()]
+        except OSError:
+            return []
+
+    def run(self):
+        """Take the samples, the counts and the summary."""
+        counting = True
+        try:
+            BKL_CALLS.write_text("all\n")  # any word but `thread` counts every thread
+        except OSError:
+            counting = False
+        samples, long_at = [], None
+        end = time.monotonic() + 30
+        while time.monotonic() < end:
+            times = self.times()
+            if long_at is None:
+                long_at = next((i for i in range(self.first, len(times)) if times[i] >= 1000), None)
+            if long_at is not None and len(times) > long_at + 10:
+                break
+            samples.append((time.monotonic_ns(), len(times), thread_rows()))
+            time.sleep(0.05)
+        times = self.times()
+        if counting:
+            try:
+                shutil.copyfile(BKL_CALLS, self.where / "calls")
+            except OSError:
+                pass
+        with open(self.where / "samples", "w") as f:
+            for ns, frames, rows in samples:
+                f.write("sample %d %d\n" % (ns, frames))
+                f.writelines(row + "\n" for row in rows)
+        self.summary(samples, times, long_at)
+
+    def summary(self, samples, times, long_at):
+        """Write and say what the game's threads did in the long frame: the
+        samples taken while the HUD held long_at frames, that frame not yet
+        presented."""
+        if long_at is None:
+            text = "no frame of 1 s or more in %d samples to frame %d\n" % (len(samples), len(times))
+        else:
+            during = [rows for ns, frames, rows in samples if frames == long_at]
+            states, ticks = {}, {}
+            for rows in during:
+                split = [row.split(" ", 7) for row in rows]
+                game = {r[1] for r in split if r[0] == r[1] and (
+                    "Crysis" in r[7] or "wineserver" in r[7] or r[7].endswith(".exe"))}
+                for tid, pid, state, user, system, wchan, call, name in split:
+                    if pid not in game and state not in ("R", "D"):
+                        continue
+                    key = "%s %s %s %s %s" % (tid, name.replace(" ", "_"), state, wchan, call)
+                    states[key] = states.get(key, 0) + 1
+                    ticks.setdefault(tid, []).append(int(user) + int(system))
+            text = "frame %d of %.1f ms, %d samples in it\n" % (long_at, times[long_at], len(during))
+            for key, n in sorted(states.items(), key=lambda kv: -kv[1])[:40]:
+                tid = key.split()[0]
+                text += "%3d %s ticks %d\n" % (n, key, ticks[tid][-1] - ticks[tid][0])
+        (self.where / "summary").write_text(text)
+        say("load trace: " + text.splitlines()[0])
 
 
 def flyby_profile(game, counts, phase):
@@ -491,10 +621,11 @@ def flyby(route, name, loops):
     settings()
     counts = profile_dir(name)
     game = Game(out, route, ["+map", "island", "+exec", "benchmark_gpu"])
+    trace = LoadTrace(game, state_dir(name + "-load"), int(LOAD_TRACE)) if LOAD_TRACE else None
     ends = []
     profiling = False
     try:
-        game.wait(lambda: game.loaded() is not None, "load")
+        game.wait(lambda: (trace is None or trace.step()) and game.loaded() is not None, "load")
         say("loaded in %s s" % game.loaded())
         if counts:
             profiling = True
