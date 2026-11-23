@@ -381,11 +381,11 @@ static void admit_drop(struct vr *r, uint32_t id);
  * other, summed over its mipmap chain, each level's width, height and, for
  * a 3D texture, depth half the last's and never below 1, by its layers, six
  * for a cube, and its samples, and rounded up to a 4 KiB page. A bound, not
- * the driver's size: it judges only this create, since once the renderer
- * has the resource the VM's counts and i915's hold its storage
- * (`gpu_unbacked`), and an error of one create lies within the eighth of
- * the VM that `mem_room` keeps; the ledger holds it at this bound only
- * when a reading missed a client (`ledger_held`).
+ * the driver's size: the account counts the create at this bound only
+ * until its next reading of the GPU objects, after which the VM's counts
+ * and i915's hold its storage (`gpu_unbacked`), unless a reading missed a
+ * client (`ledger_held`), so an error of one create lies within the eighth
+ * of the VM that `mem_room` keeps.
  */
 static uint64_t create_bytes(const struct vd_create *a)
 {
