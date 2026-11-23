@@ -5,6 +5,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/usercopy.h"
+#include "../proc/smp.h"
 #ifdef RACH2_VGPU_PROFILE
 #include "../rtc.h"
 #endif
@@ -79,9 +80,44 @@ int32_t vgpu_wait_dependency(struct virtio_gpu_device *vg, struct dma_fence *fen
     return rc ? rc : (vg->dead ? -ENODEV : 0);
 }
 
+/** Drop a reference a handler without the big lock took on `obj`: the last
+ * one frees the object, which needs that lock (`vgpu_obj_free`). */
+static void obj_put_unlocked(struct drm_gem_object *obj)
+{
+    if (drm_gem_object_put_unless_last(obj)) {
+        return;
+    }
+    bkl_enter();
+    drm_gem_object_put(obj);
+    bkl_exit();
+}
+
+/**
+ * VIRTGPU_WAIT with VIRTGPU_WAIT_NOWAIT, without the big lock: whether the
+ * object's fences have signalled, from the snapshot its reservation's lock
+ * gives and each fence's mark, as Linux's virtio_gpu_wait_ioctl tests them
+ * (dma_resv_test_signaled). The answers' interrupts signal the fences, so
+ * nothing is reaped. 0, -EBUSY or -ENOMEM.
+ */
+static int32_t wait_nowait(struct drm_gem_object *obj)
+{
+    struct dma_fence *f = dma_resv_snapshot(obj->resv, 1);
+    int32_t rc;
+
+    if (!f) {
+        return -ENOMEM;
+    }
+    rc = dma_fence_is_signaled(f) ? 0 : -EBUSY;
+    dma_fence_put(f);
+    return rc;
+}
+
 /**
  * Implement Linux's buffer WAIT, with EBUSY for pending NOWAIT or a
- * 15-second expiry.
+ * 15-second expiry. The row runs without the big lock: a NOWAIT on a
+ * device whose answers come by interrupt tests the fences alone
+ * (`wait_nowait`), and every other wait takes the lock, reaps the queues,
+ * which answers a device without interrupts, and sleeps on the fence.
  */
 int32_t vgpu_wait_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
@@ -94,14 +130,26 @@ int32_t vgpu_wait_ioctl(struct drm_device *dev, void *data, struct drm_file *fil
     if (vg->dead) {
         return -ENODEV;
     }
+    if ((a->flags & VIRTGPU_WAIT_NOWAIT) && !vg->vdev->polled) {
+        obj = drm_gem_object_lookup(file, a->handle);
+        if (!obj) {
+            return -ENOENT;
+        }
+        rc = wait_nowait(obj);
+        obj_put_unlocked(obj);
+        return rc;
+    }
+    bkl_enter();
     vgpu_reap(vg);
     obj = drm_gem_object_lookup(file, a->handle);
     if (!obj) {
+        bkl_exit();
         return -ENOENT;
     }
     f = dma_resv_snapshot(obj->resv, 1);
     drm_gem_object_put(obj);
     if (!f) {
+        bkl_exit();
         return -ENOMEM;
     }
     if (a->flags & VIRTGPU_WAIT_NOWAIT) {
@@ -122,6 +170,7 @@ int32_t vgpu_wait_ioctl(struct drm_device *dev, void *data, struct drm_file *fil
 #endif
     }
     dma_fence_put(f);
+    bkl_exit();
     return rc;
 }
 

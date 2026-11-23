@@ -8,6 +8,7 @@
 #ifndef VGPUDEV_H
 #define VGPUDEV_H
 
+#include <pthread.h>
 #include <stdint.h>
 #include <sys/uio.h>
 
@@ -150,6 +151,10 @@ struct vd_ops {
      * attached and pinned at its first ask, and give its pages' runs, as
      * `pages` does; under VGS_TF_BACKING. */
     int (*back)(void *c, struct vd_pages *q);
+    /* Between two commands of the control queue: let the renderer do what
+     * it waits for the serving thread to do, as virglrenderer's sync
+     * thread waits for a poll that reads its queries; NULL for nothing. */
+    void (*poll)(void *c);
 };
 
 /* What the backend offers, fixed before the first epoch. */
@@ -170,15 +175,39 @@ struct vd_counts {
 };
 
 /* Command totals in the serving thread. Times are monotonic nanoseconds. */
-#define VD_PROFILE_OTHER 49u
+#define VD_PROFILE_OTHER   49u
+/* An execution at least this long counts in a row's `slow` and `slow_ns`. */
+#define VD_PROFILE_SLOW_NS 4000000u
+
+/* One command type's counts under -T. `queue_ns` is the time from the
+   look-ahead's read of each chain to the start of its service; `fence_ns`
+   the time from a held command's fence call to its completion, over
+   `held` commands. */
 struct vd_profile_row {
     uint32_t type;
     uint64_t count, bytes, copy_ns, execute_ns, answer_ns;
+    uint64_t queue_ns, slow, slow_ns, max_ns, held, fence_ns;
+};
+
+/* What the look-ahead did with each backing ask it consumed: served ahead,
+   found at its turn, or kept in order because it is fenced or its id is 0
+   or in the table, an earlier entry other than its unfenced create names
+   the id or there is no such create, the table lacks room, or an earlier
+   chain breaks the rules. */
+enum {
+    VD_AHEAD_SERVED,
+    VD_AHEAD_TURN,
+    VD_AHEAD_KNOWN,
+    VD_AHEAD_NAMED,
+    VD_AHEAD_ROOM,
+    VD_AHEAD_BAD,
+    VD_AHEAD_N
 };
 
 struct vd_profile {
     struct vd_profile_row row[VD_PROFILE_OTHER + 1];
     uint64_t crc_bytes, read_ns, crc_ns, log_ns;
+    uint64_t ahead[VD_AHEAD_N];
 };
 
 /* A device resource beside its table entry. */
@@ -204,11 +233,35 @@ struct vd_pending {
     uint64_t fence_id; /* the command's fence */
     uint32_t unfenced; /* 1 while the renderer holds no fence of its own for it */
     uint32_t rlen;     /* response bytes in resp */
+    uint32_t row;      /* its profile row, under -T */
+    uint64_t held_ns;  /* when it was held, under -T */
     uint8_t resp[24];  /* a fenced command's response is a bare header */
     struct vgs_chain chain;
 };
 
-/* The device: its region, its copy of each block and its tables. */
+/*
+ * A control queue entry that the look-ahead has consumed (`ahead` in
+ * device.c), by its place in the avail ring, until the in-order pass
+ * reaches it. Its head is kept here, since a guest that has its answers
+ * for entries served ahead may reuse their descriptors and ring places.
+ */
+struct vd_ahead {
+    uint32_t head;    /* the chain's head, as the avail ring gave it */
+    uint32_t type;    /* the command's type, 0 for a chain too short */
+    uint32_t flags;   /* its header's flags */
+    uint32_t id;      /* the resource its body names first, 0 for none */
+    uint32_t bad;     /* 1 for a chain that breaks the rules: the in-order pass judges it */
+    uint32_t done;    /* 1 once it was served ahead of its turn */
+    uint64_t read_ns; /* when the look-ahead read it, under -T */
+};
+
+/*
+ * The device: its region, its copy of each block and its tables. `lock`
+ * is over `pend`, `npend`, `nunfenced`, `used`, `kick`, the queues' used
+ * rings and the driver's block in `drv`, which the renderer's fence threads
+ * reach through vd_fence_retired and vd_kick; the serving thread holds it
+ * only between calls to the renderer, never across one.
+ */
 struct vd {
     volatile uint8_t *base;
     uint64_t size;
@@ -219,8 +272,11 @@ struct vd {
     struct vgs_table t;
     struct vgs_obj obj[VD_OBJS];
     struct vd_res res[VD_OBJS];
-    uint16_t last[VGS_QUEUES];     /* avail entries consumed */
-    uint16_t used[VGS_QUEUES];     /* used entries published */
+    uint16_t last[VGS_QUEUES]; /* avail entries served in order */
+    uint16_t used[VGS_QUEUES]; /* used entries published */
+    uint16_t seen;             /* control queue avail entries consumed, at most a queue past last */
+    struct vd_ahead ahead[VGS_QUEUE_MAX];
+    pthread_mutex_t lock;
     uint32_t scanout[VD_SCANOUTS]; /* each scanout's resource, or 0 */
     struct vd_pending pend[VD_PENDING];
     uint32_t npend;
@@ -229,6 +285,7 @@ struct vd {
     uint8_t *cmd;       /* a chain's readable part, cmd_cap bytes, grown to a chain's */
     uint32_t cmd_cap;   /* at most offer.limits.max_cmd */
     uint32_t room;      /* the writable bytes of the chain being served */
+    uint64_t read_ns;   /* when the look-ahead read the chain being served, 0 for none */
     /* The stream a SUBMIT_3D with VGS_FLAG_JOINED takes, joined from its
      * VGS_CMD_PART chains (vgpushm.h): join_total bytes allocated at the
      * first part, join_len of them come; join_err is the refusal of a part
@@ -255,6 +312,7 @@ void vd_fini(struct vd *d);
 int vd_step(struct vd *d);
 void vd_fence_retired(struct vd *d, uint32_t ctx, int per_ctx, uint32_t ring, uint64_t id);
 void vd_kick(struct vd *d);
+uint32_t vd_pending(struct vd *d, struct vd_pending *oldest, uint32_t *unfenced);
 void vd_beat(struct vd *d);
 uint64_t vd_profile_now(void);
 

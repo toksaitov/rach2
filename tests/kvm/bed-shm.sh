@@ -133,11 +133,17 @@
 #
 # With -w -g -l crysis, run the two-loop Crysis flyby once the region's
 # session is ready, in native/crysis.sh's private data fixture and, through
-# `crysis.sh seal`, in its read-only namespace. The VM stops after the
-# figure, and the same return and handoff checks apply.
+# `crysis.sh seal`, in its read-only namespace. After the figure the
+# backend is stopped through the VM's second serial port, and the
+# `backend: result:` lines it prints after that word are printed and must
+# hold a whole account line followed by its end with status 0 (`account`);
+# then the VM stops, and the same return and handoff checks apply.
 # CRYSIS_LOOPS=1 selects one loop for a profile.
 # BED_VM_PROFILE_PORT forwards a loopback port to a profiling VM's SSH
 # server. BED_VM_PROFILE_CRC=1 asks that VM to enable the flush readback.
+# BED_VM_MESA_DEBUG gives the VM's backend Mesa's MESA_DEBUG, lowercase
+# words or digits joined by commas: any but `silent`, such as 1, logs each
+# GL error with its call.
 # BED_PROFILE_ONLY=1 returns the GPU after the figures, before the VM's
 # death-under-load check.
 set -u
@@ -202,6 +208,9 @@ esac
 case ${BED_VM_PROFILE_CRC:-0} in
     0|1) ;;
     *) echo 'bed-shm: profiling CRC must be 0 or 1' >&2; exit 2 ;;
+esac
+case ${BED_VM_MESA_DEBUG:-} in
+    *[!a-z0-9,]*) echo 'bed-shm: Mesa debug flags must be lowercase words, digits and commas' >&2; exit 2 ;;
 esac
 profile_only=${BED_PROFILE_ONLY:-0}
 if [ "$profile_only" = 1 ] && { [ "$desk" != 1 ] || [ -z "$measure" ]; }; then
@@ -854,14 +863,18 @@ if [ -n "${BED_VM_PROFILE_PORT:-}" ]; then
         -device virtio-net-pci,netdev=bedprof \
         -fw_cfg "name=opt/rach2/vgpu-profile,string=${BED_VM_PROFILE_CRC:-0}"
 fi
+# QEMU's option parser reads a doubled comma as one comma.
+[ -z "${BED_VM_MESA_DEBUG:-}" ] ||
+    set -- "$@" -fw_cfg \
+        "name=opt/rach2/mesa-debug,string=$(printf '%s' "$BED_VM_MESA_DEBUG" | sed 's/,/,,/g')"
 # The VM's second serial port, ttyS1, a pipe whose input this script
 # keeps open, read and written, so that a word sent never waits, even with
 # QEMU gone: bed-vm-control in the VM does each word to the backend
-# (vm_ctl).
+# (vm_ctl). With -g too, where the flyby's end stops the backend through it.
 mkfifo "$out/ctl.in" "$out/ctl.out"
 exec 7<> "$out/ctl.in"
+set -- "$@" -chardev pipe,path="$out/ctl",id=ctl -device isa-serial,chardev=ctl,index=1
 if [ -z "$bdf" ]; then
-    set -- "$@" -chardev pipe,path="$out/ctl",id=ctl -device isa-serial,chardev=ctl,index=1
     keep_new QEMU
     TMPDIR=$out "$keep" "$$" "$kb" qemu-system-x86_64 -accel kvm -machine q35,kernel-irqchip=split -cpu host -smp "$cpus" \
         -m "${mib}M" -nodefaults -no-reboot -display none -monitor none \
@@ -1325,14 +1338,14 @@ readback()
     fi
 }
 
-# vm_ctl WORD: have bed-vm-control in the VM do WORD to the backend, stop,
-# cont, kill or start, and wait, 120 s at most, for its word on the console
-# that it has.
+# vm_ctl WORD [SECONDS]: have bed-vm-control in the VM do WORD to the
+# backend, stop, cont, kill, start, hold, refuse or term, and wait SECONDS,
+# 120 by default, at most for its word on the console that it has.
 vm_ctl()
 {
     had=$(tr -d '\r' < "$console" | grep -c "bed-vm: control: $1: done")
     echo "$1" >&7
-    n=120
+    n=${2:-120}
     while [ "$(tr -d '\r' < "$console" | grep -c "bed-vm: control: $1: done")" -le "$had" ]; do
         n=$((n - 1))
         [ "$n" -gt 0 ] || return 1
@@ -1787,12 +1800,76 @@ crysis_figure()
     fi
 }
 
-# crysis_return: stop the VM after the flyby and check the restored session.
+# crysis_fresh: print, without carriage returns, the console's whole lines
+# that began after byte $mark. The read starts one byte early, or at an
+# added newline when $mark is 0, so its first record is the rest of the
+# line the mark cut, or nothing, and is dropped; the sentinel after the file
+# ends the last record, so a line still being written is dropped too.
+crysis_fresh()
+{
+    {
+        if [ "$mark" -gt 0 ]; then
+            tail -c "+$mark" "$console"
+        else
+            echo
+            cat "$console"
+        fi
+        printf '%s\n' '@crysis-fresh-end@'
+    } | tr -d '\r' | awk 'NR > 1 && !/@crysis-fresh-end@$/'
+}
+
+# crysis_account: stop the VM's backend with SIGTERM through the control
+# port, so that it prints its `backend: result:` lines before the VM is
+# killed, and wait while the VM lives, 120 s at most in all, for the
+# service's `backend: ended:` line on the console. Print the result and end
+# lines that came after the word, and pass `account` only when they hold a
+# whole account line, `backend: result: account judged N, least room R
+# bytes, ledger most L bytes`, followed by `backend: ended: status 0`. A
+# stall's snapshot before the word does not count.
+crysis_account()
+{
+    if ! vm_alive; then
+        fail account 'the VM ended before its backend was stopped'
+        return
+    fi
+    mark=$(($(wc -c < "$console")))
+    start=$(date +%s)
+    aerr=''
+    vm_ctl term 120 || aerr="no word from the VM that the backend was sent TERM"
+    n=$((120 - ($(date +%s) - start)))
+    until crysis_fresh | grep -aqE 'bed-vm: backend: ended: status [0-9]+$'; do
+        n=$((n - 1))
+        { [ "$n" -gt 0 ] && vm_alive; } || break
+        sleep 1
+    done
+    crysis_fresh | grep -aE 'bed-vm: backend: (result|ended): ' |
+        sed 's/^.*bed-vm: /bed-shm: vm: /'
+    line=$(crysis_fresh | awk '
+        /bed-vm: backend: result: account / {
+            sub(/^.*bed-vm: backend: result: account /, "")
+            acc = $0 ~ /^judged [0-9]+, least room [0-9]+ bytes, ledger most [0-9]+ bytes$/ ? $0 : ""
+            next
+        }
+        /bed-vm: backend: ended: status/ {
+            if (acc != "" && $0 ~ /bed-vm: backend: ended: status 0$/) found = acc
+            exit
+        }
+        END { if (found != "") print found }')
+    if [ -n "$line" ]; then
+        pass account "$line"
+    else
+        fail account "${aerr:+$aerr; }no whole account line followed by the backend's end with status 0 since TERM: $(tr -d '\r' < "$console" | tail -n 2 | tr '\n' ' ')"
+    fi
+}
+
+# crysis_return: stop the backend and then the VM after the flyby, and
+# check the restored session.
 crysis_return()
 {
     crysis_restore_ini || fail return 'could not restore weston.ini'
     dead=$(command stat -c %s "$services" 2>/dev/null || echo 0)
     tail -c 16384 "$services" > "$out/services-death.txt"
+    crysis_account
     kill_vm
     desk_return
 }

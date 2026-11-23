@@ -399,11 +399,16 @@ static void report(struct vd *d, struct src *s, struct vr *r, struct kms *k)
             (unsigned long long)s->wakes[1], (unsigned long long)s->polled);
     fprintf(stderr,
             "backend: result: maps %llu, unmaps %llu, backings %llu, pinned %llu, "
-            "backed %llu, refused %llu, unpinned %llu\n",
+            "backed %llu, refused %llu, unpinned %llu, held %llu, charged %llu\n",
             (unsigned long long)d->n.maps, (unsigned long long)d->n.unmaps,
             (unsigned long long)d->n.backs, (unsigned long long)pc->pinned,
             (unsigned long long)pc->backed, (unsigned long long)pc->refused,
-            (unsigned long long)pc->unpinned);
+            (unsigned long long)pc->unpinned, (unsigned long long)pc->held,
+            (unsigned long long)pc->charged);
+    fprintf(stderr,
+            "backend: result: account judged %llu, least room %llu bytes, ledger most %llu bytes\n",
+            (unsigned long long)pc->judged, (unsigned long long)pc->least_room,
+            (unsigned long long)pc->ledger_most);
     if (s->dev >= 0 && ioctl(s->dev, VGPUSHM_IOC_COUNTS, &mc) == 0) {
         fprintf(stderr, "backend: result: module irqs %llu+%llu, signals %llu+%llu, rings %llu\n",
                 (unsigned long long)mc.irqs[0], (unsigned long long)mc.irqs[1],
@@ -438,17 +443,14 @@ static void report(struct vd *d, struct src *s, struct vr *r, struct kms *k)
 static void fence_watch(struct vd *d, struct src *s, struct vr *r, uint64_t *seen, time_t *since,
                         time_t *next)
 {
+    struct vd_pending oldest;
     const struct vd_pending *old = 0;
     time_t t = time(0);
     char why[192];
-    uint32_t i;
+    uint32_t unfenced, n = vd_pending(d, &oldest, &unfenced);
 
-    for (i = 0; i < VD_PENDING && d->npend; i++) {
-        const struct vd_pending *p = &d->pend[i];
-
-        if (p->used && (!old || p->fence_id < old->fence_id)) {
-            old = p;
-        }
+    if (n) {
+        old = &oldest;
     }
     if (!old || old->fence_id + 1 != *seen) {
         *seen = old ? old->fence_id + 1 : 0;
@@ -462,21 +464,31 @@ static void fence_watch(struct vd *d, struct src *s, struct vr *r, uint64_t *see
     snprintf(why, sizeof(why),
              "%u fenced commands wait, %u with no renderer fence; the oldest, fence %llu of "
              "context %u, ring %u, for %ld s",
-             (unsigned)d->npend, (unsigned)d->nunfenced, (unsigned long long)old->fence_id,
-             (unsigned)old->ctx, (unsigned)old->ring, (long)(t - *since));
+             (unsigned)n, (unsigned)unfenced, (unsigned long long)old->fence_id, (unsigned)old->ctx,
+             (unsigned)old->ring, (long)(t - *since));
     report(d, s, r, 0);
     stall_report(why);
     *next = t + STALL_AGAIN_S;
 }
 
-/** Replace path with a complete snapshot from the serving thread. */
-static void write_profile(const struct vd_profile *p, const char *path)
+/**
+ * Replace path with a complete snapshot of d's profile, from the serving
+ * thread. The renderer's threads add a held command's `held` and
+ * `fence_ns` under d->lock, so the profile is copied under that lock and
+ * the copy formatted after it is let go.
+ */
+static void write_profile(struct vd *d, const char *path)
 {
+    static struct vd_profile copy;
+    const struct vd_profile *p = &copy;
     char *tmp;
     unsigned i;
     int fd;
     FILE *fp;
 
+    pthread_mutex_lock(&d->lock);
+    copy = *d->profile;
+    pthread_mutex_unlock(&d->lock);
     if (asprintf(&tmp, "%s.XXXXXX", path) < 0) {
         return;
     }
@@ -484,21 +496,31 @@ static void write_profile(const struct vd_profile *p, const char *path)
     fp = fd < 0 ? NULL : fdopen(fd, "w");
     if (fp) {
         fprintf(fp, "monotonic_ns %llu\n", (unsigned long long)vd_profile_now());
-        fputs("type count bytes copy_ns execute_ns answer_ns\n", fp);
+        fputs("type count bytes copy_ns execute_ns answer_ns queue_ns slow slow_ns max_ns held "
+              "fence_ns\n",
+              fp);
         for (i = 0; i <= VD_PROFILE_OTHER; i++) {
             const struct vd_profile_row *row = &p->row[i];
 
             if (row->count) {
-                fprintf(fp, "%u %llu %llu %llu %llu %llu\n", row->type,
-                        (unsigned long long)row->count, (unsigned long long)row->bytes,
+                fprintf(fp, "%u %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu\n",
+                        row->type, (unsigned long long)row->count, (unsigned long long)row->bytes,
                         (unsigned long long)row->copy_ns, (unsigned long long)row->execute_ns,
-                        (unsigned long long)row->answer_ns);
+                        (unsigned long long)row->answer_ns, (unsigned long long)row->queue_ns,
+                        (unsigned long long)row->slow, (unsigned long long)row->slow_ns,
+                        (unsigned long long)row->max_ns, (unsigned long long)row->held,
+                        (unsigned long long)row->fence_ns);
             }
         }
         fputs("crc bytes read_ns crc_ns log_ns\n", fp);
         fprintf(fp, "%llu %llu %llu %llu\n", (unsigned long long)p->crc_bytes,
                 (unsigned long long)p->read_ns, (unsigned long long)p->crc_ns,
                 (unsigned long long)p->log_ns);
+        fputs("ahead served turn known named room bad\n", fp);
+        for (i = 0; i < VD_AHEAD_N; i++) {
+            fprintf(fp, "%s%llu", i ? " " : "", (unsigned long long)p->ahead[i]);
+        }
+        fputc('\n', fp);
         if (fclose(fp) == 0 && rename(tmp, path) == 0) {
             free(tmp);
             return;
@@ -588,16 +610,22 @@ static void beat_stop(struct beater *b)
 
 /**
  * Serve the device until the driver detaches with -1, or a signal: step
- * until idle, then wait on the doorbells and virglrenderer's fences. A
- * transport with doorbells sleeps until one rings; without, it polls each
- * millisecond. A step that finds work after a wait no doorbell ended
- * counts as polled. Each turn beats for the stall report's watch, and a
- * fenced command that waits too long is reported (`fence_watch`).
+ * until idle, then wait on the doorbells and virglrenderer's poll
+ * descriptor. Fences complete on virglrenderer's threads as they signal
+ * (`retire` in virgl.c); only when they are polled instead does a fence
+ * pending cut the wait to a millisecond, and so does, either way, a
+ * command held whose fence the renderer refused, which no renderer thread
+ * will wake the loop for and which each turn asks the renderer for again
+ * (`fence_retry` in device.c). A transport with doorbells sleeps
+ * until one rings; without, it polls each millisecond. A step that finds
+ * work after a wait no doorbell ended counts as polled. Each turn beats for the stall report's
+ * watch, and a fenced command that waits too long is reported (`fence_watch`).
  */
 static void serve(struct vd *d, struct src *s, struct vr *r, int once, const char *profile)
 {
     struct pollfd p[VECTORS + 1];
     int i, ret = VD_IDLE, rung = 1, timeout;
+    uint32_t pending, unfenced;
     uint64_t seen = 0;
     time_t since = 0, next = 0;
 
@@ -605,14 +633,13 @@ static void serve(struct vd *d, struct src *s, struct vr *r, int once, const cha
         p[i].fd = s->efd[i];
         p[i].events = POLLIN;
     }
-    p[VECTORS].fd = vr_poll_fd(r);
     p[VECTORS].events = POLLIN;
     while (!stop) {
         int steps = 0;
 
         if (snapshot) {
             snapshot = 0;
-            write_profile(d->profile, profile);
+            write_profile(d, profile);
         }
         stall_beat("step");
         while ((ret = vd_step(d)) == VD_WORKED && steps++ < 64) {
@@ -628,12 +655,14 @@ static void serve(struct vd *d, struct src *s, struct vr *r, int once, const cha
         vr_poll(r);
         vd_kick(d);
         fence_watch(d, s, r, &seen, &since, &next);
-        timeout = d->npend ? 1 : 1000;
+        pending = vd_pending(d, 0, &unfenced);
+        timeout = unfenced || (!vr_async_fence(r) && pending) ? 1 : 1000;
         if (s->efd[0] < 0 || !(d->drv.transport_features & VGS_TF_DOORBELL) ||
             d->me.state != VGS_DEV_RUNNING) {
             timeout = 1;
         }
         rung = 0;
+        p[VECTORS].fd = vr_poll_fd(r); /* a new epoch starts virglrenderer again */
         stall_beat("poll");
         if (poll(p, VECTORS + 1, timeout) <= 0) {
             continue;
@@ -729,6 +758,7 @@ int main(int argc, char **argv)
     beat_stop(&beater);
     report(&dev, &s, r, k);
     kms_close(k);
+    vr_fini(r);
     vd_fini(&dev);
     return 0;
 }

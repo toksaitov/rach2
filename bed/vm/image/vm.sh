@@ -33,10 +33,11 @@
 # the VM's memory is taken until MemAvailable reads 0 and held there for
 # 30 s, and the peer then asks for eight backings of 64 MiB of it in turn,
 # for resources it made before, and for a texture of 4 MiB, which the
-# backend counts as 16 MiB, 16 bytes a texel being the most of any format
-# but those of 64-bit channels: it must refuse each with ERR_OUT_OF_MEMORY, where a pin of memory the VM has
-# not got, or a texture the GPU's driver would fill, would wake its OOM
-# killer, and answer the commands after. Once the fill has ended, the backend is moved into a
+# backend charges to its ledger at 8 MiB, twice its blocks, as it charges a
+# resource whose storage it cannot hold: it must refuse each with
+# ERR_OUT_OF_MEMORY, where a pin of memory the VM has not got, or a texture
+# the GPU's driver would fill, would wake its OOM killer, and answer the
+# commands after. Once the fill has ended, the backend is moved into a
 # memory cgroup of 64 MiB and the peer asks for a backing of 1 GiB, which
 # the VM's counts allow and the cgroup cannot hold: the backend must refuse
 # it when its pin's allocation fails, where the cgroup's OOM killer would
@@ -348,7 +349,7 @@ judge()
         expect "a texture refused while MemAvailable read 0" \
             "$(grep -c '^peer: texture: resource [0-9]*, 1024x1024: refused: out of memory$' "$p")" 1
         expect "the texture refused by the VM's counts" \
-            "$(grep -c "^backend: create: resource [0-9]*: refused: 16777216 bytes: no room in the VM's counts$" "$b")" 1
+            "$(grep -c "^backend: create: resource [0-9]*: refused: 8388608 bytes: no room in the VM's counts$" "$b")" 1
         expect "the backing of 1 GiB refused" \
             "$(grep -c '^peer: backing: resource [0-9]*, 1073741824 bytes: refused: out of memory$' "$p")" 1
         expect "the backend moved into a cgroup of 64 MiB" \
@@ -523,8 +524,8 @@ done
 # QEMU's firmware entry opt/rach2/vgpu-profile, which bed-shm.sh gives with
 # BED_VM_PROFILE_PORT, has the backend count into /run/vgpu-profile, and
 # read back each flush with its CRC when the entry is 1. The second serial
-# port, which only Rach2's test of the backend's loss gives the VM, arms the
-# hold that its row of a long command asks for.
+# port, which bed-shm.sh gives the VM, arms the hold that its row of a long
+# command asks for.
 set --
 modprobe qemu_fw_cfg 2> /dev/null || :
 cfg=/sys/firmware/qemu_fw_cfg/by_name/opt/rach2/vgpu-profile/raw
@@ -534,6 +535,16 @@ if [ -r "$cfg" ]; then
     echo "bed-vm: profile: $*" > /dev/ttyS0
 fi
 ! stty -F /dev/ttyS1 > /dev/null 2>&1 || set -- "$@" -H
+# The entry opt/rach2/mesa-debug, which bed-shm.sh gives with
+# BED_VM_MESA_DEBUG, is Mesa's MESA_DEBUG: any value but `silent` has Mesa
+# log each GL error and the call that raised it, as `Mesa: error: ERROR in
+# CALL`. Debian builds virglrenderer with NDEBUG, which leaves its own
+# VREND_DEBUG unread.
+cfg=/sys/firmware/qemu_fw_cfg/by_name/opt/rach2/mesa-debug/raw
+if [ -r "$cfg" ]; then
+    export MESA_DEBUG="$(cat "$cfg")"
+    echo "bed-vm: mesa-debug: $MESA_DEBUG" > /dev/ttyS0
+fi
 # The backend's lines reach the console through sed, over a FIFO that the
 # backend and what it starts, the render server and its workers, hold open.
 # The backend's end alone ends the service: once it has ended, every other
@@ -661,9 +672,11 @@ sudo tee /usr/local/sbin/bed-vm-control > /dev/null <<'RUN'
 # them: `stop`, `cont` and `kill` send it SIGSTOP, SIGCONT and SIGKILL,
 # `hold` sends it SIGUSR2, which has it hold the next new backing 45 s,
 # and `refuse` SIGWINCH, which has it refuse the next new backing, both
-# under the -H that bed-vm-backend gives it when this port is there, and
-# `start` starts its service again. Each done is said on the console as
-# `bed-vm: control: WORD: done`. A VM without the port has nothing to do.
+# under the -H that bed-vm-backend gives it when this port is there,
+# `term` sends it SIGTERM, which has it print its `backend: result:` lines
+# and end, and `start` starts its service again. Each done is said on the
+# console as `bed-vm: control: WORD: done`. A VM without the port has
+# nothing to do.
 stty -F /dev/ttyS1 raw -echo 2> /dev/null || exit 0
 exec < /dev/ttyS1
 stty raw -echo
@@ -674,6 +687,7 @@ while read -r word; do
         kill) pkill -KILL -x vgpu-backend ;;
         hold) pkill -USR2 -x vgpu-backend ;;
         refuse) pkill -WINCH -x vgpu-backend ;;
+        term) pkill -TERM -x vgpu-backend ;;
         start) systemctl restart bed-vm-backend.service ;;
         *) echo "bed-vm: control: $word: unknown" > /dev/ttyS0; continue ;;
     esac

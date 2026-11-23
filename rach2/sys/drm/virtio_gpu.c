@@ -370,12 +370,14 @@ static int32_t profile_show(void *data, char *buf, uint32_t cap)
     static const char header[] = "type sent answered fenced request response transfer payload "
                                  "copy_ns answer_ns waits wait_ns\n";
     static const char notify[] = "notify count ns\n";
+    static const char exec[] = "execbuffer count reap_ns room_ns context_ns alloc_ns copy_ns "
+                               "buffers_ns dependencies_ns fences_ns send_ns\n";
     struct virtio_gpu_device *vg = data;
     uint32_t i, flags;
     char *p = buf;
-    uint64_t notifies, notify_ns;
-    const uint32_t size =
-        sizeof(header) - 1 + (VGPU_PROFILE_ROWS - 1) * 12 * 21 + sizeof(notify) - 1 + 2 * 21;
+    uint64_t notifies, notify_ns, execs, exec_ns[VGPU_EXEC_PARTS];
+    const uint32_t size = sizeof(header) - 1 + (VGPU_PROFILE_ROWS - 1) * 12 * 21 + sizeof(notify) -
+                          1 + 2 * 21 + sizeof(exec) - 1 + (1 + VGPU_EXEC_PARTS) * 21;
 
     if (cap < size) {
         return (int32_t)size;
@@ -411,7 +413,29 @@ static int32_t profile_show(void *data, char *buf, uint32_t cap)
     p = profile_number(p, notifies);
     p = profile_number(p, notify_ns);
     p[-1] = '\n';
+    flags = spin_lock_irqsave(&vg->lock);
+    execs = vg->execs;
+    k_memcpy(exec_ns, vg->exec_ns, sizeof(exec_ns));
+    spin_unlock_irqrestore(&vg->lock, flags);
+    k_memcpy(p, exec, sizeof(exec) - 1);
+    p += sizeof(exec) - 1;
+    p = profile_number(p, execs);
+    for (i = 0; i < VGPU_EXEC_PARTS; i++) {
+        p = profile_number(p, exec_ns[i]);
+    }
+    p[-1] = '\n';
     return (int32_t)size;
+}
+
+void vgpu_profile_exec(struct virtio_gpu_device *vg, const int64_t *marks)
+{
+    uint32_t flags = spin_lock_irqsave(&vg->lock), i;
+
+    vg->execs++;
+    for (i = 0; i < VGPU_EXEC_PARTS; i++) {
+        vg->exec_ns[i] += marks[i + 1] > marks[i] ? (uint64_t)(marks[i + 1] - marks[i]) : 0;
+    }
+    spin_unlock_irqrestore(&vg->lock, flags);
 }
 
 static const struct debugfs_text_ops profile_ops = {profile_show, NULL};
@@ -755,6 +779,57 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
 }
 
 /**
+ * Put `bo` on the device's `refused` list for the worker when its deferred
+ * backing ask has an answer, no take is under way, which would read the
+ * answer itself, and it is not there already. Under the lock; returns
+ * whether it was put there, after which the caller wakes the worker.
+ */
+static int back_list_locked(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+{
+    struct virtio_gpu_cmd *ask = bo->back_ask;
+
+    if (!ask || !ask->done || bo->back_taking || bo->refused_listed) {
+        return 0;
+    }
+    bo->refused_listed = 1;
+    bo->refused_next = vg->refused;
+    vg->refused = bo;
+    return 1;
+}
+
+/**
+ * As back_list_locked, for an answer other than the page list alone, a
+ * refusal among them. Under the lock.
+ */
+static int back_refused_locked(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+{
+    struct virtio_gpu_cmd *ask = bo->back_ask;
+
+    if (!ask || ask->resp_type == VIRTIO_GPU_RESP_OK_MAP_INFO) {
+        return 0;
+    }
+    return back_list_locked(vg, bo);
+}
+
+/** Take `bo` off the device's `refused` list, if it is on it. Under the
+ * lock. */
+static void back_refused_unlist(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+{
+    struct virtio_gpu_object **p;
+
+    if (!bo->refused_listed) {
+        return;
+    }
+    for (p = &vg->refused; *p && *p != bo; p = &(*p)->refused_next) {
+    }
+    if (*p) {
+        *p = bo->refused_next;
+    }
+    bo->refused_next = NULL;
+    bo->refused_listed = 0;
+}
+
+/**
  * A queue's `done`: the device answered `cmd` with `len` bytes. Under the
  * device's lock, which keeps the list of unsignalled fences, the fence
  * signals first, failing with -EIO on an error answer, and with it every
@@ -763,7 +838,9 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
  * keeps, each taken off the list, as Linux's virtio_gpu_fence_event_process
  * does under its fence lock (virtgpu_fence.c:134-174), while the command is
  * still neither its waiter's to free nor on the done list; then it is
- * marked done, and the commands held for the queue go in. The walk covers
+ * marked done, an object's deferred backing ask answered with other than
+ * its page list goes to the worker (`back_refused_locked`), and the
+ * commands held for the queue go in. The walk covers
  * the fences in flight alone: a walk of every command not yet freed, for
  * each answer, held a processor in this handler for more than 3 s under
  * four dEQP-VK processes on Venus. Handler context, without the big lock on
@@ -813,6 +890,9 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
     }
     cmd->resp_type = type;
     cmd->done = 1;
+    if (cmd->back_bo) {
+        (void)back_refused_locked(vg, cmd->back_bo);
+    }
     if (!ok) {
         vg->errors++;
     }
@@ -1101,13 +1181,14 @@ struct unref_wait {
     uint32_t seen;
 };
 
-/** Whether an UNREF has been answered, or an answer waits to be reaped,
- * since `arg`'s count was taken, or the device has died. */
+/** Whether an UNREF or a CTX_DETACH_RESOURCE has been answered, or an
+ * answer waits to be reaped, since `arg`'s count was taken, or the device
+ * has died. */
 static int unref_moved(void *arg)
 {
     struct unref_wait *w = (struct unref_wait *)arg;
 
-    return w->vg->dead || answers_waiting(w->vg) || w->vg->unrefs != w->seen;
+    return w->vg->dead || answers_waiting(w->vg) || w->vg->unrefs + w->vg->detaches != w->seen;
 }
 
 /**
@@ -1128,7 +1209,9 @@ int vgpu_may_wait(struct virtio_gpu_device *vg)
 
 /**
  * Whether a sender that found the transport's memory full may wait for the
- * answers of UNREFs in flight, or for the UNREFs of a pass over the
+ * answers of UNREFs in flight, for those of CTX_DETACH_RESOURCEs, each of
+ * which holds an object a close let go of until it is answered and the
+ * object freed (`vgpu_obj_close`), or for the UNREFs of a pass over the
  * worker's frees under way (`vgpu_frees_run`), which has sent none yet.
  * Asked before each wait, after each reap too. A caller that holds the
  * mode lock, as the console's buffers are made, waits for neither while a
@@ -1141,7 +1224,7 @@ int vgpu_may_wait(struct virtio_gpu_device *vg)
 static int unrefs_awaited(struct virtio_gpu_device *vg)
 {
     if (!mutex_held(&vg->drm.mode_lock)) {
-        return vg->unrefs || vg->freeing;
+        return vg->unrefs || vg->detaches || vg->freeing;
     }
     return vg->unrefs && !vg->reaping;
 }
@@ -1335,17 +1418,19 @@ struct virtio_gpu_cmd *vgpu_cmd_new_wait(struct virtio_gpu_device *vg, struct vi
 /**
  * Give `bo` its pages from the transport (`virtio_backing_fill`), waiting
  * while the transport's memory is full but objects freed before hold some
- * of it until the device answers their UNREF: the shared region's heap is
- * a few MiB, and a program that frees and makes buffers faster than the
- * device answers would find it full of pages already let go, which an
- * allocator waits for and does not refuse. The wait wakes at each answer
- * and polls the queues every 10 ms, for a device without interrupts, and
- * ends at SIGKILL, since a device that has stopped answering would hold the
- * caller for ever. 0; -ENOMEM once no UNREF is in flight or awaited, or
- * the caller may no longer wait for one (`unrefs_awaited`); -EINTR at
- * SIGKILL; or -ENODEV when the device has died, which a reset during the
- * wait does, freeing its queues and the transport's heap, so that the
- * caller must not go on to use them. May sleep.
+ * of it until the device answers their UNREF, or objects closed before
+ * until it answers their CTX_DETACH_RESOURCE and then their UNREF: the
+ * shared region's heap is a few MiB, and a program that frees and makes
+ * buffers faster than the device answers would find it full of pages
+ * already let go, which an allocator waits for and does not refuse. The
+ * wait wakes at each answer and polls the queues every 10 ms, for a device
+ * without interrupts, and ends at SIGKILL, since a device that has stopped
+ * answering would hold the caller for ever. 0; -ENOMEM once no UNREF or
+ * DETACH is in flight or awaited, or the caller may no longer wait for one
+ * (`unrefs_awaited`); -EINTR at SIGKILL; or -ENODEV when the device has
+ * died, which a reset during the wait does, freeing its queues and the
+ * transport's heap, so that the caller must not go on to use them. May
+ * sleep.
  */
 static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
@@ -1366,7 +1451,7 @@ static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_obje
             }
             continue;
         }
-        w.seen = vg->unrefs;
+        w.seen = vg->unrefs + vg->detaches;
         if (!unrefs_awaited(vg) || !can_sleep() || !vgpu_wake_ready) {
             return -ENOMEM;
         }
@@ -1377,7 +1462,7 @@ static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_obje
         if (vgpu_killed()) {
             return -EINTR;
         }
-        if (vg->unrefs == w.seen) {
+        if (vg->unrefs + vg->detaches == w.seen) {
             if (!unrefs_awaited(vg)) {
                 return -ENOMEM;
             }
@@ -2139,7 +2224,9 @@ static void backing_forget(struct virtio_gpu_device *vg, struct virtio_gpu_objec
     bo->back_ask = NULL;
     if (ask) {
         vg->back_held -= ask->held;
+        ask->back_bo = NULL;
     }
+    back_refused_unlist(vg, bo);
     spin_unlock_irqrestore(&vg->lock, flags);
     if (ask) {
         vgpu_cmd_give_up(ask);
@@ -2327,7 +2414,9 @@ static int vm_backing(struct virtio_gpu_device *vg)
  * (`vgpu_backing_ask`), as Linux's virtio_gpu_object_create queues its
  * create and attach and returns: the object takes the answer, or attaches
  * pages on a refusal, before the first access to its pages or command that
- * names it (`vgpu_backing_settle`). The asks deferred hold at most half of
+ * names it (`vgpu_backing_settle`), or the worker takes an answer other
+ * than the page list that comes first (`vgpu_backing_refused_run`). The
+ * asks deferred hold at most half of
  * VGPU_HELD_MAX DMA pages, which no reap frees, so that `vgpu_room` always
  * finds room: each reserves VGPU_ASK_HELD pages of that half under the
  * device's lock before it allocates any, which may sleep, and gives back
@@ -2342,7 +2431,7 @@ static int32_t obj_back(struct virtio_gpu_device *vg, struct virtio_gpu_object *
     struct virtio_gpu_cmd *attach = NULL, *ask = NULL;
     int32_t err = 0;
     uint32_t flags;
-    int room = 0;
+    int room = 0, refused = 0;
 
     if (!vm_backing(vg)) {
         attach = vgpu_attach_cmd(vg, bo, id, &err);
@@ -2351,8 +2440,14 @@ static int32_t obj_back(struct virtio_gpu_device *vg, struct virtio_gpu_object *
             return err;
         }
     }
-    /* The device answers a queue's commands in order: the backing follows
-     * the create, and any command on the object follows both. */
+    /* The device runs a queue's commands in order: the backing follows the
+     * create, and any command on the object follows both. With the device's
+     * own pages the create goes without a fence, which nothing reads, so
+     * that a device may run it and the ask after it ahead of the commands
+     * queued before them and answer at once (`vgpu_cmd_unfence`). */
+    if (!attach) {
+        vgpu_cmd_unfence(create);
+    }
     vgpu_cmd_send(create, NULL, NULL);
     bo->res_id = id;
     if (!attach && defer) {
@@ -2370,8 +2465,13 @@ static int32_t obj_back(struct virtio_gpu_device *vg, struct virtio_gpu_object *
         if (err == 0) {
             vg->back_held += ask->held;
             bo->back_ask = ask;
+            ask->back_bo = bo;
+            refused = back_refused_locked(vg, bo);
         }
         spin_unlock_irqrestore(&vg->lock, flags);
+        if (refused && vgpu_wake_ready) {
+            wq_wake_all(&vgpu_wake);
+        }
         return err;
     }
     if (!attach) {
@@ -2487,6 +2587,58 @@ int32_t vgpu_backing_settle(struct virtio_gpu_device *vg, struct virtio_gpu_obje
         bkl_exit();
     }
     return rc;
+}
+
+int32_t vgpu_backing_settle_answered(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
+                                     uint32_t site)
+{
+    uint32_t flags = spin_lock_irqsave(&vg->lock);
+    struct virtio_gpu_cmd *ask = bo->back_ask;
+    int ready = ask && ask->done && !bo->back_taking, listed = 0;
+    int32_t rc = bo->back_err;
+
+    /* A page list on the worker's list is one a submission left already. */
+    if (ready && (ask->resp_type != VIRTIO_GPU_RESP_OK_MAP_INFO || bo->refused_listed ||
+                  !vgpu_backing_whole(bo, ask))) {
+        ready = 0;
+        listed = back_list_locked(vg, bo);
+    }
+    spin_unlock_irqrestore(&vg->lock, flags);
+    if (listed && vgpu_wake_ready) {
+        wq_wake_all(&vgpu_wake);
+    }
+    if (ready) {
+        return vgpu_backing_settle(vg, bo, site);
+    }
+    return ask ? 0 : rc;
+}
+
+void vgpu_backing_refused_run(struct virtio_gpu_device *vg)
+{
+    struct virtio_gpu_object *bo;
+    uint32_t flags;
+    int held;
+
+    for (;;) {
+        flags = spin_lock_irqsave(&vg->lock);
+        bo = vg->refused;
+        held = 0;
+        if (bo) {
+            vg->refused = bo->refused_next;
+            bo->refused_next = NULL;
+            bo->refused_listed = 0;
+            /* An object in its free has let its ask go (`backing_forget`). */
+            held = drm_gem_object_get_unless_zero(&bo->shmem.base);
+        }
+        spin_unlock_irqrestore(&vg->lock, flags);
+        if (!bo) {
+            break;
+        }
+        if (held) {
+            (void)vgpu_backing_settle(vg, bo, VGPU_SETTLE_WORKER);
+            drm_gem_object_put(&bo->shmem.base);
+        }
+    }
 }
 
 /**
@@ -3032,8 +3184,9 @@ static int work_pending(void *arg)
 
     (void)arg;
     for (i = 0; i < VGPU_DEVICES; i++) {
-        if (vgpu_devices[i] && (vgpu_devices[i]->display_pending ||
-                                answers_waiting(vgpu_devices[i]) || vgpu_devices[i]->frees)) {
+        if (vgpu_devices[i] &&
+            (vgpu_devices[i]->display_pending || answers_waiting(vgpu_devices[i]) ||
+             vgpu_devices[i]->frees || vgpu_devices[i]->refused)) {
             return 1;
         }
     }
@@ -3042,16 +3195,18 @@ static int work_pending(void *arg)
 
 #ifndef RACH2_HOSTTEST
 /** The worker: serve each device's display change, then free what its queues
- * answered and the objects whose last reference an answer let go of
- * (`vgpu_frees_run`), and sleep in an idle wait until the next change. Like
- * every kernel thread, it is not switched by the tick (`no_tick_switch`, which
- * `setup_process_stack` sets), so the driver's and its transport's state, which
- * the big lock guards, holds through each pass, as in a system call; it gives
- * way where it sleeps and between passes. A display query sleeps, and an unplug
- * meanwhile may drop every other reference, so the worker holds one on the
- * device from its table to the pass's end, as Linux's virtio_gpu_deinit flushes
- * config_changed_work before the device goes
- * (drivers/gpu/drm/virtio/virtgpu_kms.c:283-290 in 6.12.115). */
+ * answered, take the deferred backings whose asks were answered with other than
+ * a page list (`vgpu_backing_refused_run`), free the objects whose last
+ * reference an answer let go of (`vgpu_frees_run`), and sleep in an idle wait
+ * until the next change. Like every kernel thread, it is not switched by the
+ * tick (`no_tick_switch`, which `setup_process_stack` sets), so the driver's
+ * and its transport's state, which the big lock guards, holds through each
+ * pass, as in a system call; it gives way where it sleeps and between passes. A
+ * display query sleeps, and an unplug meanwhile may drop every other reference,
+ * so the worker holds one on the device from its table to the pass's end, as
+ * Linux's virtio_gpu_deinit flushes config_changed_work before the device goes
+ * (drivers/gpu/drm/virtio/virtgpu_kms.c:283-290 in 6.12.115).
+ */
 static void vgpu_worker(void)
 {
     struct virtio_gpu_device *vg;
@@ -3070,6 +3225,7 @@ static void vgpu_worker(void)
                     vgpu_display_changed(vg);
                 }
                 vgpu_reap(vg);
+                vgpu_backing_refused_run(vg);
                 vgpu_frees_run(vg, VGPU_NEVER, 0);
                 drm_dev_put(&vg->drm);
             }
@@ -3313,7 +3469,7 @@ static const struct drm_ioctl_desc vgpu_ioctls[DRM_VIRTIO_NUM_IOCTLS] = {
      "VIRTGPU_TRANSFER_FROM_HOST"},
     {DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST, DRM_RENDER_ALLOW, vgpu_transfer_to_host_ioctl,
      "VIRTGPU_TRANSFER_TO_HOST"},
-    {DRM_IOCTL_VIRTGPU_WAIT, DRM_RENDER_ALLOW, vgpu_wait_ioctl, "VIRTGPU_WAIT"},
+    {DRM_IOCTL_VIRTGPU_WAIT, DRM_RENDER_ALLOW | DRM_UNLOCKED, vgpu_wait_ioctl, "VIRTGPU_WAIT"},
     {DRM_IOCTL_VIRTGPU_GET_CAPS, DRM_RENDER_ALLOW, vgpu_get_caps_ioctl, "VIRTGPU_GET_CAPS"},
     {DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB, DRM_RENDER_ALLOW, vgpu_blob_ioctl,
      "VIRTGPU_RESOURCE_CREATE_BLOB"},

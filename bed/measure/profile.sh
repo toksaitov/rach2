@@ -18,7 +18,7 @@ vm()
 
 if [ "$2" = stop ]; then
     [ -z "${BED_VM_PROFILE_PORT:-}" ] ||
-        echo 'systemctl stop vgpu-profile-perf 2> /dev/null || :' | vm
+        echo 'systemctl stop vgpu-profile-perf vgpu-profile-gpu 2> /dev/null || :' | vm
     exit 0
 fi
 out=$1/$2
@@ -26,9 +26,47 @@ mkdir -p "$out"
 date +%s.%N > "$out/start"
 cat /proc/stat > "$out/proc-stat"
 debug=/sys/kernel/debug
-# BED_PROFILE_THREAD names the one thread bkl/calls counts from before on.
+# cpu: one line a thread: its ID, its process's, its user and system ticks
+# and its name, which /proc/PID/task/TID/stat gives.
+cpu()
+{
+    for task in /proc/[0-9]*/task/[0-9]*; do
+        pid=${task%/task/*}
+        stat=$(cat "$task/stat" 2> /dev/null) || continue
+        comm=${stat#*\(}
+        comm=${comm%\)*}
+        # shellcheck disable=SC2086 # the fields after the name are words
+        set -- ${stat##*\) }
+        echo "${task##*/} ${pid#/proc/} ${12} ${13} $comm"
+    done
+}
+# BED_PROFILE_THREAD names the one thread bkl/calls counts from before on:
+# a name, an ID, or `busiest NAME`, the thread of that name that used the
+# most processor time over the two seconds before samples, a process's first
+# thread among them, which before/chosen records.
 if [ "$2" = before ] && [ -n "${BED_PROFILE_THREAD:-}" ]; then
-    echo "thread $BED_PROFILE_THREAD" > "$debug/bkl/calls"
+    thread=$BED_PROFILE_THREAD
+    case $thread in
+        'busiest '*)
+            cpu > "$out/cpu-0"
+            sleep 2
+            cpu > "$out/cpu-1"
+            thread=$(awk -v name="${thread#busiest }" '
+                NR == FNR { t[$1] = $3 + $4; next }
+                {
+                    comm = $0
+                    sub(/^[^ ]+ [^ ]+ [^ ]+ [^ ]+ /, "", comm)
+                }
+                ($1 in t) && comm == name {
+                    d = $3 + $4 - t[$1]
+                    if (best == "" || d > most) { best = $1; most = d }
+                }
+                END { print best }' "$out/cpu-0" "$out/cpu-1")
+            [ -n "$thread" ] || { echo "profile: no thread ${BED_PROFILE_THREAD#busiest }" >&2; exit 1; }
+            echo "$thread" > "$out/chosen"
+            ;;
+    esac
+    echo "thread $thread" > "$debug/bkl/calls"
 fi
 for path in kvm/exit_stats bkl/calls; do
     [ ! -r "$debug/$path" ] || cat "$debug/$path" > "$out/${path##*/}"
@@ -50,6 +88,7 @@ if [ "$2" = after ]; then
         pid=${task%/task/*}
         read -r comm 2> /dev/null < "$task/comm" && echo "${task##*/} ${pid#/proc/} $comm"
     done > "$out/threads" || :
+    cpu > "$out/cpu" || :
 fi
 if command -v ivshmemd > /dev/null; then
     ivshmemd -i > "$out/region" 2> "$out/region.err" || :
@@ -72,14 +111,52 @@ cat "$file"
 printf 'backend stat '
 cat "/proc/$pid/stat"
 grep '^drm-' "/proc/$pid"/fdinfo/* || :
+# threads: one line a backend thread: its ID, user and system ticks and
+# name; a function, since set replaces its arguments alone.
+threads()
+{
+    for task in /proc/"$pid"/task/[0-9]*; do
+        stat=$(cat "$task/stat" 2> /dev/null) || continue
+        comm=${stat#*\(}
+        comm=${comm%\)*}
+        # shellcheck disable=SC2086 # the fields after the name are words
+        set -- ${stat##*\) }
+        echo "backend thread ${task##*/} ${12} ${13} $comm"
+    done
+}
+threads
+grep '^cpu' /proc/stat | sed 's/^/vm stat /'
 if command -v perf > /dev/null; then
     case $1 in
         before)
+            # i915's busy, wait and semaphore time of the render ring, in
+            # ns, over the whole VM; i915 samples a ring without execlists.
+            rm -f /run/vgpu-gpu.stat
+            systemctl reset-failed vgpu-profile-gpu 2> /dev/null || :
+            systemd-run -q --unit=vgpu-profile-gpu --property=KillSignal=SIGINT \
+                --property=RuntimeMaxSec=900s perf stat -a -x, -o /run/vgpu-gpu.stat \
+                -e i915/rcs0-busy/,i915/rcs0-wait/,i915/rcs0-sema/ || :
             systemd-run -q --unit=vgpu-profile-perf --property=KillSignal=SIGINT \
                 --property=RuntimeMaxSec=900s perf record -e cpu-clock -F 67 \
                 --call-graph dwarf,4096 -p "$pid" -o /run/vgpu-perf.data
             ;;
         after)
+            # perf makes its file before it opens the counters, so the
+            # readings count only from a perf still running at the end
+            # that gave a number for each of the three.
+            gpu=$(systemctl is-active vgpu-profile-gpu 2> /dev/null) || :
+            systemctl stop vgpu-profile-gpu 2> /dev/null || :
+            systemctl reset-failed vgpu-profile-gpu 2> /dev/null || :
+            echo 'gpu busy'
+            if [ "$gpu" != active ]; then
+                echo "gpu busy unavailable: perf ${gpu:-gone}"
+            elif awk -F, 'BEGIN { n["rcs0-busy"] = n["rcs0-wait"] = n["rcs0-sema"] = 0 }
+                $1 ~ /^[0-9.]+$/ { for (e in n) if (index($3, e)) n[e] = 1 }
+                END { for (e in n) if (!n[e]) exit 1 }' /run/vgpu-gpu.stat 2> /dev/null; then
+                cat /run/vgpu-gpu.stat
+            else
+                echo 'gpu busy unavailable: no reading of each counter'
+            fi
             systemctl stop vgpu-profile-perf
             perf report --stdio --percent-limit 0.5 -i /run/vgpu-perf.data
             ;;

@@ -225,9 +225,10 @@ static int op_pages(void *c, struct vd_pages *q)
 }
 
 static const struct vd_ops ops = {
-    op_create,      op_id,           op_attach, op_id,    op_transfer,    op_blob,   op_ctx_create,
-    op_ctx_destroy, op_ctx_resource, op_submit, op_fence, op_capset_info, op_capset, op_display,
-    op_edid,        op_rect,         op_rect,   op_reset, op_pages,       op_id,     op_pages,
+    op_create,     op_id,          op_attach,       op_id,     op_transfer, op_blob,
+    op_ctx_create, op_ctx_destroy, op_ctx_resource, op_submit, op_fence,    op_capset_info,
+    op_capset,     op_display,     op_edid,         op_rect,   op_rect,     op_reset,
+    op_pages,      op_id,          op_pages,        0,
 };
 
 /** Stub of the doorbell. */

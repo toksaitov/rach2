@@ -136,7 +136,7 @@ static void notify(struct vd *d, uint32_t vector, int accepted_only)
         return;
     }
     d->ring(d->ring_cookie, d->drv.peer, vector);
-    d->n.notified++;
+    __atomic_fetch_add(&d->n.notified, 1, __ATOMIC_RELAXED);
 }
 
 /** Publish the device's state and error after its other writes. */
@@ -187,13 +187,17 @@ static void offer(struct vd *d, const struct vgs_driver *drv)
     }
     vgs_table_epoch(&d->t, drv->epoch);
     memset(d->last, 0, sizeof(d->last));
-    memset(d->used, 0, sizeof(d->used));
     memset(d->scanout, 0, sizeof(d->scanout));
+    memset(d->ahead, 0, sizeof(d->ahead));
+    d->seen = 0;
+    pthread_mutex_lock(&d->lock);
+    memset(d->used, 0, sizeof(d->used));
     memset(d->pend, 0, sizeof(d->pend));
     d->drv = *drv;
     d->npend = 0;
     d->nunfenced = 0;
     d->kick = 0;
+    pthread_mutex_unlock(&d->lock);
     memset(&d->me, 0, sizeof(d->me));
     d->me.epoch = drv->epoch;
     d->me.state = VGS_DEV_READY;
@@ -239,6 +243,11 @@ int vd_init(struct vd *d, volatile void *base, uint64_t size, const struct vd_of
     if (d->cmd == 0) {
         return -1;
     }
+    if (pthread_mutex_init(&d->lock, 0) != 0) {
+        free(d->cmd);
+        d->cmd = 0;
+        return -1;
+    }
     d->base = base;
     d->size = size;
     d->offer = *off;
@@ -259,6 +268,7 @@ void vd_fini(struct vd *d)
     join_drop(d);
     free(d->cmd);
     d->cmd = 0;
+    pthread_mutex_destroy(&d->lock);
 }
 
 /** Find a resource of the current epoch, or return 0. */
@@ -702,6 +712,7 @@ static int cmd_ctx_destroy(struct vd *d, const struct vd_hdr *h)
     }
     d->ops->ctx_destroy(d->cookie, h->ctx_id);
     vgs_table_del(&d->t, o);
+    pthread_mutex_lock(&d->lock);
     for (i = 0; i < VD_PENDING && d->npend != 0; i++) {
         struct vd_pending *p = &d->pend[i];
 
@@ -709,6 +720,7 @@ static int cmd_ctx_destroy(struct vd *d, const struct vd_hdr *h)
             release(d, p);
         }
     }
+    pthread_mutex_unlock(&d->lock);
     return 0;
 }
 
@@ -1229,7 +1241,7 @@ static uint32_t put_response(struct vd *d, const struct vgs_chain *c, const uint
     return put;
 }
 
-/** Publish a chain's completion in its queue's used ring. */
+/** Publish a chain's completion in its queue's used ring; d->lock held. */
 static void complete(struct vd *d, uint32_t qi, uint32_t head, uint32_t put)
 {
     vgs_used_push(d->base, &d->drv.queue[qi], &d->used[qi], head, put);
@@ -1237,9 +1249,22 @@ static void complete(struct vd *d, uint32_t qi, uint32_t head, uint32_t put)
     d->n.completed++;
 }
 
+static struct vd_profile_row *profile_row(struct vd *d);
+
+/** Count a held command's time from its fence call to its completion in its
+ * profile row, under -T. d->lock held. */
+static void profile_held(struct vd *d, const struct vd_pending *p)
+{
+    if (d->profile && p->held_ns) {
+        d->profile->row[p->row].held++;
+        d->profile->row[p->row].fence_ns += vd_profile_now() - p->held_ns;
+    }
+}
+
 /**
  * Hold a fenced command until its fence retires. Returns its slot, or 0
  * when every pending slot is taken, which the caller answers at once.
+ * d->lock held.
  */
 static struct vd_pending *hold(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_chain *c,
                                const struct vd_hdr *h, const uint8_t *resp)
@@ -1261,6 +1286,7 @@ static struct vd_pending *hold(struct vd *d, uint32_t qi, uint32_t head, const s
         p->fence_id = h->fence_id;
         p->unfenced = 0;
         p->rlen = sizeof(struct vd_hdr);
+        p->held_ns = 0;
         memcpy(p->resp, resp, sizeof(struct vd_hdr));
         p->chain = *c;
         d->npend++;
@@ -1284,12 +1310,19 @@ static int fence_after(const struct vd_pending *p, uint64_t a, uint64_t b)
  * with its own (vd_fence_retired), so only the newest asks; asking for an
  * older fence after a newer one would break the order of the timeline's
  * fences, which the renderer may report as one. CTX_DESTROY answers a
- * context's held commands, so none of a dead context is left to ask.
+ * context's held commands, so none of a dead context is left to ask. This
+ * runs on the serving thread, the only one that holds commands, so the
+ * newest stays the newest while the fence call runs without d->lock, which
+ * the renderer's threads take to retire fences; a retire may complete the
+ * command meanwhile, which then has nothing left to mark.
  */
 static void fence_retry(struct vd *d)
 {
-    uint32_t i, j;
+    uint32_t i, j, queue, head, ctx, ring, per_ctx;
+    uint64_t id;
+    int err;
 
+    pthread_mutex_lock(&d->lock);
     for (i = 0; i < VD_PENDING && d->nunfenced != 0; i++) {
         struct vd_pending *p = &d->pend[i];
         int newest = 1;
@@ -1303,32 +1336,48 @@ static void fence_retry(struct vd *d)
             newest = !q->used || q == p || q->per_ctx != p->per_ctx || q->ctx != p->ctx ||
                      q->ring != p->ring || !fence_after(p, q->fence_id, p->fence_id);
         }
-        if (newest &&
-            d->ops->fence(d->cookie, p->ctx, (int)p->per_ctx, p->ring, p->fence_id) == 0) {
-            p->unfenced = 0;
-            d->nunfenced--;
-            if (d->verbose) {
-                fprintf(stderr, "backend: fence: taken again: id %llu of context %u, ring %u\n",
-                        (unsigned long long)p->fence_id, (unsigned)p->ctx, (unsigned)p->ring);
-            }
+        if (!newest) {
+            continue;
+        }
+        queue = p->queue;
+        head = p->head;
+        ctx = p->ctx;
+        ring = p->ring;
+        per_ctx = p->per_ctx;
+        id = p->fence_id;
+        pthread_mutex_unlock(&d->lock);
+        err = d->ops->fence(d->cookie, ctx, (int)per_ctx, ring, id);
+        pthread_mutex_lock(&d->lock);
+        if (err != 0 || !p->used || !p->unfenced || p->queue != queue || p->head != head) {
+            continue;
+        }
+        p->unfenced = 0;
+        d->nunfenced--;
+        if (d->verbose) {
+            fprintf(stderr, "backend: fence: taken again: id %llu of context %u, ring %u\n",
+                    (unsigned long long)id, (unsigned)ctx, (unsigned)ring);
         }
     }
+    pthread_mutex_unlock(&d->lock);
 }
 
 /**
  * Answer a command: at once, or, for a fenced command answered with a bare
  * header, once the renderer retires its fence on the timeline the header
- * names. A refusal waits so too: the driver retires every earlier fence of
- * the timeline with the answer, as Linux's virtio_gpu_fence_event_process
+ * names, which it may do on a thread of its own before its fence call
+ * returns. A refusal waits so too: the driver retires every earlier fence
+ * of the timeline with the answer, as Linux's virtio_gpu_fence_event_process
  * does, and the renderer's work behind them may still be pending. A fence
  * the renderer refuses leaves its command held, with no fence of its own,
  * until a later fence on its timeline retires or fence_retry has the
- * renderer take it, for the same reason.
+ * renderer take it, for the same reason. An answer given at once with data
+ * or an error rings the driver at once, since the driver waits for those;
+ * a bare OK waits for the end of the pass.
  */
 static void answer(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_chain *c,
                    uint32_t type, uint32_t len)
 {
-    struct vd_pending *p;
+    struct vd_pending *p = 0;
     struct vd_hdr h, o;
     int per_ctx, err;
 
@@ -1353,26 +1402,52 @@ static void answer(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_ch
     if (h.flags & VD_FLAG_FENCE) {
         per_ctx = (h.flags & VD_FLAG_INFO_RING_IDX) != 0;
         if ((type == VD_RESP_OK_NODATA || type >= VD_RESP_ERR_UNSPEC) &&
-            (!per_ctx || ctx_live(d, h.ctx_id)) && (p = hold(d, qi, head, c, &h, d->resp)) != 0) {
+            (!per_ctx || ctx_live(d, h.ctx_id))) {
+            pthread_mutex_lock(&d->lock);
+            p = hold(d, qi, head, c, &h, d->resp);
+            if (p && d->profile) {
+                p->row = (uint32_t)(profile_row(d) - d->profile->row);
+                p->held_ns = vd_profile_now();
+            }
+            pthread_mutex_unlock(&d->lock);
+        }
+        if (p) {
+            uint32_t ctx = p->ctx, ring = p->ring;
+            uint64_t id = p->fence_id;
+
             d->n.fenced++;
-            err = d->ops->fence(d->cookie, p->ctx, per_ctx, p->ring, p->fence_id);
-            if (err != 0) {
+            err = d->ops->fence(d->cookie, ctx, per_ctx, ring, id);
+            if (err == 0) {
+                return;
+            }
+            fprintf(stderr,
+                    "backend: fence: refused: id %llu of context %u, ring %u: error %d: "
+                    "held until a later fence retires or the renderer takes it\n",
+                    (unsigned long long)id, (unsigned)ctx, (unsigned)ring, err);
+            /* Only the serving thread holds, so a used slot is still this
+               command's; a later retire may have completed it meanwhile. */
+            pthread_mutex_lock(&d->lock);
+            if (p->used && p->queue == qi && p->head == head) {
                 p->unfenced = 1;
                 d->nunfenced++;
-                fprintf(stderr,
-                        "backend: fence: refused: id %llu of context %u, ring %u: error %d: "
-                        "held until a later fence retires or the renderer takes it\n",
-                        (unsigned long long)p->fence_id, (unsigned)p->ctx, (unsigned)p->ring, err);
             }
+            pthread_mutex_unlock(&d->lock);
             return;
         }
     }
+    pthread_mutex_lock(&d->lock);
     complete(d, qi, head, put_response(d, c, d->resp, len));
+    pthread_mutex_unlock(&d->lock);
+    if (type != VD_RESP_OK_NODATA) {
+        vd_kick(d);
+    }
 }
 
-/** Answer a held command with the response it keeps and free its slot. */
+/** Answer a held command with the response it keeps, count its time under
+ * -T and free its slot. d->lock held. */
 static void release(struct vd *d, struct vd_pending *p)
 {
+    profile_held(d, p);
     complete(d, p->queue, p->head, put_response(d, &p->chain, p->resp, p->rlen));
     if (p->unfenced) {
         p->unfenced = 0;
@@ -1385,12 +1460,14 @@ static void release(struct vd *d, struct vd_pending *p)
 /**
  * Complete every fenced command on a timeline whose fence is id or older:
  * the global one, whose ids the renderer keeps in 32 bits, or a context's
- * ring. The renderer calls this through its fence callbacks.
+ * ring. The renderer calls this through its fence callbacks, from any
+ * thread; it takes d->lock, so the caller holds none of the device's.
  */
 void vd_fence_retired(struct vd *d, uint32_t ctx, int per_ctx, uint32_t ring, uint64_t id)
 {
     uint32_t i;
 
+    pthread_mutex_lock(&d->lock);
     for (i = 0; i < VD_PENDING && d->npend != 0; i++) {
         struct vd_pending *p = &d->pend[i];
         int done;
@@ -1408,26 +1485,59 @@ void vd_fence_retired(struct vd *d, uint32_t ctx, int per_ctx, uint32_t ring, ui
         }
         release(d, p);
     }
+    pthread_mutex_unlock(&d->lock);
 }
 
-/** Ring the driver's queue vector once for the completions since the last. */
+/** Ring the driver's queue vector once for the completions since the last,
+ * from any thread, under d->lock. */
 void vd_kick(struct vd *d)
 {
     uint32_t qi;
 
-    if (!d->kick) {
-        return;
-    }
-    d->kick = 0;
-    for (qi = 0; qi < VGS_QUEUES; qi++) {
-        const struct vgs_queue *q = &d->drv.queue[qi];
+    pthread_mutex_lock(&d->lock);
+    if (d->kick) {
+        d->kick = 0;
+        for (qi = 0; qi < VGS_QUEUES; qi++) {
+            const struct vgs_queue *q = &d->drv.queue[qi];
 
-        if (q->size != 0 &&
-            (*(volatile uint16_t *)(d->base + q->avail) & VGS_AVAIL_F_NO_INTERRUPT) == 0) {
-            notify(d, VGS_VEC_QUEUE, 1);
-            return;
+            if (q->size != 0 &&
+                (*(volatile uint16_t *)(d->base + q->avail) & VGS_AVAIL_F_NO_INTERRUPT) == 0) {
+                notify(d, VGS_VEC_QUEUE, 1);
+                break;
+            }
         }
     }
+    pthread_mutex_unlock(&d->lock);
+}
+
+/**
+ * Return how many fenced commands wait for their fences, copy the one of
+ * the oldest fence to *oldest when there is one and give in *unfenced how
+ * many of them have no renderer fence, each pointer when not 0, under
+ * d->lock.
+ */
+uint32_t vd_pending(struct vd *d, struct vd_pending *oldest, uint32_t *unfenced)
+{
+    const struct vd_pending *old = 0;
+    uint32_t i, n;
+
+    pthread_mutex_lock(&d->lock);
+    n = d->npend;
+    if (unfenced) {
+        *unfenced = d->nunfenced;
+    }
+    for (i = 0; i < VD_PENDING && n; i++) {
+        const struct vd_pending *p = &d->pend[i];
+
+        if (p->used && (!old || p->fence_id < old->fence_id)) {
+            old = p;
+        }
+    }
+    if (old && oldest) {
+        *oldest = *old;
+    }
+    pthread_mutex_unlock(&d->lock);
+    return n;
 }
 
 /** Read the VM's monotonic clock in nanoseconds. */
@@ -1454,7 +1564,7 @@ void vd_beat(struct vd *d)
     }
 }
 
-/** Return the profiling row for a control command's type. */
+/** Return the profiling row for the type of the control command in d->cmd. */
 static struct vd_profile_row *profile_row(struct vd *d)
 {
     uint32_t type, i = VD_PROFILE_OTHER;
@@ -1491,8 +1601,319 @@ static int cmd_grow(struct vd *d, uint32_t need)
 }
 
 /**
- * Serve one queue's available chains. Returns VGS_OK, or the transport
- * fault that puts the device in NEEDS_RESET.
+ * Read, execute and answer the chain at `head` of queue qi, counting it in
+ * the profile, with its wait since the look-ahead read it from d->read_ns,
+ * which the call clears. Returns VGS_OK, or the transport fault of a chain
+ * that breaks the transport's rules.
+ */
+static int serve_chain(struct vd *d, uint32_t qi, uint32_t head)
+{
+    const struct vgs_queue *q = &d->drv.queue[qi];
+    struct vd_profile_row *row = NULL;
+    uint64_t start = 0, copied = 0, executed = 0, read = d->read_ns;
+    uint32_t i, off = 0, type, len, want;
+    struct vgs_chain c;
+    int err, short_of_memory;
+
+    d->read_ns = 0;
+    if ((err = vgs_chain_read(d->base, &d->l, q, &d->me.limits, head, &c)) != VGS_OK) {
+        return err;
+    }
+    if (d->profile) {
+        start = vd_profile_now();
+    }
+    /* With no room for the whole chain, its header alone is read. */
+    short_of_memory = c.rbytes > d->cmd_cap && cmd_grow(d, c.rbytes) != 0;
+    want = short_of_memory ? sizeof(struct vd_hdr) : c.rbytes;
+    for (i = 0; i < c.nread && off < want; i++) {
+        len = c.seg[i].len < want - off ? c.seg[i].len : want - off;
+        region_get(d, c.seg[i].addr, d->cmd + off, len);
+        off += len;
+    }
+    d->room = c.wbytes;
+    d->n.commands++;
+    if (qi != VGS_QUEUE_CONTROL) {
+        /* The cursor queue: a cursor is not drawn; its chains return. */
+        pthread_mutex_lock(&d->lock);
+        complete(d, qi, head, 0);
+        pthread_mutex_unlock(&d->lock);
+        return VGS_OK;
+    }
+    if (off < sizeof(struct vd_hdr)) {
+        struct vd_hdr e;
+
+        memset(&e, 0, sizeof(e));
+        e.type = VD_RESP_ERR_PARAMETER;
+        memcpy(d->resp, &e, sizeof(e));
+        pthread_mutex_lock(&d->lock);
+        complete(d, qi, head, put_response(d, &c, d->resp, sizeof(struct vd_hdr)));
+        pthread_mutex_unlock(&d->lock);
+        d->n.errors++;
+        return VGS_OK;
+    }
+    if (short_of_memory) {
+        memcpy(&type, d->cmd, sizeof(type));
+        fprintf(stderr, "backend: command 0x%x: refused: %u bytes: no memory for its copy\n",
+                (unsigned)type, (unsigned)c.rbytes);
+        if (type == VGS_CMD_PART) {
+            /* The stream lacks this part: its SUBMIT_3D is refused. */
+            join_drop(d);
+            d->join_open = 1;
+            d->join_err = VD_RESP_ERR_OUT_OF_MEMORY;
+        }
+        memset(d->resp, 0, sizeof(struct vd_hdr));
+        answer(d, qi, head, &c, VD_RESP_ERR_OUT_OF_MEMORY, sizeof(struct vd_hdr));
+        return VGS_OK;
+    }
+    if (d->profile) {
+        copied = vd_profile_now();
+        row = profile_row(d);
+    }
+    len = execute(d, off, &type);
+    if (row) {
+        executed = vd_profile_now();
+    }
+    answer(d, qi, head, &c, type, len);
+    if (row) {
+        row->count++;
+        row->bytes += off;
+        row->copy_ns += copied - start;
+        row->execute_ns += executed - copied;
+        row->answer_ns += vd_profile_now() - executed;
+        if (read != 0 && start > read) {
+            row->queue_ns += start - read;
+        }
+        if (executed - copied >= VD_PROFILE_SLOW_NS) {
+            row->slow++;
+            row->slow_ns += executed - copied;
+        }
+        if (executed - copied > row->max_ns) {
+            row->max_ns = executed - copied;
+        }
+    }
+    return VGS_OK;
+}
+
+/** Whether a command of `type` names a resource in its body's first word,
+ * which the look-ahead reads. */
+static int names_resource(uint32_t type)
+{
+    switch (type) {
+    case CMD_RESOURCE_CREATE_2D:
+    case CMD_RESOURCE_CREATE_3D:
+    case CMD_RESOURCE_UNREF:
+    case CMD_RESOURCE_ATTACH_BACKING:
+    case CMD_RESOURCE_DETACH_BACKING:
+    case CMD_RESOURCE_CREATE_BLOB:
+    case CMD_RESOURCE_MAP_BLOB:
+    case CMD_RESOURCE_UNMAP_BLOB:
+    case CMD_CTX_ATTACH_RESOURCE:
+    case CMD_CTX_DETACH_RESOURCE:
+    case VGS_CMD_BACKING:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/** Whether a control command of `type` adds a resource to the table. */
+static int is_create(uint32_t type)
+{
+    return type == CMD_RESOURCE_CREATE_2D || type == CMD_RESOURCE_CREATE_3D ||
+           type == CMD_RESOURCE_CREATE_BLOB;
+}
+
+/** Read the header and first body word of the control queue's chain at
+ * `head` into `a`, which keeps the head; a chain that breaks the rules is
+ * marked `bad`, for the in-order pass to judge. */
+static void ahead_read(struct vd *d, uint32_t head, struct vd_ahead *a)
+{
+    const struct vgs_queue *q = &d->drv.queue[VGS_QUEUE_CONTROL];
+    uint8_t buf[sizeof(struct vd_hdr) + 4];
+    uint32_t i, off = 0, k;
+    struct vd_hdr h;
+    struct vgs_chain c;
+
+    memset(a, 0, sizeof(*a));
+    a->head = head;
+    if (vgs_chain_read(d->base, &d->l, q, &d->me.limits, head, &c) != VGS_OK) {
+        a->bad = 1;
+        return;
+    }
+    for (i = 0; i < c.nread && off < sizeof(buf); i++) {
+        k = c.seg[i].len < sizeof(buf) - off ? c.seg[i].len : (uint32_t)sizeof(buf) - off;
+        region_get(d, c.seg[i].addr, buf + off, k);
+        off += k;
+    }
+    if (off < sizeof(h)) {
+        return;
+    }
+    memcpy(&h, buf, sizeof(h));
+    a->type = h.type;
+    a->flags = h.flags;
+    if (off == sizeof(buf) && names_resource(h.type)) {
+        memcpy(&a->id, buf + sizeof(h), sizeof(a->id));
+    }
+}
+
+/** Count what the look-ahead did with a backing ask, under -T. */
+static void ahead_count(struct vd *d, unsigned what)
+{
+    if (d->profile) {
+        d->profile->ahead[what]++;
+    }
+}
+
+/**
+ * Serve the backing ask at avail place `pos` ahead of its turn, with the
+ * create it follows, when that cannot change what an earlier command sees:
+ * the ask is the first, unfenced, of a resource whose id the table does
+ * not hold, and the only earlier entry not yet served that names the id is
+ * its RESOURCE_CREATE_2D or _3D, unfenced. Those earlier entries, made
+ * before the resource, cannot name it, so the create and the ask run
+ * before them and the ask's answer goes out at once, as Linux's guest has
+ * its pages at the create; a fenced create's answer would signal every
+ * earlier fence of its timeline. An id still in the table, as through an
+ * UNREF not yet served, keeps its order. The create goes ahead only while
+ * the table has room for it after every earlier create not yet served, and
+ * without the UNREFs queued before it, so that neither it nor an earlier
+ * create fails where both would succeed in order; and nothing goes ahead
+ * of a chain that breaks the rules, which faults the queue. Returns VGS_OK
+ * or a transport fault.
+ */
+static int ahead_backing(struct vd *d, uint16_t pos)
+{
+    const struct vgs_queue *q = &d->drv.queue[VGS_QUEUE_CONTROL];
+    uint32_t mask = q->size - 1, id = d->ahead[pos & mask].id;
+    uint32_t used = d->t.count[VGS_OBJ_RESOURCE];
+    uint16_t at, create = 0;
+    int found = 0, err;
+
+    if (id == 0 || (d->ahead[pos & mask].flags & VD_FLAG_FENCE) != 0 || find_res(d, id, 0)) {
+        ahead_count(d, VD_AHEAD_KNOWN);
+        return VGS_OK;
+    }
+    for (at = d->last[VGS_QUEUE_CONTROL]; at != pos; at++) {
+        const struct vd_ahead *a = &d->ahead[at & mask];
+
+        if (a->bad) {
+            ahead_count(d, VD_AHEAD_BAD);
+            return VGS_OK;
+        }
+        if (a->done) {
+            continue;
+        }
+        if (a->id != id && is_create(a->type)) {
+            used++;
+        }
+        if (a->id != id || !names_resource(a->type)) {
+            continue;
+        }
+        if (found || (a->type != CMD_RESOURCE_CREATE_2D && a->type != CMD_RESOURCE_CREATE_3D) ||
+            (a->flags & VD_FLAG_FENCE) != 0) {
+            ahead_count(d, VD_AHEAD_NAMED);
+            return VGS_OK;
+        }
+        found = 1;
+        create = at;
+    }
+    if (!found || used >= d->t.limits.max_resources) {
+        ahead_count(d, found ? VD_AHEAD_ROOM : VD_AHEAD_NAMED);
+        return VGS_OK;
+    }
+    ahead_count(d, VD_AHEAD_SERVED);
+    d->read_ns = d->ahead[create & mask].read_ns;
+    if ((err = serve_chain(d, VGS_QUEUE_CONTROL, d->ahead[create & mask].head)) != VGS_OK) {
+        return err;
+    }
+    d->ahead[create & mask].done = 1;
+    d->read_ns = d->ahead[pos & mask].read_ns;
+    if ((err = serve_chain(d, VGS_QUEUE_CONTROL, d->ahead[pos & mask].head)) != VGS_OK) {
+        return err;
+    }
+    d->ahead[pos & mask].done = 1;
+    return VGS_OK;
+}
+
+/**
+ * Consume the control queue's avail entries up to `idx`, in order, as far
+ * as a queue's length past the in-order pass, and serve each first backing
+ * ask ahead of the entries before it where `ahead_backing` allows, so that
+ * its answer does not wait for the submissions queued before it. An entry
+ * is consumed, its head kept in `ahead`, before any later one is served,
+ * so that the avail entries not consumed are those of chains the guest has
+ * no answer for: a guest that reuses the descriptors and ring places of
+ * the entries served ahead cannot pass the ring's length
+ * (`vgs_avail_read`). Returns VGS_OK or a transport fault.
+ */
+static int ahead(struct vd *d, uint16_t idx)
+{
+    const struct vgs_queue *q = &d->drv.queue[VGS_QUEUE_CONTROL];
+    uint16_t last = d->last[VGS_QUEUE_CONTROL];
+    struct vd_ahead *a;
+    int err;
+
+    for (; d->seen != idx && (uint16_t)(d->seen - last) < q->size; d->seen++) {
+        a = &d->ahead[d->seen & (q->size - 1)];
+        ahead_read(d, vgs_avail_head(d->base, q, d->seen), a);
+        a->read_ns = d->profile ? vd_profile_now() : 0;
+        if (a->type == VGS_CMD_BACKING && d->seen == last) {
+            ahead_count(d, VD_AHEAD_TURN);
+        } else if (a->type == VGS_CMD_BACKING && (err = ahead_backing(d, d->seen)) != VGS_OK) {
+            return err;
+        }
+    }
+    return VGS_OK;
+}
+
+/**
+ * Serve the control queue's chains consumed at the start (`ahead`), in
+ * order but for those served ahead, with the backing asks that come
+ * meanwhile looked ahead at after each command, and let the renderer poll
+ * between two commands (`poll`). Returns VGS_OK, or the transport fault
+ * that puts the device in NEEDS_RESET.
+ */
+static int serve_control(struct vd *d)
+{
+    const struct vgs_queue *q = &d->drv.queue[VGS_QUEUE_CONTROL];
+    uint16_t idx, end, pos;
+    struct vd_ahead *a;
+    uint32_t head;
+    int err, done;
+
+    if ((err = vgs_avail_read(d->base, q, d->seen, &idx)) != VGS_OK ||
+        (err = ahead(d, idx)) != VGS_OK) {
+        return err;
+    }
+    for (end = d->seen; d->last[VGS_QUEUE_CONTROL] != end;) {
+        pos = d->last[VGS_QUEUE_CONTROL]++;
+        a = &d->ahead[pos & (q->size - 1)];
+        done = a->done;
+        head = a->head;
+        d->read_ns = a->read_ns;
+        memset(a, 0, sizeof(*a));
+        if (done) {
+            continue;
+        }
+        if ((err = serve_chain(d, VGS_QUEUE_CONTROL, head)) != VGS_OK) {
+            return err;
+        }
+        if (d->ops->poll) {
+            d->ops->poll(d->cookie);
+        }
+        /* Asks that came during the pass go before its remaining entries. */
+        if ((err = vgs_avail_read(d->base, q, d->seen, &idx)) != VGS_OK ||
+            (err = ahead(d, idx)) != VGS_OK) {
+            return err;
+        }
+    }
+    return VGS_OK;
+}
+
+/**
+ * Serve one queue's chains available at the start: the control queue's as
+ * `serve_control` says, the cursor queue's in order. Returns VGS_OK, or the
+ * transport fault that puts the device in NEEDS_RESET.
  */
 static int serve(struct vd *d, uint32_t qi)
 {
@@ -1503,77 +1924,15 @@ static int serve(struct vd *d, uint32_t qi)
     if (q->size == 0) {
         return VGS_OK;
     }
+    if (qi == VGS_QUEUE_CONTROL) {
+        return serve_control(d);
+    }
     if ((err = vgs_avail_read(d->base, q, d->last[qi], &idx)) != VGS_OK) {
         return err;
     }
     while (d->last[qi] != idx) {
-        uint32_t head = vgs_avail_head(d->base, q, d->last[qi]), i, off = 0, type, len, want;
-        struct vgs_chain c;
-        struct vd_profile_row *row = NULL;
-        uint64_t start = 0, copied = 0, executed = 0;
-        int short_of_memory;
-
-        if ((err = vgs_chain_read(d->base, &d->l, q, &d->me.limits, head, &c)) != VGS_OK) {
+        if ((err = serve_chain(d, qi, vgs_avail_head(d->base, q, d->last[qi]++))) != VGS_OK) {
             return err;
-        }
-        if (d->profile) {
-            start = vd_profile_now();
-        }
-        /* With no room for the whole chain, its header alone is read. */
-        short_of_memory = c.rbytes > d->cmd_cap && cmd_grow(d, c.rbytes) != 0;
-        want = short_of_memory ? sizeof(struct vd_hdr) : c.rbytes;
-        for (i = 0; i < c.nread && off < want; i++) {
-            len = c.seg[i].len < want - off ? c.seg[i].len : want - off;
-            region_get(d, c.seg[i].addr, d->cmd + off, len);
-            off += len;
-        }
-        d->room = c.wbytes;
-        d->last[qi]++;
-        d->n.commands++;
-        if (qi != VGS_QUEUE_CONTROL) {
-            /* The cursor queue: a cursor is not drawn; its chains return. */
-            complete(d, qi, head, 0);
-            continue;
-        }
-        if (off < sizeof(struct vd_hdr)) {
-            struct vd_hdr e;
-
-            memset(&e, 0, sizeof(e));
-            e.type = VD_RESP_ERR_PARAMETER;
-            memcpy(d->resp, &e, sizeof(e));
-            complete(d, qi, head, put_response(d, &c, d->resp, sizeof(struct vd_hdr)));
-            d->n.errors++;
-            continue;
-        }
-        if (short_of_memory) {
-            memcpy(&type, d->cmd, sizeof(type));
-            fprintf(stderr, "backend: command 0x%x: refused: %u bytes: no memory for its copy\n",
-                    (unsigned)type, (unsigned)c.rbytes);
-            if (type == VGS_CMD_PART) {
-                /* The stream lacks this part: its SUBMIT_3D is refused. */
-                join_drop(d);
-                d->join_open = 1;
-                d->join_err = VD_RESP_ERR_OUT_OF_MEMORY;
-            }
-            memset(d->resp, 0, sizeof(struct vd_hdr));
-            answer(d, qi, head, &c, VD_RESP_ERR_OUT_OF_MEMORY, sizeof(struct vd_hdr));
-            continue;
-        }
-        if (d->profile) {
-            copied = vd_profile_now();
-            row = profile_row(d);
-        }
-        len = execute(d, off, &type);
-        if (row) {
-            executed = vd_profile_now();
-        }
-        answer(d, qi, head, &c, type, len);
-        if (row) {
-            row->count++;
-            row->bytes += off;
-            row->copy_ns += copied - start;
-            row->execute_ns += executed - copied;
-            row->answer_ns += vd_profile_now() - executed;
         }
     }
     return VGS_OK;
@@ -1587,12 +1946,16 @@ static int accept_setup(struct vd *d, const struct vgs_driver *drv)
     if (err != VGS_OK) {
         fprintf(stderr, "backend: refused: epoch %u: %s\n", (unsigned)drv->epoch,
                 vgs_strerror(err));
+        pthread_mutex_lock(&d->lock);
         d->drv = *drv;
+        pthread_mutex_unlock(&d->lock);
         publish(d, VGS_DEV_FAILED, (uint32_t)err);
         d->n.faults++;
         return VD_WORKED;
     }
+    pthread_mutex_lock(&d->lock);
     d->drv = *drv;
+    pthread_mutex_unlock(&d->lock);
     publish(d, VGS_DEV_RUNNING, VGS_OK);
     if (d->verbose) {
         fprintf(stderr, "backend: running: epoch %u, features 0x%llx, transport 0x%llx\n",

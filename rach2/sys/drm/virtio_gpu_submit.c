@@ -9,6 +9,14 @@
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
+#ifdef RACH2_VGPU_PROFILE
+#include "../rtc.h"
+/* Mark the end of part `i` of an EXECBUFFER (VGPU_EXEC_PARTS); nothing in
+ * another build, whose `m` is NULL. */
+#define EXEC_MARK(m, i) ((m)[i] = rtc_monotonic_ns())
+#else
+#define EXEC_MARK(m, i) ((void)(m))
+#endif
 
 struct vgpu_submit {
     struct drm_gem_object **bos; /* held until the device answers */
@@ -406,9 +414,11 @@ static int32_t submit_buffers(struct drm_file *file, struct drm_virtgpu_execbuff
 }
 
 /** Wait only for foreign producers, then take each buffer's deferred
- * backing (`vgpu_backing_settle`), so that the device finds every resource
- * the submission names backed, and attach it, in queue order. Held buffer
- * references survive every wait. Return 0 or -errno. */
+ * backing whose page list has come whole, waiting for none and leaving a
+ * refusal to the worker (`vgpu_backing_settle_answered`): the ask is ahead
+ * of the submission on the queue, so the device has the backing first.
+ * Attach each buffer, in queue order. Held buffer references survive every
+ * wait. Return 0 or -errno. */
 static int32_t submit_dependencies(struct virtio_gpu_device *vg, struct drm_file *file,
                                    struct vgpu_submit *s, uint64_t context)
 {
@@ -423,7 +433,7 @@ static int32_t submit_dependencies(struct virtio_gpu_device *vg, struct drm_file
         if (rc) {
             return rc;
         }
-        rc = vgpu_backing_settle(vg, vgpu_bo(s->bos[i]), VGPU_SETTLE_SUBMIT);
+        rc = vgpu_backing_settle_answered(vg, vgpu_bo(s->bos[i]), VGPU_SETTLE_SUBMIT);
         if (rc) {
             return rc;
         }
@@ -513,10 +523,12 @@ static void submit_prepare(struct virtio_gpu_cmd *cmd, const struct drm_virtgpu_
  * room for it and the file's context. 0 or -errno: ENODEV for a dead
  * device, ENOSYS without virgl, EINVAL for an unknown flag or a ring the
  * context lacks, EINTR at SIGKILL in the wait for room, or the context's
- * error. May sleep.
+ * error. The profiling build marks the ends of the reap and the wait for
+ * room in `marks` (VGPU_EXEC_PARTS). May sleep.
  */
 static int32_t submit_begin(struct virtio_gpu_device *vg, struct drm_file *file,
-                            const struct drm_virtgpu_execbuffer *a, uint64_t *context)
+                            const struct drm_virtgpu_execbuffer *a, uint64_t *context,
+                            int64_t *marks)
 {
     struct vgpu_context *ctx = file->driver_priv;
     int32_t rc;
@@ -538,10 +550,12 @@ static int32_t submit_begin(struct virtio_gpu_device *vg, struct drm_file *file,
         *context = ctx->base_fence_ctx + a->ring_idx;
     }
     vgpu_reap(vg);
+    EXEC_MARK(marks, 1);
     rc = vgpu_room(vg, 1);
     if (rc) {
         return rc;
     }
+    EXEC_MARK(marks, 2);
     return vgpu_context_ensure(vg, file);
 }
 
@@ -565,11 +579,18 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
     uint64_t context;
     uint32_t i;
     int32_t rc, fd = -1;
+#ifdef RACH2_VGPU_PROFILE
+    int64_t marks[VGPU_EXEC_PARTS + 1];
+#else
+    int64_t *marks = NULL;
+#endif
 
-    rc = submit_begin(vg, file, a, &context);
+    EXEC_MARK(marks, 0);
+    rc = submit_begin(vg, file, a, &context, marks);
     if (rc) {
         return rc;
     }
+    EXEC_MARK(marks, 3);
     ctx = file->driver_priv;
     cmd = vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_SUBMIT_3D, sizeof(*req));
     s = kzalloc(sizeof(*s));
@@ -581,16 +602,19 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
     req->hdr.ctx_id = ctx->id;
     req->size = a->size;
     rc = (a->flags & VIRTGPU_EXECBUF_RING_IDX) ? submit_ring(file, a, context, cmd, s) : 0;
+    EXEC_MARK(marks, 4);
     if (!rc) {
         rc = vgpu_cmd_payload(cmd, a->command, a->size, 0);
     }
     if (rc) {
         goto out;
     }
+    EXEC_MARK(marks, 5);
     rc = submit_buffers(file, a, cmd, s);
     if (rc) {
         goto out;
     }
+    EXEC_MARK(marks, 6);
     rc = submit_fence_in(vg, a, context);
     if (!rc) {
         rc = sync_parse(vg, file, a, 1, context, &outs);
@@ -608,6 +632,7 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
     if (rc) {
         goto out;
     }
+    EXEC_MARK(marks, 7);
     submit_prepare(cmd, a, s);
     for (i = 0; i < s->nbos; i++) {
         rc = dma_resv_add_fence(s->bos[i]->resv, cmd->fence, 1);
@@ -624,7 +649,12 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
         a->fence_fd = fd;
     }
     submit_sync_publish(cmd, ins, outs, a);
+    EXEC_MARK(marks, 8);
     vgpu_cmd_send_sleepable(cmd, submit_done, s);
+    EXEC_MARK(marks, 9);
+#ifdef RACH2_VGPU_PROFILE
+    vgpu_profile_exec(vg, marks);
+#endif
     cmd = NULL;
     s = NULL;
     rc = 0;
