@@ -12,14 +12,17 @@
  *
  * The rows: payloads of 1 MiB less SUBMIT_3D's header, 1 MiB and 4 MiB,
  * each through both ioctls, on a control queue with virtio-pci's bounds,
- * 256 descriptors a chain and runs of up to a megabyte, and with the
- * shared region's, 16 descriptors, runs of up to 64 MiB and a chain of up
- * to the 32 MiB region: each reaches the device whole, its bytes the
- * caller's, in one SUBMIT_3D whose chain fits the queue. A device that
- * takes 1 MiB a chain, the backend's bound before it took its region's,
- * and a transport that gives no runs, refuse a longer payload with ENOMEM
- * and send nothing; a bad pointer is EFAULT. Each row ends with nothing
- * allocated.
+ * 256 descriptors a chain and runs of any length, and with the shared
+ * region's, 16 descriptors, runs of up to 64 MiB and a chain of up to the
+ * 32 MiB region: each reaches the device whole, its bytes the caller's, in
+ * one SUBMIT_3D whose chain fits the queue. Past the old bounds, 255 MiB
+ * reaches the virtio-pci device whole in runs of more than a megabyte, and
+ * 65 MiB the shared region's device that joins parts (VGS_TF_PARTS), as
+ * does 4 MiB one of 1 MiB chains: the parts come in order, unfenced, and
+ * the SUBMIT_3D after them takes their stream. A device that takes 1 MiB a
+ * chain and joins no parts, and a transport that gives no runs, refuse a
+ * longer payload with ENOMEM and send nothing; a bad pointer is EFAULT.
+ * Each row ends with nothing allocated and the join lock free.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -29,14 +32,18 @@
 #define MIB         (1024u * 1024u)
 #define SUBMIT_HDR  ((uint32_t)sizeof(struct virtio_gpu_submit_3d))
 #define PAYLOAD_MAX (4u * MIB)
+/* Past 254 runs of a megabyte, virtio-pci's old bound, and past 64 MiB,
+ * the largest shared region's. */
+#define PCI_BIG     (255u * MIB)
+#define SHARED_BIG  (65u * MIB)
 
-static uint32_t *words; /* PAYLOAD_MAX bytes of a pattern */
+static uint32_t *words; /* PCI_BIG bytes of a pattern */
 
 /** Bind the blob test's device with the control queue's bounds on a chain,
- * `max_chain` descriptors and `max_bytes` each way, and runs of at most
- * `dma_max` bytes from the DMA pool, and give the first file a virgl
- * context. */
-static void payload_bind(uint16_t max_chain, uint32_t max_bytes, uint32_t dma_max)
+ * `max_chain` descriptors and `max_bytes` each way, runs of at most
+ * `dma_max` bytes from the DMA pool and, with `parts`, a device that joins
+ * a stream sent in parts, and give the first file a virgl context. */
+static void payload_bind(uint16_t max_chain, uint32_t max_bytes, uint32_t dma_max, int parts)
 {
     static const uint32_t ids[4] = {1, 2, 4, 6};
     uint64_t p = VIRTGPU_CONTEXT_PARAM_CAPSET_ID, v = 1;
@@ -55,6 +62,7 @@ static void payload_bind(uint16_t max_chain, uint32_t max_bytes, uint32_t dma_ma
     gpu.max_chain = max_chain;
     gpu.max_bytes = max_bytes;
     gpu.dev.dma_max = dma_max;
+    gpu.dev.parts = parts;
     CHECK(bind() == 1 && vgpu_open(dev, &file) == 0, "a device with the bounds binds");
     CHECK(vg->ctrlq->max_chain == max_chain && vg->ctrlq->max_bytes == max_bytes,
           "the control queue has the transport's bounds");
@@ -118,6 +126,19 @@ static void payload_whole(int blob, uint32_t bytes, const char *row)
     }
 }
 
+/** Check that the stream of the last SUBMIT_3D came in `more` parts than
+ * `parts`, the count before it, and the SUBMIT_3D took it joined, or with
+ * `more` 0 that it came whole with no part. */
+static void payload_parts(uint32_t parts, int more, const char *row)
+{
+    if (more) {
+        CHECK(three.parts > parts && (three.submit_flags & VGS_FLAG_JOINED), row);
+    } else {
+        CHECK(three.parts == parts && !(three.submit_flags & VGS_FLAG_JOINED), row);
+    }
+    CHECK(!mutex_held(&vg->join_lock), "the join lock is free after the submission");
+}
+
 /** Send `bytes` through both ioctls and check each refused with `err` and
  * nothing sent. */
 static void payload_refused(uint64_t user, uint32_t bytes, int32_t err, const char *row)
@@ -143,15 +164,18 @@ static void payload_sizes(const char *row)
 }
 
 /** virtio-pci: 256 descriptors a chain, as QEMU's control queue, and runs
- * of up to a megabyte; then a transport that gives no runs. */
+ * of any length; then a transport that gives no runs. */
 static void row_pci(void)
 {
-    payload_bind(256, 0, 256u * PAGE_SIZE);
+    payload_bind(256, 0, VIRTIO_DMA_ANY, 0);
     payload_sizes("a payload reaches a virtio-pci device whole in one command");
+    gpu.dma_most = 0;
+    payload_whole(0, PCI_BIG, "255 MiB reaches a virtio-pci device whole in one command");
+    CHECK(gpu.dma_most > MIB, "past 254 MiB the runs pass a megabyte");
     payload_refused(16, PAYLOAD_MAX, -EFAULT, "a bad pointer is EFAULT and sends nothing");
     blob_unbind("the virtio-pci row leaves nothing");
 
-    payload_bind(256, 0, 0);
+    payload_bind(256, 0, 0, 0);
     payload_whole(0, 254u * PAGE_SIZE, "a page each fills the chain without runs");
     payload_refused(UPTR(words), PAYLOAD_MAX, -ENOMEM,
                     "without runs a longer payload is ENOMEM and sends nothing");
@@ -162,11 +186,11 @@ static void row_pci(void)
  * chain of up to the bed's 32 MiB region; then the backend's old 1 MiB. */
 static void row_shared(void)
 {
-    payload_bind(16, 32u * MIB, 64u * MIB);
+    payload_bind(16, 32u * MIB, 64u * MIB, 0);
     payload_sizes("a payload reaches the shared region's device whole in one command");
     blob_unbind("the shared region's row leaves nothing");
 
-    payload_bind(16, MIB, 64u * MIB);
+    payload_bind(16, MIB, 64u * MIB, 0);
     payload_whole(0, MIB - SUBMIT_HDR, "a 1 MiB chain carries 1 MiB less the header");
     payload_whole(1, MIB - SUBMIT_HDR, "a 1 MiB chain carries 1 MiB less the header");
     payload_refused(UPTR(words), MIB, -ENOMEM,
@@ -174,6 +198,37 @@ static void row_shared(void)
     payload_refused(UPTR(words), PAYLOAD_MAX, -ENOMEM,
                     "past a 1 MiB chain a payload is ENOMEM and sends nothing");
     blob_unbind("the 1 MiB row leaves nothing");
+}
+
+/** The shared region's device that joins parts: a stream past one part,
+ * 896 KiB on 16 descriptors, goes ahead of its SUBMIT_3D in parts, up to
+ * 65 MiB, past the largest region, and on chains of 1 MiB; a shorter one
+ * goes whole; a bad pointer sends nothing and frees the join lock. */
+static void row_parts(void)
+{
+    static const uint32_t sizes[4] = {64u * 1024u, MIB - SUBMIT_HDR, PAYLOAD_MAX, SHARED_BIG};
+    uint32_t parts, sent;
+    int i, blob;
+
+    payload_bind(16, 32u * MIB, 64u * MIB, 1);
+    sent = gpu.nlog;
+    payload_refused(16, PAYLOAD_MAX, -EFAULT, "a bad pointer in parts is EFAULT, nothing sent");
+    CHECK(log_find(VGS_CMD_PART, sent) == MAX_LOG && !mutex_held(&vg->join_lock),
+          "a refused stream sends no part and frees the join lock");
+    for (i = 0; i < 4; i++) {
+        for (blob = 0; blob < 2; blob++) {
+            parts = three.parts;
+            payload_whole(blob, sizes[i], "a stream reaches the device that joins parts whole");
+            payload_parts(parts, i != 0, "a stream past one part goes in parts, joined");
+        }
+    }
+    blob_unbind("the row of parts leaves nothing");
+
+    payload_bind(16, MIB, 64u * MIB, 1);
+    parts = three.parts;
+    payload_whole(0, PAYLOAD_MAX, "4 MiB reaches a device of 1 MiB chains in parts");
+    payload_parts(parts, 1, "4 MiB on 1 MiB chains goes in parts, joined");
+    blob_unbind("the row of parts on 1 MiB chains leaves nothing");
 }
 
 /** Run the payload rows against the real driver. */
@@ -184,16 +239,17 @@ int main(void)
     current_proc = &self;
     self.tg = &self_tg;
     k_memcpy(self.comm, "vkcube", sizeof("vkcube"));
-    words = (uint32_t *)calloc(1, PAYLOAD_MAX);
+    words = (uint32_t *)calloc(1, PCI_BIG);
     if (!words) {
         printf("vgpupayload-test: FAIL: no memory for the pattern\n");
         return 1;
     }
-    for (i = 0; i < PAYLOAD_MAX / 4u; i++) {
+    for (i = 0; i < PCI_BIG / 4u; i++) {
         words[i] = i * 2654435761u;
     }
     row_pci();
     row_shared();
+    row_parts();
     free(words);
     printf("vgpupayload-test: %s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;

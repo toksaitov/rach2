@@ -23,17 +23,89 @@ static struct {
     uint8_t submitted[8192];
     uint32_t submitted_size;
     uint32_t submitted_sum; /* FNV-1a of the whole of the last SUBMIT_3D's bytes */
+    /* The stream being joined from VGS_CMD_PART chains (VGS_TF_PARTS): its
+     * bytes' FNV-1a so far, their count, the parts' total and context. */
+    int joining;
+    uint32_t join_sum, join_ctx, parts;
+    uint64_t join_len, join_total;
 } three;
 
-/** FNV-1a of `n` bytes at `p`. */
-static uint32_t fnv1a(const uint8_t *p, uint32_t n)
-{
-    uint32_t h = 2166136261u;
+/* The chain `run_chain` carries out: its readable segments. */
+static const struct virtio_sg *chain_sg;
+static unsigned chain_out;
 
+#define FNV_FIRST 2166136261u
+
+/** FNV-1a of `n` bytes at `p`, from the sum `h` of the bytes before them. */
+static uint32_t fnv1a_more(uint32_t h, const uint8_t *p, uint64_t n)
+{
     while (n--) {
         h = (h ^ *p++) * 16777619u;
     }
     return h;
+}
+
+/** FNV-1a of `n` bytes at `p`. */
+static uint32_t fnv1a(const uint8_t *p, uint32_t n)
+{
+    return fnv1a_more(FNV_FIRST, p, n);
+}
+
+/** The readable bytes of the chain being carried out, which the model
+ * gathers only up to MODEL_REQ_MAX. */
+static uint64_t chain_bytes(void)
+{
+    uint64_t n = 0;
+    unsigned i;
+
+    for (i = 0; i < chain_out; i++) {
+        n += chain_sg[i].len;
+    }
+    return n;
+}
+
+/** FNV-1a, from `h`, of the chain's readable bytes from `from` on, read
+ * where they lie. */
+static uint32_t chain_fnv(uint32_t h, uint64_t from)
+{
+    unsigned i;
+
+    for (i = 0; i < chain_out; i++) {
+        uint32_t len = chain_sg[i].len;
+
+        if (from >= len) {
+            from -= len;
+            continue;
+        }
+        h = fnv1a_more(h, (const uint8_t *)(uintptr_t)chain_sg[i].addr + from, len - from);
+        from = 0;
+    }
+    return h;
+}
+
+/** VGS_CMD_PART: the next bytes of a stream, summed where they lie; the
+ * parts must come in order, unfenced, to a device that joins them. */
+static void execute_part(const uint8_t *req, uint32_t n)
+{
+    const struct virtio_gpu_ctrl_hdr *hdr = (const struct virtio_gpu_ctrl_hdr *)(const void *)req;
+    const struct vgs_part *p = (const struct vgs_part *)(const void *)(req + sizeof(*hdr));
+    uint64_t len = chain_bytes() - sizeof(*hdr) - sizeof(*p);
+
+    CHECK(gpu.dev.parts && n >= sizeof(*hdr) + sizeof(*p) && !(hdr->flags & VIRTIO_GPU_FLAG_FENCE),
+          "an unfenced part comes only to a device that joins them");
+    if (p->offset == 0) {
+        three.joining = 1;
+        three.join_sum = FNV_FIRST;
+        three.join_len = 0;
+        three.join_total = p->total;
+        three.join_ctx = hdr->ctx_id;
+    }
+    CHECK(three.joining && p->offset == three.join_len && p->total == three.join_total &&
+              hdr->ctx_id == three.join_ctx && len <= p->total - p->offset,
+          "each part follows the one before it within the stream");
+    three.join_sum = chain_fnv(three.join_sum, sizeof(*hdr) + sizeof(*p));
+    three.join_len += len;
+    three.parts++;
 }
 
 /** Whether the model has a context with this id. */
@@ -196,16 +268,29 @@ static uint32_t execute_3d(const uint8_t *req, uint32_t n, uint8_t *resp, uint32
         break;
     case VIRTIO_GPU_CMD_SUBMIT_3D:
         s = (const void *)req;
-        CHECK(context_present(hdr->ctx_id) && n == 32 + s->size,
-              "SUBMIT_3D appends exactly its size of command bytes");
         three.submitted_size = s->size;
         three.submit_flags = hdr->flags;
         three.submit_ring = hdr->ring_idx;
-        if (s->size <= sizeof(three.submitted)) {
+        three.submits++;
+        if (hdr->flags & VGS_FLAG_JOINED) {
+            CHECK(context_present(hdr->ctx_id) && n == 32 && three.joining &&
+                      three.join_len == s->size && three.join_total == s->size &&
+                      three.join_ctx == hdr->ctx_id,
+                  "a joined SUBMIT_3D takes the whole stream of its parts");
+            three.submitted_sum = three.join_sum;
+            three.joining = 0;
+            break;
+        }
+        CHECK(context_present(hdr->ctx_id) && chain_bytes() == 32 + (uint64_t)s->size,
+              "SUBMIT_3D appends exactly its size of command bytes");
+        if (s->size <= sizeof(three.submitted) && n >= 32 + s->size) {
             k_memcpy(three.submitted, req + 32, s->size);
         }
-        three.submitted_sum = n == 32 + s->size ? fnv1a(req + 32, s->size) : 0;
-        three.submits++;
+        three.submitted_sum =
+            chain_bytes() == 32 + (uint64_t)s->size ? chain_fnv(FNV_FIRST, 32) : 0;
+        break;
+    case VGS_CMD_PART:
+        execute_part(req, n);
         break;
     default:
 #ifdef VGPU_BLOB_TEST
