@@ -2832,10 +2832,16 @@ static void rows_walks(void)
  * In each row a writer grows /rk/f from 4 KiB of 'A' to 64 KiB of 'B', which
  * moves it past /rk/g after it, and a mkdir of /rk/d then takes its old
  * offset first fit, so that a bind judging the file's old node finds a
- * directory there. By descriptor, a syncer's fsync of a dirty file takes the
- * volume's namespace lock across a throttled write, so that the writer and
- * the mkdir queue on the lock; the binder copies the descriptor's node while
- * they still sleep there and queues behind them. By path, the binder takes
+ * directory there. By descriptor, a holder overwrites 64 KiB of /rk/big in
+ * place, which keeps the volume's namespace lock across throttled writes and
+ * moves no node, so that the writer and the mkdir queue on the lock while no
+ * change of what paths name is under way; the binder copies the
+ * descriptor's node while they still sleep there and queues behind them.
+ * The kernel brackets a KRFFS move as such a change, and a walk sleeps until
+ * none is under way, so a binder that walked during the move would copy the
+ * node the file moved to, as it should: the copy must come before the move
+ * begins. An fsync does not hold the lock for long, since a KRFFS write
+ * stores its data before it returns. By path, the binder takes
  * its hold on the file under the lock, lets the lock go and sleeps reading
  * the uncached directories of its target on the FAT volume while the writer
  * and the mkdir run.
@@ -2854,7 +2860,6 @@ static void rows_walks(void)
  * order likely, and the bind's wait is printed for the record.
  */
 
-#define O_RDWR       2
 #define O_PATH       010000000
 #define SIGKILL      9
 #define TRACE_EVENTS 64
@@ -3073,8 +3078,9 @@ static void yield(int times)
 /**
  * Fork a child for one of the row's calls: after `wait` yields it grows the
  * file open on `fd` to 64 KiB of 'B' (`what` 'g'), makes /rk/d ('m'), or
- * fsyncs `fd` ('s'), and exits 0 when the call did what it should. Returns
- * the child's PID, or -1 when the fork failed.
+ * overwrites the 64 KiB file open on `fd` with 'Y' in place ('o'), and exits
+ * 0 when the call did what it should. Returns the child's PID, or -1 when
+ * the fork failed.
  */
 static int reloc_child(char what, long fd, int wait)
 {
@@ -3085,15 +3091,13 @@ static int reloc_child(char what, long fd, int wait)
         return pid < 0 ? -1 : pid;
     }
     yield(wait);
-    if (what == 'g') {
-        for (i = 0; i < (long)sizeof(chunk); i++) {
-            chunk[i] = 'B';
-        }
-        rc = syscall3(SYS_WRITE, fd, (long)chunk, sizeof(chunk)) == (long)sizeof(chunk) ? 0 : -1;
-    } else if (what == 'm') {
+    if (what == 'm') {
         rc = syscall2(SYS_MKDIR, (long)"/rk/d", 0755);
     } else {
-        rc = syscall1(SYS_FSYNC, fd);
+        for (i = 0; i < (long)sizeof(chunk); i++) {
+            chunk[i] = what == 'g' ? 'B' : 'Y';
+        }
+        rc = syscall3(SYS_WRITE, fd, (long)chunk, sizeof(chunk)) == (long)sizeof(chunk) ? 0 : -1;
     }
     sys_exit(rc != 0);
 }
@@ -3123,7 +3127,7 @@ static void reloc_stop(const int pids[3])
 /**
  * Start the children of one row and leave the binder ready: by descriptor
  * (`by_fd`) the source is /proc/self/fd/9, an O_PATH descriptor of /rk/f,
- * and the syncer, the writer and the mkdir are started in that order, the
+ * and the holder, the writer and the mkdir are started in that order, the
  * last two to queue on the volume's lock; by path the writer and the mkdir
  * wait in yields for the binder to sleep on the FAT volume. `pids` gets the
  * three children, 0 for none. Returns 0, or what failed, with every child
@@ -3142,12 +3146,12 @@ static const char *reloc_start(int by_fd, int pids[3])
         if (opath < 0 || syscall2(SYS_DUP2, opath, 9) != 9) {
             return "open the bind's source O_PATH as descriptor 9";
         }
-        fill_file("/rk/big", 'Z', 4096);
-        big = syscall3(SYS_OPEN, (long)"/rk/big", O_RDWR, 0);
-        if (big < 0 || syscall3(SYS_WRITE, big, (long)chunk, 4096) != 4096) {
-            return "dirty the file the syncer writes back";
+        fill_file("/rk/big", 'Z', (long)sizeof(chunk));
+        big = syscall3(SYS_OPEN, (long)"/rk/big", O_WRONLY, 0);
+        if (big < 0) {
+            return "open the file the holder overwrites";
         }
-        pids[0] = reloc_child('s', big, 0);
+        pids[0] = reloc_child('o', big, 0);
         yield(4);
     }
     if (pids[0] >= 0) {
@@ -3327,7 +3331,7 @@ static void reloc_bind(int by_fd, int dir, int try)
     read = trace_read();
     trace_write("off");
     if (bad) {
-        fail("the syncer, the writer or the mkdir of a relocation row failed");
+        fail("the holder, the writer or the mkdir of a relocation row failed");
     }
     if (read != 0) {
         fail("read the kernel's bind trace");
