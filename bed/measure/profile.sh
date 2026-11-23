@@ -18,7 +18,7 @@ vm()
 
 if [ "$2" = stop ]; then
     [ -z "${BED_VM_PROFILE_PORT:-}" ] ||
-        echo 'systemctl stop vgpu-profile-perf 2> /dev/null || :' | vm
+        echo 'systemctl stop vgpu-profile-perf vgpu-profile-gpu 2> /dev/null || :' | vm
     exit 0
 fi
 out=$1/$2
@@ -111,14 +111,37 @@ cat "$file"
 printf 'backend stat '
 cat "/proc/$pid/stat"
 grep '^drm-' "/proc/$pid"/fdinfo/* || :
+# threads: one line a backend thread: its ID, user and system ticks and
+# name; a function, since set replaces its arguments alone.
+threads()
+{
+    for task in /proc/"$pid"/task/[0-9]*; do
+        stat=$(cat "$task/stat" 2> /dev/null) || continue
+        comm=${stat#*\(}
+        comm=${comm%\)*}
+        # shellcheck disable=SC2086 # the fields after the name are words
+        set -- ${stat##*\) }
+        echo "backend thread ${task##*/} ${12} ${13} $comm"
+    done
+}
+threads
 if command -v perf > /dev/null; then
     case $1 in
         before)
+            # i915's busy, wait and semaphore time of the render ring, in
+            # ns, over the whole VM; i915 samples a ring without execlists.
+            rm -f /run/vgpu-gpu.stat
+            systemd-run -q --unit=vgpu-profile-gpu --property=KillSignal=SIGINT \
+                --property=RuntimeMaxSec=900s perf stat -a -x, -o /run/vgpu-gpu.stat \
+                -e i915/rcs0-busy/,i915/rcs0-wait/,i915/rcs0-sema/ || :
             systemd-run -q --unit=vgpu-profile-perf --property=KillSignal=SIGINT \
                 --property=RuntimeMaxSec=900s perf record -e cpu-clock -F 67 \
                 --call-graph dwarf,4096 -p "$pid" -o /run/vgpu-perf.data
             ;;
         after)
+            systemctl stop vgpu-profile-gpu 2> /dev/null || :
+            echo 'gpu busy'
+            cat /run/vgpu-gpu.stat 2> /dev/null || echo 'gpu busy unavailable'
             systemctl stop vgpu-profile-perf
             perf report --stdio --percent-limit 0.5 -i /run/vgpu-perf.data
             ;;
