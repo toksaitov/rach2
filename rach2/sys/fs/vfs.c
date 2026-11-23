@@ -758,6 +758,23 @@ int vfs_named_mount(const struct vfs_mount *parent, int n, const char **name, ui
     return 0;
 }
 
+/**
+ * Whether `m` is a mount over a node of the file system that `mnt` shows,
+ * on `mnt` itself or on another mount of that file system, a bind of it or
+ * the mount it binds, which `vfs_leaf_mount` counts. A mount on another
+ * mount of the file system counts when the caller's namespace sees it, as
+ * Linux's `is_local_mountpoint` (fs/namespace.c) refuses to rename or
+ * remove a dentry that any mount of the caller's namespace stands on,
+ * through whichever mount the call names it.
+ */
+static int mount_over_same(const struct vfs_mount *m, struct vfs_mount *mnt)
+{
+    if (!m || m->state == VFS_FREE || !m->covered || !m->parent) {
+        return 0;
+    }
+    return m->parent == mnt || mount_base(m->parent) == mount_base(mnt);
+}
+
 struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *name)
 {
     void *found;
@@ -768,9 +785,7 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
         return m;
     }
     for (i = 1; i < mount_slots; i++) {
-        struct vfs_mount *child = mounts[i];
-
-        if (child && child->state != VFS_FREE && child->parent == mnt && child->covered) {
+        if (mount_over_same(mounts[i], mnt)) {
             break;
         }
     }
@@ -782,9 +797,11 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
         return 0;
     }
     for (i = 1; i < mount_slots; i++) {
-        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt &&
-            mounts[i]->covered == found && mount_in_view(mounts[i])) {
-            m = mounts[i];
+        struct vfs_mount *child = mounts[i];
+
+        if (mount_over_same(child, mnt) && child->covered == found &&
+            (child->parent == mnt ? mount_in_view(child) : vfs_mount_seen(child))) {
+            m = child;
         }
     }
     if (mnt->type->ops->put) {
