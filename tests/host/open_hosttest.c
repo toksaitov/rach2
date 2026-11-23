@@ -3988,7 +3988,7 @@ static void mounted_queue(void)
         fd_entry_t copy = *entry;
         int flushes = queue_flushes;
 
-        fd_close_locks(&copy);
+        fd_close_locks(&copy, 0);
         check(queue_flushes == flushes, "dropping a borrowed queue does not cancel notification");
         check(close_fd(fd) == 0 && queue_flushes == flushes + 1,
               "closing a queue descriptor cancels notification");
