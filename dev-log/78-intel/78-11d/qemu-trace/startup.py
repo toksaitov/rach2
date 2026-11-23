@@ -160,7 +160,7 @@ def report(case):
     if calls:
         wall, active, counts = Counter(), Counter(), Counter()
         for a, b, nr in calls:
-            if duration(a, b):
+            if duration(a, b) or (a == b and lo <= a < hi):
                 wall[nr] += duration(a, b)
                 active[nr] += scheduled(a, b)
                 counts[nr] += 1
