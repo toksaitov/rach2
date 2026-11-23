@@ -440,7 +440,7 @@ static void fence_watch(struct vd *d, struct src *s, struct vr *r, uint64_t *see
 {
     const struct vd_pending *old = 0;
     time_t t = time(0);
-    char why[160];
+    char why[192];
     uint32_t i;
 
     for (i = 0; i < VD_PENDING && d->npend; i++) {
@@ -460,9 +460,10 @@ static void fence_watch(struct vd *d, struct src *s, struct vr *r, uint64_t *see
         return;
     }
     snprintf(why, sizeof(why),
-             "%u fenced commands wait; the oldest, fence %llu of context %u, ring %u, for %ld s",
-             (unsigned)d->npend, (unsigned long long)old->fence_id, (unsigned)old->ctx,
-             (unsigned)old->ring, (long)(t - *since));
+             "%u fenced commands wait, %u with no renderer fence; the oldest, fence %llu of "
+             "context %u, ring %u, for %ld s",
+             (unsigned)d->npend, (unsigned)d->nunfenced, (unsigned long long)old->fence_id,
+             (unsigned)old->ctx, (unsigned)old->ring, (long)(t - *since));
     report(d, s, r, 0);
     stall_report(why);
     *next = t + STALL_AGAIN_S;
