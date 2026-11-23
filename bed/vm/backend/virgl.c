@@ -71,6 +71,7 @@ struct vr_pin {
  * since virtio-gpu has no resource 0. */
 struct vr_admit {
     uint32_t id;
+    uint32_t gen; /* the reading it was admitted under (`vr.gen`) */
     uint64_t bytes;
 };
 
@@ -97,6 +98,14 @@ struct vr {
     struct vr_admit admit[ADMIT_SLOTS];
     uint32_t nadmit;
     uint64_t admitted;
+    /* The account's last reading of the GPU objects (`mem_room`): the bytes
+     * it counted, the ledger's among them when it missed a client, its
+     * generation, and the bounds of the creates admitted since, which it
+     * does not hold. */
+    int have_reading;
+    uint64_t read_sum;
+    uint32_t gen;
+    uint64_t since;
     /* The DRM clients of this process that the epoch's start read, by
      * "drm-pdev drm-client-id", and whether that reading could not name
      * them all, which makes every judgment count the ledger. */
@@ -1227,7 +1236,8 @@ static uint32_t admit_slot(const struct vr *r, uint32_t id)
 }
 
 /**
- * Hold resource id's create in the ledger at `bytes`, its bound. Returns 0,
+ * Hold resource id's create in the ledger at `bytes`, its bound, which
+ * counts in `since` until the account's next reading. Returns 0,
  * or -1 when the ledger holds VD_OBJS creates already, which the device's
  * table of resources keeps from happening.
  */
@@ -1237,19 +1247,25 @@ static int admit_add(struct vr *r, uint32_t id, uint64_t bytes)
 
     if (r->admit[i].id == id) {
         r->admitted -= r->admit[i].bytes;
+        if (r->admit[i].gen == r->gen) {
+            r->since -= r->admit[i].bytes;
+        }
     } else if (r->nadmit == VD_OBJS) {
         return -1;
     } else {
         r->nadmit++;
     }
     r->admit[i].id = id;
+    r->admit[i].gen = r->gen;
     r->admit[i].bytes = bytes;
     r->admitted += bytes;
+    r->since += bytes;
     return 0;
 }
 
 /**
- * Drop resource id's create from the ledger, if it holds it, moving each
+ * Drop resource id's create from the ledger, and from `since` when it was
+ * admitted since the account's last reading, if it holds it, moving each
  * later entry of its run back into the free place when its home allows,
  * so that every entry stays reachable from its home (Knuth's algorithm R,
  * TAOCP 6.4).
@@ -1262,6 +1278,9 @@ static void admit_drop(struct vr *r, uint32_t id)
         return;
     }
     r->admitted -= r->admit[i].bytes;
+    if (r->admit[i].gen == r->gen) {
+        r->since -= r->admit[i].bytes;
+    }
     r->nadmit--;
     for (;;) {
         r->admit[i].id = 0;
@@ -1279,68 +1298,107 @@ static void admit_drop(struct vr *r, uint32_t id)
 }
 
 /**
- * Whether the VM has room for `size` bytes more, of a backing or of a
- * resource's storage: its available memory, as /proc/meminfo counts it,
- * holds them, the bytes the renderer's GPU objects will yet take
- * (`gpu_unbacked`), and an eighth of the VM's memory besides, so that a
- * guest that asks for more than the VM has is refused, as a Linux guest's
- * allocation fails when its RAM runs out, before the pin's reclaim, or
- * i915's at an object's first use, stalls the VM and every answer with it
- * or wakes its OOM killer. Creates (`op_create`) and backings (`back_new`)
- * are judged so against one account: a create's GPU object counts here
- * from its creation until it has its pages, and in MemAvailable after. The
- * objects are read before MemAvailable, so that one made resident between
- * the two readings is counted twice, which refuses early, and never not at
- * all. Each judgment reads them afresh, since the renderer makes GPU
- * objects by other paths too, at submissions, blob creates and in Venus's
- * workers, which only a new reading counts; a reading that missed a client
- * of the renderer's adds every admitted create at its bound (`ledger_held`),
- * so that a miss cannot admit a create's memory twice. main has the C
- * library give back at once what llvmpipe frees. 0, with
- * `backend: counts: PATH: ERROR`, when the objects cannot be read; 1
- * when the VM has no /proc/meminfo or it lacks either count; 0 when it
- * cannot be opened for want of memory or its read fails, as seq_file's
- * does when it cannot allocate its buffer. MemAvailable reads 0, not less,
- * when the free pages are down to the watermarks, which is no room.
+ * Read the GPU objects afresh for the account (`gpu_unbacked`): their
+ * bytes, and the ledger's when the reading missed a client of the
+ * renderer's (`ledger_held`), become r->read_sum, and the creates admitted
+ * from now on count in r->since until the next reading. Returns 0, or -1
+ * with `backend: counts: PATH: ERROR` when the objects cannot be read,
+ * which leaves no reading.
  */
-static int mem_room(struct vr *r, uint64_t size)
+static int mem_read(struct vr *r)
 {
-    unsigned long long total = 0, avail = 0, kib;
-    int has_total = 0, has_avail = 0, failed;
     struct gpu_scan scan;
-    uint64_t need, held;
-    char line[128];
-    FILE *f;
 
+    r->have_reading = 0;
     if (gpu_unbacked(&scan) != 0) {
         fprintf(stderr, "backend: counts: %s: %s\n", scan.where, strerror(scan.failed));
         free(scan.seen);
-        return 0;
+        return -1;
     }
-    held = ledger_held(r, &scan);
+    r->read_sum = scan.sum + ledger_held(r, &scan);
     free(scan.seen);
-    if ((f = fopen("/proc/meminfo", "r")) == 0) {
-        return errno != ENOMEM && errno != ENFILE && errno != EMFILE;
-    }
-    while (fgets(line, sizeof(line), f)) {
-        if (sscanf(line, "MemTotal: %llu kB", &kib) == 1) {
-            total = kib * 1024u;
-            has_total = 1;
-        } else if (sscanf(line, "MemAvailable: %llu kB", &kib) == 1) {
-            avail = kib * 1024u;
-            has_avail = 1;
+    r->have_reading = 1;
+    r->gen++;
+    r->since = 0;
+    return 0;
+}
+
+/**
+ * Whether the VM has room for `size` bytes more, of a backing or of a
+ * resource's storage: its available memory, as /proc/meminfo counts it,
+ * holds them, the bytes the renderer's GPU objects will yet take, and an
+ * eighth of the VM's memory besides, so that a guest that asks for more
+ * than the VM has is refused, as a Linux guest's allocation fails when its
+ * RAM runs out, before the pin's reclaim, or i915's at an object's first
+ * use, stalls the VM and every answer with it or wakes its OOM killer.
+ * Creates (`op_create`) and backings (`back_new`) are judged so against
+ * one account: a create's GPU object counts here from its creation until
+ * it has its pages, and in MemAvailable after; a backing is pinned whole
+ * at its admission, so MemAvailable holds it at every later judgment.
+ * The objects' bytes are the account's last reading (`mem_read`) and the
+ * bounds of the creates admitted since (`since`), which the reading does
+ * not hold; MemAvailable is read at each judgment, after the objects, so
+ * that one made resident since the reading is counted twice, which refuses
+ * early, and never not at all. A judgment that would leave less room than
+ * another eighth of the VM's memory, the margin, or would refuse, reads
+ * the objects afresh and judges again, since the renderer makes GPU
+ * objects by other paths too, at submissions, blob creates and in Venus's
+ * workers, which only a new reading counts: the margin holds those made
+ * since the last reading. The first judgment of an epoch reads them too.
+ * main has the C library give back at once what llvmpipe frees. 0 when
+ * the objects cannot be read (`mem_read`); 1 when the VM has no
+ * /proc/meminfo or it lacks either count; 0 when it cannot be opened for
+ * want of memory or its read fails, as seq_file's does when it cannot
+ * allocate its buffer. MemAvailable reads 0, not less, when the free pages
+ * are down to the watermarks, which is no room.
+ */
+static int mem_room(struct vr *r, uint64_t size)
+{
+    unsigned long long total, avail, kib;
+    int has_total, has_avail, failed, fresh = 0, room;
+    uint64_t need;
+    char line[128];
+    FILE *f;
+
+    if (!r->have_reading) {
+        if (mem_read(r) != 0) {
+            return 0;
         }
+        fresh = 1;
     }
-    failed = ferror(f);
-    fclose(f);
-    if (failed) {
-        return 0;
+    for (;;) {
+        total = avail = 0;
+        has_total = has_avail = 0;
+        if ((f = fopen("/proc/meminfo", "r")) == 0) {
+            return errno != ENOMEM && errno != ENFILE && errno != EMFILE;
+        }
+        while (fgets(line, sizeof(line), f)) {
+            if (sscanf(line, "MemTotal: %llu kB", &kib) == 1) {
+                total = kib * 1024u;
+                has_total = 1;
+            } else if (sscanf(line, "MemAvailable: %llu kB", &kib) == 1) {
+                avail = kib * 1024u;
+                has_avail = 1;
+            }
+        }
+        failed = ferror(f);
+        fclose(f);
+        if (failed) {
+            return 0;
+        }
+        if (!has_total || !has_avail) {
+            return 1;
+        }
+        need = total / 8u + r->read_sum + r->since;
+        room = need <= avail && size <= avail - need;
+        if (fresh || (room && avail - need - size >= total / 8u)) {
+            return room;
+        }
+        if (mem_read(r) != 0) {
+            return 0;
+        }
+        fresh = 1;
     }
-    if (!has_total || !has_avail) {
-        return 1;
-    }
-    need = total / 8u + scan.sum + held;
-    return need <= avail && size <= avail - need;
 }
 
 volatile sig_atomic_t vr_hold;
@@ -1499,6 +1557,8 @@ static void op_reset(void *c)
     memset(r->admit, 0, sizeof(r->admit));
     r->nadmit = 0;
     r->admitted = 0;
+    r->have_reading = 0;
+    r->since = 0;
     if (r->kms) {
         kms_reset(r->kms);
     }
