@@ -1029,6 +1029,7 @@ int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
     if (mnt == &cwd_proc) {
         k_memset(st, 0, sizeof(*st));
         st->mode = S_IFDIR | 0555;
+        st->nlink = 1;
         return 0;
     }
     if (unlocked_row) {
@@ -1333,13 +1334,31 @@ int vfs_stamp_begin(const struct vfs_stamp *st)
     return 1;
 }
 
-/** The working directory by its pair: none here, so the caller walks its
- * path. */
+/** The working directory by its pair, held as vfs.c's `cwd_take` holds it
+ * with no move to check: entered, under the namespace lock of a serialised
+ * type, which only a locked walk keeps. 1 with no pair, for the caller to
+ * walk the path, or `vfs_enter`'s error. */
 int vfs_resolve_cwd(int flags, struct vfs_ref *ref)
 {
-    (void)flags;
-    (void)ref;
-    return 1;
+    struct fs_struct *fs = current_proc->fs;
+    int rc;
+
+    if ((ref->mnt = fs->cwd_mnt) == NULL) {
+        return 1;
+    }
+    rc = vfs_enter(ref->mnt);
+    if (rc != 0) {
+        return rc;
+    }
+    if (ref->mnt->type->ns_serialised) {
+        vfs_ns_lock(ref->mnt);
+    }
+    ref->node = fs->cwd_node;
+    vfs_ref_hold(ref);
+    if (!(flags & VFS_WALK_LOCK)) {
+        vfs_walk_unlock(ref->mnt);
+    }
+    return 0;
 }
 
 /** A call run again: no row's stamp moves, so none is. */
@@ -6227,7 +6246,7 @@ static void departed_proc_open(void)
         check(fstat_getattr(entry, &st) == 0 && st.st_ino == 31,
               "the reopened namespace directory keeps the original inode");
         check(copy_path_at(buf, sizeof(buf), fd, "../.", NULL) > 0 &&
-                  !__builtin_strcmp(buf, "/proc/7/ns/../.") && openat2_dir(fd, buf, &outside) == 0,
+                  !__builtin_strcmp(buf, "/proc/7/ns/..") && openat2_dir(fd, buf, &outside) == 0,
               "both at walks keep the departed descriptor as their anchor");
         proc_root.kind = VNODE_PROC_PID;
         check(proc_fd_open_from(&link, &proc, entry, 0) == -ESRCH,
@@ -6241,7 +6260,7 @@ static void departed_proc_open(void)
     }
     k_memcpy(row_fs.cwd, "/proc/7/ns", 11);
     check(copy_path_at(buf, sizeof(buf), AT_FDCWD, ".", NULL) > 0 &&
-              !__builtin_strcmp(buf, "/proc/7/ns/."),
+              !__builtin_strcmp(buf, "/proc/7/ns"),
           "a dot walk starts at the retained directory");
     check(copy_path_at(buf, sizeof(buf), AT_FDCWD, "..", NULL) > 0 &&
               !__builtin_strcmp(buf, "/proc/7/ns/..") && openat2_dir(AT_FDCWD, buf, &outside) == 0,
