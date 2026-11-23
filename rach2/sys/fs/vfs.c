@@ -2424,23 +2424,32 @@ static int cached_named(struct vfs_mount *mnt, const char *comp, struct vfs_ref 
  * as `cached_start` takes the root mount. 0, with `cur` where a path through
  * this place arrives; or WALK_FULL, with `cur` on the last mount reached,
  * for a mount the walk may not judge (`vfs_mount_seen_word`) or stand on
- * (`cached_take`), one being made or unmounted among them. May sleep, to
- * drop a hold it moved off (`cached_put`).
+ * (`cached_take`), one being made or unmounted among them. With
+ * `uncovered` given, remember one parent with no covering mounts and skip
+ * its later scans. The caller checks the same walk sequence before using
+ * the answer. May sleep, to drop a hold it moved off (`cached_put`).
  */
-static int cached_cross(struct vfs_ref *cur)
+static int cached_cross(struct vfs_ref *cur, const struct vfs_mount **uncovered)
 {
     for (;;) {
         struct vfs_mount *over = NULL;
         struct vfs_ref next = {NULL, NULL};
-        uint32_t flags = spin_lock_irqsave(&mount_table_lock);
-        int i, rc = 0;
+        uint32_t flags;
+        int i, covered = 0, rc = 0;
 
+        if (uncovered && *uncovered == cur->mnt) {
+            return 0;
+        }
+        flags = spin_lock_irqsave(&mount_table_lock);
         for (i = 1; i < mount_slots && !over && rc == 0; i++) {
             struct vfs_mount *m = mounts[i];
             int seen;
 
-            if (!m || m->state == VFS_FREE || m->parent != cur->mnt || !m->covered ||
-                m->covered != cur->node) {
+            if (!m || m->state == VFS_FREE || m->parent != cur->mnt || !m->covered) {
+                continue;
+            }
+            covered = 1;
+            if (m->covered != cur->node) {
                 continue;
             }
             seen = vfs_mount_seen_word(m);
@@ -2454,6 +2463,9 @@ static int cached_cross(struct vfs_ref *cur)
             rc = cached_take(over, over->root, &next);
         }
         spin_unlock_irqrestore(&mount_table_lock, flags);
+        if (uncovered && !covered) {
+            *uncovered = cur->mnt;
+        }
         if (rc != 0 || !over) {
             return rc;
         }
@@ -2515,7 +2527,7 @@ static void cached_dots_push(struct cached_dots *dd, const struct vfs_ref *cur)
  * entered again. May sleep.
  */
 static int cached_move(struct vfs_ref *cur, void *found, struct vfs_name **entry,
-                       struct cached_dots *dd)
+                       struct cached_dots *dd, const struct vfs_mount **uncovered)
 {
     struct vfs_mount *from = cur->mnt;
 
@@ -2529,7 +2541,7 @@ static int cached_move(struct vfs_ref *cur, void *found, struct vfs_name **entry
         cached_put(cur->mnt, cur->node);
     }
     cur->node = found;
-    if (cached_cross(cur) != 0) {
+    if (cached_cross(cur, uncovered) != 0) {
         return WALK_FULL;
     }
     if (entry && cur->mnt != from) {
@@ -2598,7 +2610,7 @@ static int cached_dotdot(struct vfs_ref *cur, struct cached_dots *dd)
     vfs_leave(cur->mnt);
     dd->n--;
     *cur = dd->up[dd->n];
-    return cached_cross(cur);
+    return cached_cross(cur, NULL);
 }
 
 /**
@@ -2633,7 +2645,7 @@ static int cached_dots_step(struct vfs_ref *cur, const char *comp, struct cached
             vfs_leave(cur->mnt);
         }
         *cur = next;
-        return cached_cross(cur);
+        return cached_cross(cur, NULL);
     }
     return rc != 0 ? rc : -1;
 }
@@ -2747,6 +2759,7 @@ static int resolve_cached(const struct vfs_ref *start, uint64_t seq, const char 
     struct cached_links lk;
     struct cached_dots dd;
     struct cached_dots *keep = (flags & VFS_WALK_CREATE) ? NULL : &dd;
+    const struct vfs_mount *uncovered = NULL;
     uint32_t found_names = 0;
     int rc;
 
@@ -2815,7 +2828,7 @@ static int resolve_cached(const struct vfs_ref *start, uint64_t seq, const char 
         if (rc != 0) {
             goto full;
         }
-        if (cached_move(&cur, found, entry, keep) != 0) {
+        if (cached_move(&cur, found, entry, keep, &uncovered) != 0) {
             goto full;
         }
     }
