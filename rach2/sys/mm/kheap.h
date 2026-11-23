@@ -110,10 +110,12 @@ void *kalloc_pages_try(uint32_t count, uintptr_t *phys);
  * physical address across pages, as SVM's permission maps and a legacy
  * virtio device's rings; `phys`, when given, receives the first frame's
  * address. The frames come from `alloc_frames`, so the run does not depend
- * on how scattered the free frames are. `count` is 1 to 256, a megabyte,
- * which holds a legacy virtio queue of 32768 entries; NULL, with a record,
- * for another count, or when the region has no room or no run of `count`
- * frames is free. Freed with `kfree_pages`.
+ * on how scattered the free frames are. `count` is 1 to the region's
+ * pages: a megabyte holds a legacy virtio queue of 32768 entries, and a
+ * virtio-pci device's payload on i686 takes runs of any length; NULL, with
+ * a record, for another count, or when the region has no room or no run of
+ * `count` frames is free. The reserve's runs never serve it. Freed with
+ * `kfree_pages`.
  */
 void *kalloc_contig(uint32_t count, uintptr_t *phys);
 

@@ -197,7 +197,9 @@ static void fence_unlist(struct virtio_gpu_device *vg, struct virtio_gpu_cmd *cm
 
 /** Free `cmd`, its pages and its hold on its fence, counting the bytes its
  * transfers copied once the device has answered it OK. A fence never
- * started, which has no reference yet, is freed. Process context. */
+ * started, which has no reference yet, is freed, and so is the device's
+ * `join_lock` that a command never started holds, whose parts the device
+ * drops at the next stream. Process context. */
 void vgpu_cmd_free(struct virtio_gpu_cmd *cmd)
 {
     struct virtio_gpu_device *vg = cmd->vg;
@@ -222,6 +224,9 @@ void vgpu_cmd_free(struct virtio_gpu_cmd *cmd)
     spin_unlock_irqrestore(&vg->lock, flags);
     if (copied) {
         vgpu_count_copied(copied);
+    }
+    if (cmd->joined) {
+        mutex_unlock(&vg->join_lock);
     }
     for (i = 0; i < cmd->nextra; i++) {
         virtio_dma_free(vg->vdev, cmd->extra[i], PAGE_SIZE);
@@ -671,7 +676,9 @@ static void vgpu_notify(struct virtio_gpu_device *vg, struct virtqueue *vq, int 
  * Start `cmd`: number its fence, the next of the device's timeline, in the
  * order the commands reach the queue, and publish it, or hold it behind the
  * commands already held until answers make room. On a dead device it is
- * answered at once with no answer, its fence failing with -ENODEV.
+ * answered at once with no answer, its fence failing with -ENODEV. A
+ * command whose stream went in parts lets go of the device's `join_lock`
+ * once it is behind them. Process context for such a command.
  */
 static void cmd_submit(struct virtio_gpu_cmd *cmd)
 {
@@ -679,7 +686,7 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
     struct virtqueue *vq = cmd->vq;
     int q = vq == vg->ctrlq ? VIRTIO_GPU_QUEUE_CONTROL : VIRTIO_GPU_QUEUE_CURSOR;
     uint32_t flags;
-    int dead, big, kick = 0, sleepable = cmd->sleepable, quiet = cmd->quiet;
+    int dead, big, kick = 0, sleepable = cmd->sleepable, quiet = cmd->quiet, joined = cmd->joined;
 
     if (!cmd->response_size) {
         cmd->segments[cmd->nout].addr = cmd->addr + VIRTIO_GPU_RESP_OFF;
@@ -694,6 +701,7 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
     vgpu_cmd_prepare(cmd);
     flags = spin_lock_irqsave(&vg->lock);
     cmd->queued = 1;
+    cmd->joined = 0;
     cmd->held = 1u + cmd->nextra + cmd->npayload;
     vg->held += cmd->held;
     vg->commands++;
@@ -730,6 +738,10 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
         }
     }
     spin_unlock_irqrestore(&vg->lock, flags);
+    /* The command follows its parts on the queue; the next stream may go. */
+    if (joined) {
+        mutex_unlock(&vg->join_lock);
+    }
     if ((dead || big) && cmd->fence) {
         dma_fence_set_error(cmd->fence, dead ? -ENODEV : -E2BIG);
         dma_fence_signal(cmd->fence);
@@ -3692,6 +3704,7 @@ int32_t virtio_gpu_bind(struct virtio_dev *vdev)
     }
     drm_dev_init(&vg->drm, &vgpu_driver);
     spin_lock_init(&vg->lock, "virtio_gpu");
+    mutex_init(&vg->join_lock, "virtio_gpu_join");
     vg->vdev = vdev;
     vg->pci = pci;
     vg->vga = pci && pci->class_code == PCI_CLASS_DISPLAY && pci->subclass == PCI_SUBCLASS_VGA;

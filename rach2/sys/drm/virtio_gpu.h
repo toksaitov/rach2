@@ -607,6 +607,8 @@ struct virtio_gpu_cmd {
     int waited;
     int sleepable; /* its sender may sleep: the notify lets the big lock go */
     int quiet;     /* published with no notify; a later command's carries it */
+    int joined;    /* its stream went ahead in parts (VGS_TF_PARTS): it holds
+                      the device's `join_lock` until it is started or freed */
     void (*complete)(struct virtio_gpu_cmd *cmd);
     void *arg; /* for `complete` */
 };
@@ -717,6 +719,10 @@ struct virtio_gpu_device {
     /* DMA pages of the commands started and not yet freed, answered or
      * not, which `vgpu_room` bounds. */
     uint32_t held;
+    /* One submission's stream in parts at a time, from its first part to
+     * the start of its SUBMIT_3D, so that the device joins the parts of one
+     * stream alone (`vgpu_cmd_payload`, VGS_TF_PARTS). */
+    struct mutex join_lock;
     /* Of `held`, those of the objects' backing asks not yet taken
      * (`back_ask`), which no reap frees; under `lock`. */
     uint32_t back_held;
@@ -902,9 +908,11 @@ void vgpu_cmd_event(struct virtio_gpu_cmd *cmd, uint32_t event);
  * now when answered, else by the reaper once it is. Never sleeps. */
 void vgpu_cmd_give_up(struct virtio_gpu_cmd *cmd);
 /*
- * * Append user command bytes, or allocate response pages when response is
- * nonzero.
- * 0 or -errno. No page becomes visible to the device before submission. */
+ * Give `cmd` a payload of `bytes`: the user's command stream at `user`, or
+ * pages for the device's answer when `response` is nonzero. 0 or -errno.
+ * The payload's pages reach the device with the command, but for a stream
+ * the device joins from parts it sends first (VGS_TF_PARTS). Process
+ * context; may sleep. */
 int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes, int response);
 /** Copy `bytes` of a completed response after its header to `to`; 0 or
  * -EIO when the response is shorter. */
