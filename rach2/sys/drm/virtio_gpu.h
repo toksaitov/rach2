@@ -738,6 +738,7 @@ struct virtio_gpu_device {
     struct vgpu_context *contexts;
     struct virtio_gpu_object *resources; /* includes objects awaiting UNREF */
     uint32_t unrefs;                     /* UNREFs sent and not yet answered */
+    uint32_t detaches;                   /* CTX_DETACH_RESOURCEs sent and not yet answered */
     /* DMA pages of the commands started and not yet freed, answered or
      * not, which `vgpu_room` bounds. */
     uint32_t held;

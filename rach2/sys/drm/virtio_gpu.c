@@ -1181,13 +1181,14 @@ struct unref_wait {
     uint32_t seen;
 };
 
-/** Whether an UNREF has been answered, or an answer waits to be reaped,
- * since `arg`'s count was taken, or the device has died. */
+/** Whether an UNREF or a CTX_DETACH_RESOURCE has been answered, or an
+ * answer waits to be reaped, since `arg`'s count was taken, or the device
+ * has died. */
 static int unref_moved(void *arg)
 {
     struct unref_wait *w = (struct unref_wait *)arg;
 
-    return w->vg->dead || answers_waiting(w->vg) || w->vg->unrefs != w->seen;
+    return w->vg->dead || answers_waiting(w->vg) || w->vg->unrefs + w->vg->detaches != w->seen;
 }
 
 /**
@@ -1208,7 +1209,9 @@ int vgpu_may_wait(struct virtio_gpu_device *vg)
 
 /**
  * Whether a sender that found the transport's memory full may wait for the
- * answers of UNREFs in flight, or for the UNREFs of a pass over the
+ * answers of UNREFs in flight, for those of CTX_DETACH_RESOURCEs, each of
+ * which holds an object a close let go of until it is answered and the
+ * object freed (`vgpu_obj_close`), or for the UNREFs of a pass over the
  * worker's frees under way (`vgpu_frees_run`), which has sent none yet.
  * Asked before each wait, after each reap too. A caller that holds the
  * mode lock, as the console's buffers are made, waits for neither while a
@@ -1221,7 +1224,7 @@ int vgpu_may_wait(struct virtio_gpu_device *vg)
 static int unrefs_awaited(struct virtio_gpu_device *vg)
 {
     if (!mutex_held(&vg->drm.mode_lock)) {
-        return vg->unrefs || vg->freeing;
+        return vg->unrefs || vg->detaches || vg->freeing;
     }
     return vg->unrefs && !vg->reaping;
 }
@@ -1415,17 +1418,19 @@ struct virtio_gpu_cmd *vgpu_cmd_new_wait(struct virtio_gpu_device *vg, struct vi
 /**
  * Give `bo` its pages from the transport (`virtio_backing_fill`), waiting
  * while the transport's memory is full but objects freed before hold some
- * of it until the device answers their UNREF: the shared region's heap is
- * a few MiB, and a program that frees and makes buffers faster than the
- * device answers would find it full of pages already let go, which an
- * allocator waits for and does not refuse. The wait wakes at each answer
- * and polls the queues every 10 ms, for a device without interrupts, and
- * ends at SIGKILL, since a device that has stopped answering would hold the
- * caller for ever. 0; -ENOMEM once no UNREF is in flight or awaited, or
- * the caller may no longer wait for one (`unrefs_awaited`); -EINTR at
- * SIGKILL; or -ENODEV when the device has died, which a reset during the
- * wait does, freeing its queues and the transport's heap, so that the
- * caller must not go on to use them. May sleep.
+ * of it until the device answers their UNREF, or objects closed before
+ * until it answers their CTX_DETACH_RESOURCE and then their UNREF: the
+ * shared region's heap is a few MiB, and a program that frees and makes
+ * buffers faster than the device answers would find it full of pages
+ * already let go, which an allocator waits for and does not refuse. The
+ * wait wakes at each answer and polls the queues every 10 ms, for a device
+ * without interrupts, and ends at SIGKILL, since a device that has stopped
+ * answering would hold the caller for ever. 0; -ENOMEM once no UNREF or
+ * DETACH is in flight or awaited, or the caller may no longer wait for one
+ * (`unrefs_awaited`); -EINTR at SIGKILL; or -ENODEV when the device has
+ * died, which a reset during the wait does, freeing its queues and the
+ * transport's heap, so that the caller must not go on to use them. May
+ * sleep.
  */
 static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
@@ -1446,7 +1451,7 @@ static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_obje
             }
             continue;
         }
-        w.seen = vg->unrefs;
+        w.seen = vg->unrefs + vg->detaches;
         if (!unrefs_awaited(vg) || !can_sleep() || !vgpu_wake_ready) {
             return -ENOMEM;
         }
@@ -1457,7 +1462,7 @@ static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_obje
         if (vgpu_killed()) {
             return -EINTR;
         }
-        if (vg->unrefs == w.seen) {
+        if (vg->unrefs + vg->detaches == w.seen) {
             if (!unrefs_awaited(vg)) {
                 return -ENOMEM;
             }

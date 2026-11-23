@@ -832,6 +832,7 @@ int32_t vgpu_context_attach(struct virtio_gpu_device *vg, struct drm_file *file,
  * the worker, which sends its UNREF (`vgpu_obj_put_answered`). */
 static void detach_done(struct virtio_gpu_cmd *cmd)
 {
+    cmd->vg->detaches--;
     vgpu_obj_put_answered((struct drm_gem_object *)cmd->arg);
 }
 
@@ -911,6 +912,7 @@ void vgpu_obj_close(struct drm_gem_object *obj, struct drm_file *file)
     req = (struct virtio_gpu_resource_unref *)(void *)cmd->page;
     req->hdr.ctx_id = ctx->id;
     req->resource_id = bo->res_id;
+    vg->detaches++;
     if (vgpu_may_wait(vg)) {
         vgpu_cmd_send_sleepable(cmd, detach_done, obj);
     } else {
