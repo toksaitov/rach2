@@ -232,8 +232,10 @@ void vgpu_cmd_free(struct virtio_gpu_cmd *cmd)
         virtio_dma_free(vg->vdev, cmd->extra[i], PAGE_SIZE);
     }
     for (i = 0; i < cmd->npayload; i++) {
-        if (cmd->payload[i].pages) {
+        if (cmd->payload[i].pages && cmd->payload[i].page) {
             virtio_dma_free(vg->vdev, cmd->payload[i].page, cmd->payload[i].pages * PAGE_SIZE);
+        } else if (cmd->payload[i].pages) {
+            virtio_dma_frames_free(vg->vdev, cmd->payload[i].addr, cmd->payload[i].pages);
         }
     }
     kfree(cmd->payload);
@@ -1278,6 +1280,29 @@ void *vgpu_dma_alloc_wait(struct virtio_gpu_device *vg, uint32_t bytes, uint64_t
     }
     drm_dev_put(&vg->drm);
     return p;
+}
+
+/**
+ * `pages` frames of any memory, as virtio_dma_frames gives them, for a
+ * sender that may sleep: while none is free it waits for the pages started
+ * commands hold, as vgpu_dma_alloc_wait does. 0; -ENOMEM when the wait
+ * gives up or VGPU_WAIT_NS pass; -ENODEV for a transport without them or
+ * a device that died.
+ */
+int32_t vgpu_dma_frames_wait(struct virtio_gpu_device *vg, uint32_t pages, uint64_t *addr)
+{
+    int32_t rc = vg->dead ? -ENODEV : virtio_dma_frames(vg->vdev, pages, addr);
+    int64_t until = dma_fence_now() + VGPU_WAIT_NS;
+
+    if (rc != -ENOMEM) {
+        return rc;
+    }
+    drm_dev_get(&vg->drm);
+    while (rc == -ENOMEM && vgpu_dma_wait(vg, until)) {
+        rc = virtio_dma_frames(vg->vdev, pages, addr);
+    }
+    drm_dev_put(&vg->drm);
+    return rc != 0 && vg->dead ? -ENODEV : rc;
 }
 
 /**
@@ -3557,10 +3582,12 @@ static int32_t devices_add(struct virtio_gpu_device *vg)
 
 /**
  * Initialize both queues and publish negotiated feature information; 0 or
- * -errno. On virtio-pci the queues' indirect tables hold 256 descriptors,
- * the most the core gives, so that a payload goes a page a descriptor up
- * to 254 pages, as Linux's indirect table gives each page of a submission
- * a descriptor; QEMU takes a chain of up to 1024 (VIRTQUEUE_MAX_SIZE).
+ * -errno. On virtio-pci the control queue's indirect tables hold 1024
+ * descriptors, QEMU's most in one chain (VIRTQUEUE_MAX_SIZE) and the
+ * core's, 16 KiB each, so that a payload goes a page a descriptor up to
+ * 1022 pages, as Linux's indirect table gives each page of a submission a
+ * descriptor; the cursor queue's commands are two segments, and its tables
+ * the core's default.
  */
 static int32_t vgpu_queues_init(struct virtio_gpu_device *vg)
 {
@@ -3584,6 +3611,7 @@ static int32_t vgpu_queues_init(struct virtio_gpu_device *vg)
         vg->vdev->indirect_len = VIRTQ_INDIRECT_MAX;
     }
     rc = virtio_queue_setup(vg->vdev, VIRTIO_GPU_QUEUE_CONTROL, cmd_done, vg, &vg->ctrlq);
+    vg->vdev->indirect_len = 0;
     if (rc == 0) {
         rc = virtio_queue_setup(vg->vdev, VIRTIO_GPU_QUEUE_CURSOR, cmd_done, vg, &vg->cursorq);
     }

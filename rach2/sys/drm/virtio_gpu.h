@@ -558,10 +558,12 @@ void vgpu_profile_event(struct virtio_gpu_device *vg, uint32_t type, int64_t sta
 #endif
 
 /* A page of a command's payload, one of a run of pages that follow each
- * other in the device's addresses, given back whole. */
+ * other in the device's addresses, given back whole: of the DMA pool
+ * (`virtio_dma_alloc`), or frames of any memory (`virtio_dma_frames`),
+ * which the kernel reaches through `kmap_cpu` at `addr`. */
 struct vgpu_dma_page {
-    void *page;
-    uint64_t addr;
+    void *page;     /* its kernel address; NULL for frames */
+    uint64_t addr;  /* the device's address, a frame's physical address */
     uint32_t pages; /* the run's pages at its first page, given back there; 0 after it */
 };
 
@@ -851,6 +853,10 @@ struct virtio_gpu_cmd *vgpu_cmd_new_wait(struct virtio_gpu_device *vg, struct vi
                                          uint32_t type, uint32_t bytes);
 /** Pages of the DMA pool, waiting as vgpu_cmd_new_wait does, or NULL. */
 void *vgpu_dma_alloc_wait(struct virtio_gpu_device *vg, uint32_t bytes, uint64_t *addr);
+/** Frames of any memory, as virtio_dma_frames gives them, waiting as
+ * vgpu_cmd_new_wait does: 0, -ENOMEM, or -ENODEV for a transport without
+ * them or a device that died. */
+int32_t vgpu_dma_frames_wait(struct virtio_gpu_device *vg, uint32_t pages, uint64_t *addr);
 /** Free an unsubmitted or completed command and its DMA pages. */
 void vgpu_cmd_free(struct virtio_gpu_cmd *cmd);
 /** Send a new control command without a fence, as Linux sends a command it

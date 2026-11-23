@@ -7,6 +7,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
+#include "../mm/paging.h"
 #include "../mm/usercopy.h"
 
 struct vgpu_submit {
@@ -68,12 +69,15 @@ static void submit_done(struct virtio_gpu_cmd *cmd)
 #define VIRGL_CCMD_COPY_TRANSFER3D       45u
 #define VIRGL_BOX_DWORDS                 11u
 
-/* The command stream submit_copied reads: `cmd`'s payload pages, or, for a
- * stream that goes in parts (`vgpu_cmd_parts`) and so has no pages yet,
- * the caller's memory, a page at a time through `window`. */
+/* The command stream of `size` bytes submit_copied reads: `cmd`'s payload
+ * pages where the kernel maps them; else a page at a time through
+ * `window`, from a payload frame the kernel does not map, or, for a stream
+ * that goes in parts (`vgpu_cmd_parts`) and so has no pages yet, from the
+ * caller's memory. */
 struct submit_stream {
     const struct virtio_gpu_cmd *cmd;
-    uint8_t *window; /* a page of the caller's stream, or NULL */
+    uint32_t size;
+    uint8_t *window; /* a page of the stream, or NULL */
     uint32_t base;   /* the stream's offset of `window` */
     uint32_t have;   /* bytes of the stream in `window`, 0 for none */
     int failed;      /* a read of the caller's memory faulted */
@@ -84,19 +88,27 @@ struct submit_stream {
 static uint32_t payload_dword(struct submit_stream *st, uint32_t i)
 {
     const struct virtio_gpu_cmd *cmd = st->cmd;
-    uint32_t off = i * 4u, size = cmd->stream_bytes;
+    uint32_t off = i * 4u, flags;
+    const struct vgpu_dma_page *p = NULL;
     const uint8_t *page;
 
     if (!cmd->stream_bytes) {
-        page = (const uint8_t *)cmd->payload[off / PAGE_SIZE].page;
-        return *(const uint32_t *)(const void *)(page + off % PAGE_SIZE);
+        p = &cmd->payload[off / PAGE_SIZE];
+        if (p->page) {
+            page = (const uint8_t *)p->page;
+            return *(const uint32_t *)(const void *)(page + off % PAGE_SIZE);
+        }
     }
     if (off < st->base || off - st->base >= st->have) {
         st->base = off & ~(uint32_t)(PAGE_SIZE - 1u);
-        st->have = size - st->base < PAGE_SIZE ? size - st->base : PAGE_SIZE;
-        if (copy_from_user(st->window,
-                           (const void __user *)(uintptr_t)(cmd->stream_user + st->base),
-                           st->have)) {
+        st->have = st->size - st->base < PAGE_SIZE ? st->size - st->base : PAGE_SIZE;
+        if (p) {
+            page = (const uint8_t *)kmap_cpu((uintptr_t)p->addr, &flags);
+            k_memcpy(st->window, page, st->have);
+            kunmap_cpu((void *)(uintptr_t)page, flags);
+        } else if (copy_from_user(st->window,
+                                  (const void __user *)(uintptr_t)(cmd->stream_user + st->base),
+                                  st->have)) {
             st->have = 0;
             st->failed = 1;
             return 0;
@@ -117,7 +129,7 @@ struct vgpu_box_res {
 static void box_res_sort(struct vgpu_box_res *t, uint32_t n)
 {
     uint32_t start, end, root, child;
-    struct vgpu_box_res x;
+    struct vgpu_box_res swap;
 
     for (start = n / 2u; start-- > 0;) {
         for (root = start; (child = 2u * root + 1u) < n; root = child) {
@@ -127,15 +139,15 @@ static void box_res_sort(struct vgpu_box_res *t, uint32_t n)
             if (t[root].res_id >= t[child].res_id) {
                 break;
             }
-            x = t[root];
+            swap = t[root];
             t[root] = t[child];
-            t[child] = x;
+            t[child] = swap;
         }
     }
     for (end = n; end-- > 1u;) {
-        x = t[0];
+        swap = t[0];
         t[0] = t[end];
-        t[end] = x;
+        t[end] = swap;
         for (root = 0; (child = 2u * root + 1u) < end; root = child) {
             if (child + 1u < end && t[child].res_id < t[child + 1u].res_id) {
                 child++;
@@ -143,9 +155,9 @@ static void box_res_sort(struct vgpu_box_res *t, uint32_t n)
             if (t[root].res_id >= t[child].res_id) {
                 break;
             }
-            x = t[root];
+            swap = t[root];
             t[root] = t[child];
-            t[child] = x;
+            t[child] = swap;
         }
     }
 }
@@ -207,7 +219,8 @@ static void submit_copied(struct virtio_gpu_cmd *cmd, const struct vgpu_submit *
     }
     k_memset(&st, 0, sizeof(st));
     st.cmd = cmd;
-    if (cmd->stream_bytes) {
+    st.size = cmd->stream_bytes ? cmd->stream_bytes : size;
+    if (cmd->stream_bytes || (cmd->npayload && !cmd->payload[0].page)) {
         st.window = kmalloc(PAGE_SIZE);
         if (!st.window) {
             return;

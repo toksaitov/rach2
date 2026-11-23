@@ -802,8 +802,9 @@ static void vp_irq_release(struct virtio_dev *d)
 /** `pages` consecutive frames, mapped, with the first's physical address
  * in `*phys`: where the direct map reaches every frame (x86-64), frames
  * from any memory (`alloc_frames`), reached there; elsewhere a run of the
- * kernel heap (`kalloc_contig`), as Linux's vmalloc area bounds what one
- * allocation of i686 holds. NULL when no such run is free. */
+ * kernel heap (`kalloc_contig`), which the kernel maps for good, and a
+ * buffer of all memory comes from `vp_dma_frames`. NULL when no such run
+ * is free. */
 static void *vp_run_alloc(uint32_t pages, uintptr_t *phys)
 {
 #ifdef ARCH_DIRECT_MAP_ALL
@@ -876,6 +877,43 @@ static void vp_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
         free_dma64_frame(p);
     }
 }
+
+#ifndef ARCH_DIRECT_MAP_ALL
+/** `pages` consecutive frames of any memory (`alloc_frames`), not mapped
+ * and not zeroed, the first's physical address, which the device reaches
+ * it by, in `*addr`: `dma_frames` of virtio.h. On i686 dma_alloc gives
+ * only the kernel heap's 256 MiB, as Linux's kmalloc gives only low
+ * memory; this gives a buffer the driver fills through `kmap_cpu` from
+ * all of memory, as Linux's vmalloc'd buffers take high memory. 0, or
+ * -ENOMEM when no run of `pages` is free. */
+static int vp_dma_frames(struct virtio_dev *d, uint32_t pages, uint64_t *addr)
+{
+    uintptr_t phys = alloc_frames(pages);
+
+    (void)d;
+    if (!phys) {
+        return -ENOMEM;
+    }
+    *addr = (uint64_t)phys;
+    return 0;
+}
+
+/** Give back the `pages` frames at `addr` that `vp_dma_frames` gave. */
+static void vp_dma_frames_free(struct virtio_dev *d, uint64_t addr, uint32_t pages)
+{
+    uint32_t i;
+
+    (void)d;
+    for (i = 0; i < pages; i++) {
+        free_frame((uintptr_t)addr + (uintptr_t)i * PAGE_SIZE);
+    }
+}
+
+#define VP_DMA_FRAMES vp_dma_frames, vp_dma_frames_free
+#else
+/* The direct map reaches every frame, so dma_alloc gives all memory. */
+#define VP_DMA_FRAMES NULL, NULL
+#endif
 
 /**
  * The memory of a queue's rings: a page from `vp_dma_alloc`, or, for the
@@ -957,7 +995,8 @@ static const struct virtio_ops vp_ops = {"virtio-pci",
                                          NULL,
                                          NULL,
                                          NULL,
-                                         vp_dma_enable};
+                                         vp_dma_enable,
+                                         VP_DMA_FRAMES};
 
 /*
  * The legacy interface's operations, as Linux's virtio_pci_legacy.c drives
@@ -1146,7 +1185,8 @@ static const struct virtio_ops vp_legacy_ops = {"virtio-pci",
                                                 NULL,
                                                 NULL,
                                                 NULL,
-                                                vp_dma_enable};
+                                                vp_dma_enable,
+                                                VP_DMA_FRAMES};
 
 /** The device type of virtio-pci function `p`, or 0 when it is none. */
 static uint16_t vp_type(const pci_device_t *p)
