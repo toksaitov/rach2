@@ -775,10 +775,34 @@ static int mount_over_same(const struct vfs_mount *m, struct vfs_mount *mnt)
     return m->parent == mnt || mount_base(m->parent) == mount_base(mnt);
 }
 
+/**
+ * Whether the mount `m`, over the node `found` of `mnt` that the name
+ * `name` names, stands on that name, as Linux's mount stands on a dentry
+ * (`d_mountpoint`, fs/mount.h): always for a directory or a file of one
+ * link, whose node has the one name; for a file of several links, a bind
+ * over one of them, only for the name it was bound at, the last component
+ * of its recorded path, which a rename in a namespace that sees the mount
+ * cannot change. `*links` caches the node's link count across the calls
+ * of one search, 0 until read.
+ */
+static int mount_on_name(const struct vfs_mount *m, struct vfs_mount *mnt, void *found,
+                         const char *name, uint32_t *links)
+{
+    struct vfs_stat st;
+
+    if (*links == 0) {
+        *links = vfs_getattr(mnt, found, &st) == 0 && !VFS_IS_DIR(st.mode) && st.nlink > 1
+                     ? st.nlink
+                     : 1;
+    }
+    return *links == 1 || streq(path_last(m->covered_path), name);
+}
+
 struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *name)
 {
     void *found;
     struct vfs_mount *m = mount_named(mnt, node, name);
+    uint32_t links = 0;
     int i;
 
     if (m) {
@@ -800,7 +824,8 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
         struct vfs_mount *child = mounts[i];
 
         if (mount_over_same(child, mnt) && child->covered == found &&
-            (child->parent == mnt ? mount_in_view(child) : vfs_mount_seen(child))) {
+            (child->parent == mnt ? mount_in_view(child) : vfs_mount_seen(child)) &&
+            mount_on_name(child, mnt, found, name, &links)) {
             m = child;
         }
     }
@@ -2605,7 +2630,7 @@ static int cached_start(const struct vfs_ref *start, const char **path, struct v
             root.mnt = fs->root_mnt;
             root.node = fs->root_node;
             hop = p[0] == '/' && cached_hop_root(root.mnt, root.node);
-            rc = !hop ? cached_take(root.mnt, root.node, cur)
+            rc = !hop                       ? cached_take(root.mnt, root.node, cur)
                  : vfs_enter(root.mnt) == 0 ? 0
                                             : WALK_FULL;
         }
@@ -2616,7 +2641,7 @@ static int cached_start(const struct vfs_ref *start, const char **path, struct v
         root.mnt = mounts[0];
         root.node = mounts[0]->root;
         hop = p[0] == '/' && cached_hop_root(root.mnt, root.node);
-        rc = !hop ? cached_take(root.mnt, root.node, cur)
+        rc = !hop                       ? cached_take(root.mnt, root.node, cur)
              : vfs_enter(root.mnt) == 0 ? 0
                                         : WALK_FULL;
         spin_unlock_irqrestore(&mount_table_lock, flags);
