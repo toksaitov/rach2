@@ -441,22 +441,6 @@ static void ap_str(struct procfs_text *t, const char *s)
     }
 }
 
-/** Append the text `from` and free its buffer; `t` is marked out of memory
- * when `from` was. */
-static void ap_text(struct procfs_text *t, struct procfs_text *from)
-{
-    int i;
-
-    for (i = 0; i < from->len && !t->nomem; i++) {
-        ap_ch(t, from->buf[i]);
-    }
-    if (from->nomem) {
-        t->nomem = 1;
-    }
-    kfree(from->buf);
-    procfs_text_init(from);
-}
-
 /** Append `v` as unsigned decimal; the counters are 32-bit and wrap. */
 static void ap_u32(struct procfs_text *t, uint32_t v)
 {
@@ -3219,31 +3203,20 @@ static void procfs_waketime(struct procfs_text *t, const process_t *p)
     ap_ch(t, '\n');
 }
 
-/** Append the memory sizes to the status record. Hold a reference to `mm`
- * across the walk of its regions. Give up the big lock before taking the
- * regions' lock, and give back the regions' lock before taking the big
- * lock again. The resident sizes are the space's counts (`mm_rss_snapshot`),
- * as Linux's task_mem reads get_mm_counter: no page table is walked and
- * no page-table lock taken. */
+/** Append the memory sizes of an address space to its status record. The
+ * resident sizes are the space's counts (`mm_rss_snapshot`), as Linux's
+ * task_mem reads get_mm_counter, and the rest its regions' counters, read
+ * without the regions' lock; no page table is walked. */
 static void procfs_status_memory(struct procfs_text *t, struct mm *mm)
 {
     unsigned long rss[MM_RSS_KINDS];
-    unsigned long size;
-    unsigned long pinned = mm->pinned;
-    uint32_t flags;
-    int depth;
+    unsigned long size = vm_total(&mm->vm);
 
-    mm_get(mm);
-    flags = kirq_save();
-    depth = bkl_drop();
-    kirq_restore(flags);
-    mmap_read_lock(mm);
-    size = vm_total(&mm->vm);
     mm_rss_snapshot(mm, rss);
     ap_kb(t, "VmPeak", size);
     ap_kb(t, "VmSize", size);
     ap_kb(t, "VmLck", vm_locked(&mm->vm));
-    ap_kb(t, "VmPin", pinned * PAGE_SIZE);
+    ap_kb(t, "VmPin", mm->pinned * PAGE_SIZE);
     ap_kb(t, "VmHWM", mm_resident_peak(mm) * PAGE_SIZE);
     ap_kb(t, "VmRSS", (rss[MM_RSS_ANON] + rss[MM_RSS_FILE] + rss[MM_RSS_SHMEM]) * PAGE_SIZE);
     ap_kb(t, "RssAnon", rss[MM_RSS_ANON] * PAGE_SIZE);
@@ -3254,11 +3227,6 @@ static void procfs_status_memory(struct procfs_text *t, struct mm *mm)
     ap_kb(t, "VmExe", mm_bytes(mm, VM_CODE));
     ap_kb(t, "VmLib", mm_bytes(mm, VM_FILE));
     ap_kb(t, "VmSwap", 0);
-    mmap_unlock(mm);
-    flags = kirq_save();
-    bkl_take(depth);
-    kirq_restore(flags);
-    procfs_mm_put(mm);
 }
 
 /** Append the lines of `p`'s status record that follow its memory sizes,
@@ -3312,15 +3280,15 @@ static void procfs_status_rest(struct procfs_text *t, const process_t *p)
  * Cpus_allowed and its list are the thread's affinity among the processors
  * started, which sched_getaffinity(2) reports.
  *
- * The lines after the memory sizes are made before them, in a text of
- * their own, since the wait for the regions' lock of another process's
- * address space may sleep, and the process may end and be reaped meanwhile:
- * nothing of `p` is read after that wait.
+ * The memory sizes are the address space's counters, read without its
+ * regions' lock, as Linux's task_mem reads them (fs/proc/task_mmu.c), so
+ * that a read never waits for the process's own mmap or fault. Nothing here
+ * sleeps, so the record and its address space stay as they are for the
+ * read.
  */
 static int procfs_gen_status(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
-    struct procfs_text rest;
     struct mm *mm;
     uint32_t i;
 
@@ -3368,12 +3336,10 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_str(t, "\nNSsid:\t");
     ap_u32(t, pid_seen(p->sid));
     ap_ch(t, '\n');
-    procfs_text_init(&rest);
-    procfs_status_rest(&rest, p);
     if (mm) {
         procfs_status_memory(t, mm);
     }
-    ap_text(t, &rest);
+    procfs_status_rest(t, p);
     return t->len;
 }
 

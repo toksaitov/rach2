@@ -2,7 +2,8 @@
  * mutex_hosttest.c: the kernel mutex of rach2/sys/proc/mutex.c: its spin
  * while the holder runs on another processor, the sleeps it saves for a
  * short hold, the handoff to a sleeper that spinners would starve, the
- * queue of spinners, and an rwsem reader's wait that SIGKILL ends.
+ * queue of spinners, and an rwsem reader's wait that SIGKILL ends, on the
+ * model's wait; rwsem_kill_hosttest.c runs that wait on the real queue.
  *
  * host-deps: tests/host/compat/park_host.c
  * host-cflags: -DRACH2_HOST_CPU
