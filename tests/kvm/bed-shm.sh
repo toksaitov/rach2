@@ -1284,20 +1284,27 @@ refusals() { tr -d '\r' < "$console" 2>/dev/null | grep -c 'backend: map: resour
 # serial port, refuses, which the region's heap must back: its bytes must
 # go to the device and come back through its map, and the backend's one
 # refusal as asked must name its resource. Then one of the VM's pages the
-# same way, which the probe fails unless it added one map of the VM's pages
-# to the transport's count, one too large for either, and more held
-# untaken than the driver's cap on pending asks.
+# same way, whose resource the kernel's log must not name as backed from
+# the heap, by the driver's choice or the backend's refusal, one too large
+# for either, and more held untaken than the driver's cap on pending asks.
 defer()
 {
     asked0=$(tr -d '\r' < "$console" | grep -c 'backend: back: resource [0-9]*: refused: [0-9]* bytes: as asked')
     derr=''
+    dmesg > "$out/defer.klog"
     vm_ctl refuse || derr="the VM did not have the backend refuse"
     "$probe" fdefer > "$out/defer.out" 2>&1
     id=$(sed -n 's/^VGSHMPROBE DEFER: refused: resource //p' "$out/defer.out")
+    vmid=$(sed -n "s/^VGSHMPROBE DEFER: the VM's pages: resource //p" "$out/defer.out")
+    heaped="virtio_gpu: resource ${vmid:-none}: (the heap's pages|refused: the VM's backing)"
+    heaped=$(($(dmesg | grep -cE "$heaped") - $(grep -cE "$heaped" "$out/defer.klog")))
     asked=$(($(tr -d '\r' < "$console" | grep -c 'backend: back: resource [0-9]*: refused: [0-9]* bytes: as asked') - asked0))
     named=$(tr -d '\r' < "$console" | grep -c "backend: back: resource ${id:-none}: refused: [0-9]* bytes: as asked")
     if [ -z "$derr" ] && { [ "$asked" != 1 ] || [ "$named" != 1 ]; }; then
         derr="the backend refused $asked backing(s) as asked, $named of them resource ${id:-none}'s"
+    fi
+    if [ -z "$derr" ] && [ -n "$vmid" ] && [ "$heaped" != 0 ]; then
+        derr="the kernel's log names resource $vmid, of the VM's pages, backed from the heap $heaped time(s)"
     fi
     if [ -z "$derr" ] && grep -q 'VGSHMPROBE OK' "$out/defer.out"; then
         pass defer "$(sed -n 's/^VGSHMPROBE DEFER: //p' "$out/defer.out" | tr '\n' ';' |

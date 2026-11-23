@@ -2409,7 +2409,9 @@ static int vm_backing(struct virtio_gpu_device *vg)
  * the resource: with the device's own pages where the caller may have them
  * (`vm_backing`, `vgpu_backing_pages`), else, or when the device refuses
  * them, with an ATTACH_BACKING of the object's pages, queued without a
- * wait, its fence put in the object's reservation with `fenced`. With
+ * wait, its fence put in the object's reservation with `fenced`; where the
+ * device offers its pages and the caller may not wait, the kernel's log
+ * names the resource, as `vgpu_backing_pages` names one refused. With
  * `defer`, the ask for the device's pages is started and not waited for
  * (`vgpu_backing_ask`), as Linux's virtio_gpu_object_create queues its
  * create and attach and returns: the object takes the answer, or attaches
@@ -2438,6 +2440,10 @@ static int32_t obj_back(struct virtio_gpu_device *vg, struct virtio_gpu_object *
         if (!attach) {
             vgpu_cmd_free(create);
             return err;
+        }
+        if (vg->vdev->backing) {
+            klog(KLOG_DEBUG, "virtio_gpu", "resource %u: the heap's pages: the caller may not wait",
+                 (unsigned)id);
         }
     }
     /* The device runs a queue's commands in order: the backing follows the
