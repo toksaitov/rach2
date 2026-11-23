@@ -21,6 +21,7 @@
 #include "../proc/ptrace.h"
 #include "../proc/sched.h"
 #include "../proc/smp.h"
+#include "../proc/tgroup.h"
 #include "../lib/spinlock.h"
 #include "mm.h"
 #include "filemap.h"
@@ -644,14 +645,66 @@ static int callback_begin(struct mm *mm, const struct vm_file *f, int *bkl)
     return 1;
 }
 
+/** Whether the current thread has SIGKILL pending, its own or its
+ * process's. */
+static int access_sigkill(void)
+{
+    return ((current_proc->sig_pending | current_proc->tg->pending) & KSIG_BIT(SIGKILL)) != 0;
+}
+
+/** Whether the current thread's regions' lock of `mm` was let go and SIGKILL
+ * ended the take again (`relock_read`): the caller then reads nothing of
+ * the regions and returns. */
+static int access_lost(void)
+{
+    return current_proc && current_proc->access_killed;
+}
+
+/** Whether a take again of `mm`'s regions' lock is to be killable: within a
+ * `paging_access` of PAGING_ACCESS_KILLABLE in `mm`. */
+static int access_killable(const struct mm *mm)
+{
+    return current_proc && current_proc->access_mm == mm;
+}
+
+/**
+ * Take `mm`'s regions' lock again, to write when `write`, after a fill, a
+ * balance or a stack's growth let it go. Within a `paging_access` of
+ * PAGING_ACCESS_KILLABLE a pending SIGKILL leaves it let go, and the wait
+ * for it is one SIGKILL ends, as Linux's GUP asks fatal_signal_pending and
+ * takes the lock with mmap_read_lock_killable after a fault let it go
+ * (mm/gup.c, __get_user_pages_locked): 0 with the lock held, or -EINTR with
+ * it let go and `access_killed` set (`access_lost`). Any other caller waits
+ * for the lock, and gets 0.
+ */
+static int relock(struct mm *mm, int write)
+{
+    if (!access_killable(mm)) {
+        if (write) {
+            mmap_write_lock(mm);
+        } else {
+            mmap_read_lock(mm);
+        }
+        return 0;
+    }
+    if (access_sigkill() ||
+        (write ? mmap_write_lock_killable(mm) : mmap_read_lock_killable(mm)) != 0) {
+        current_proc->access_killed = 1;
+        return -EINTR;
+    }
+    return 0;
+}
+
 /** End what `callback_begin` began: the big lock back if it took it, and
- * the regions' lock taken again, to read. */
-static void callback_end(struct mm *mm, int bkl)
+ * the regions' lock taken again, to read (`relock`). 0, or -EINTR with the
+ * lock let go, after which the caller drops what it holds and answers -1,
+ * reading nothing of the regions. */
+static int callback_end(struct mm *mm, int bkl)
 {
     if (bkl) {
         bkl_exit();
     }
-    mmap_read_lock(mm);
+    return relock(mm, 0);
 }
 
 /**
@@ -712,7 +765,11 @@ static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
         return 0;
     }
     filled = f->fill(f, pgoff, phys);
-    callback_end(mm, bkl);
+    if (callback_end(mm, bkl) != 0) {
+        vm_file_put(f);
+        free_frame(phys);
+        return -1;
+    }
     rc = filled >= 0 ? 1 : 0;
     if (!region_same(mm, page, f, prot, pgoff, seq)) {
         rc = -1;
@@ -812,9 +869,8 @@ static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t 
         return 0;
     }
     i = f->around(f, pgoff, n, phys, hits);
-    callback_end(mm, bkl);
-    vma = vm_find(&mm->vm, from);
-    if (i != 0 && region_same(mm, from, f, prot, pgoff, seq) && vma->end >= to) {
+    vma = callback_end(mm, bkl) == 0 ? vm_find(&mm->vm, from) : NULL;
+    if (vma && i != 0 && region_same(mm, from, f, prot, pgoff, seq) && vma->end >= to) {
         lock = mm_ptl_lock(mm);
         table = mmu_user_table(mm->dir, from, 1);
         for (i = 0; table && i < n; i++) {
@@ -862,6 +918,52 @@ static int fault_share(struct vm_file *f, uint32_t pgoff, uintptr_t *phys, int m
 }
 
 /**
+ * The entry for a file page that `shared_fault` maps in a region of
+ * protection `prot`: copy-on-write in a private region, and in a shared one
+ * writable when the region is, except for a read of a file that counts its
+ * stores (`notify`), which a store's `mkwrite` makes writable later.
+ */
+static pte_t shared_flags(uint32_t prot, int private, int write, int notify)
+{
+    pte_t w = 0;
+
+    if (private) {
+        w = PTE_COW;
+    } else if ((prot & VM_PROT_WRITE) && (write || !notify)) {
+        w = PTE_W;
+    }
+    return entry_for(prot, PTE_P | PTE_U | w | paging_prot_bits(prot));
+}
+
+/**
+ * Run `fault_share` with the regions' lock let go, as `file_fault`'s fill
+ * runs, the caller holding `f`. 0 with `*got` the share's result, and
+ * `*phys` a held frame when that is nonnegative; 1 when the lock could not
+ * be let go; -1, with no frame held, when a killable access lost the lock,
+ * before the share or in taking it again after.
+ */
+static int share_unlocked(struct mm *mm, struct vm_file *f, uint32_t pgoff, uintptr_t *phys,
+                          int mark, int *got)
+{
+    int bkl;
+
+    if (access_lost()) {
+        return -1;
+    }
+    if (!callback_begin(mm, f, &bkl)) {
+        return 1;
+    }
+    *got = fault_share(f, pgoff, phys, mark);
+    if (callback_end(mm, bkl) != 0) {
+        if (*got >= 0) {
+            free_frame(*phys);
+        }
+        return -1;
+    }
+    return 0;
+}
+
+/**
  * Borrow a resident file or shared-memory page. A shared region maps it
  * writable when allowed, except that a file with `mkwrite` has a read map
  * it read-only and a store first call `mkwrite`; a private region maps it
@@ -891,23 +993,20 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
     uint32_t seq = mm->zaps;
     uintptr_t phys = 0;
     int notify = !private && (prot & VM_PROT_WRITE) && f->mkwrite;
-    pte_t flags = entry_for(
-        prot, PTE_P | PTE_U |
-                  (private ? PTE_COW : ((prot & VM_PROT_WRITE) && (write || !notify) ? PTE_W : 0)) |
-                  paging_prot_bits(prot));
-    int got, bkl, rc = 1;
+    pte_t flags = shared_flags(prot, private, write, notify);
+    int got = 0, rc = 1;
 
     vm_file_get(f);
     if (!write && (got = share_around(mm, page, f, flags, 1)) != 0) {
         vm_file_put(f);
         return got > 0;
     }
-    if (!callback_begin(mm, f, &bkl)) {
+    rc = share_unlocked(mm, f, pgoff, &phys, notify && write, &got);
+    if (rc != 0) {
         vm_file_put(f);
-        return 0;
+        return rc < 0 ? -1 : 0;
     }
-    got = fault_share(f, pgoff, &phys, notify && write);
-    callback_end(mm, bkl);
+    rc = 1;
     if (got == -EAGAIN || !region_same(mm, page, f, prot, pgoff, seq)) {
         rc = -1;
     }
@@ -971,7 +1070,11 @@ static int shared_mkwrite(struct mm *mm, const vma_t *vma, uintptr_t addr)
         return 0;
     }
     got = f->mkwrite(f, pgoff, PTE_ADDR(before));
-    callback_end(mm, bkl);
+    if (callback_end(mm, bkl) != 0) {
+        free_frame(PTE_ADDR(before));
+        vm_file_put(f);
+        return -1;
+    }
     free_frame(PTE_ADDR(before));
     if (got == -EAGAIN || !region_same(mm, page, f, prot, pgoff, seq)) {
         rc = -1;
@@ -1055,8 +1158,8 @@ static void device_map_rest(struct mm *mm, uintptr_t page, struct vm_file *f, ui
                 break;
             }
         }
-        callback_end(mm, bkl);
-        vma = region_same(mm, at, f, prot, base + (uint32_t)((at - start) / PAGE_SIZE), seq)
+        vma = callback_end(mm, bkl) == 0 &&
+                      region_same(mm, at, f, prot, base + (uint32_t)((at - start) / PAGE_SIZE), seq)
                   ? vm_find(&mm->vm, at)
                   : NULL;
         vm_file_put(f);
@@ -1111,8 +1214,7 @@ static int device_fault(struct mm *mm, const vma_t *vma, uintptr_t addr)
         return 0;
     }
     got = f->device(f, pgoff, &phys);
-    callback_end(mm, bkl);
-    if (!region_same(mm, page, f, prot, pgoff, seq)) {
+    if (callback_end(mm, bkl) != 0 || !region_same(mm, page, f, prot, pgoff, seq)) {
         vm_file_put(f);
         return -1;
     }
@@ -1195,9 +1297,11 @@ static int grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
  * write: a caller that holds it to read once lets it go and takes it to
  * write for the growth, as Linux's lock_mm_and_find_vma takes it to write
  * to expand a stack (mm/memory.c:6197-6248), and takes it to read again
- * after. -1 once the stack grew, for the resolution to run again and back
- * the page in the stack's region; 0 when it did not grow, or when the
- * caller holds the lock to read more than once and cannot let it go.
+ * after, each take killable within a killable `paging_access` (`relock`).
+ * -1 once the stack grew, for the resolution to run again and back the page
+ * in the stack's region, or when SIGKILL ended a take, with the lock let go
+ * (`access_lost`); 0 when it did not grow, or when the caller holds the
+ * lock to read more than once and cannot let it go.
  */
 static int grow_fault(struct mm *mm, uintptr_t page, uintptr_t as_limit)
 {
@@ -1210,23 +1314,28 @@ static int grow_fault(struct mm *mm, uintptr_t page, uintptr_t as_limit)
         return 0;
     }
     mmap_unlock(mm);
-    mmap_write_lock(mm);
+    if (relock(mm, 1) != 0) {
+        return -1;
+    }
     grown = grow_stack(&mm->vm, page, as_limit);
     mmap_unlock(mm);
-    mmap_read_lock(mm);
+    if (relock(mm, 0) != 0) {
+        return -1;
+    }
     return grown ? -1 : 0;
 }
 
 /** Let `mm`'s regions' lock go, which the caller holds once to read
  * (`mmap_may_drop`), have the caches give frames back under the big lock,
- * which they need (`mem_balance`), and take the regions' lock again. */
-static void balance_unlocked(struct mm *mm)
+ * which they need (`mem_balance`), and take the regions' lock again
+ * (`relock`): 0, or -EINTR with it let go. */
+static int balance_unlocked(struct mm *mm)
 {
     mmap_unlock(mm);
     bkl_enter();
     mem_balance();
     bkl_exit();
-    mmap_read_lock(mm);
+    return relock(mm, 0);
 }
 
 #if MMU_HUGE
@@ -1805,7 +1914,7 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
     if (!*balanced) {
         *balanced = 1;
         if (mem_short() && mmap_may_drop(mm)) {
-            balance_unlocked(mm);
+            (void)balance_unlocked(mm); /* a lost lock ends the caller's loop */
             return -1;
         }
     }
@@ -1866,7 +1975,9 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
  * Returns 1 if the page is now mapped, 0 if the access is illegal or no
  * frame could be had or zeroed; the fault handler then signals the process,
  * and a pre-fault answers -EFAULT. `mm` is the current process's for a fault
- * and a pre-fault, and a stopped tracee's for ptrace.
+ * and a pre-fault, and a stopped tracee's for ptrace. Within a killable
+ * `paging_access`, 0 too when SIGKILL ended a take of the lock again, which
+ * leaves it let go (`access_lost`).
  */
 static int vm_resolve_in(struct mm *mm, uintptr_t addr, int write, uintptr_t as_limit)
 {
@@ -1874,8 +1985,8 @@ static int vm_resolve_in(struct mm *mm, uintptr_t addr, int write, uintptr_t as_
 
     do {
         rc = vm_resolve_once(mm, addr, write, as_limit, &balanced, 0);
-    } while (rc < 0);
-    return rc;
+    } while (rc < 0 && !access_lost());
+    return rc < 0 ? 0 : rc;
 }
 
 /** `vm_resolve_in` for a read that `paging_access` forces: the page of a
@@ -1886,8 +1997,8 @@ static int vm_resolve_forced(struct mm *mm, uintptr_t addr)
 
     do {
         rc = vm_resolve_once(mm, addr, 0, (uintptr_t)RLIM_INFINITY, &balanced, 1);
-    } while (rc < 0);
-    return rc;
+    } while (rc < 0 && !access_lost());
+    return rc < 0 ? 0 : rc;
 }
 
 /** RLIMIT_MEMLOCK is the caller's, as Linux reads the current task's; a
@@ -2702,7 +2813,8 @@ static int access_copy(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
  * in a region that allows some access, or with the force any. A shared
  * file's frame is held and validated by `mkwrite` before every kernel
  * store, even when the entry already allows writes, so writeback includes
- * the copied bytes. */
+ * the copied bytes. -EINTR when SIGKILL ended a take of the lock again
+ * within a killable access, which left the lock let go (`access_lost`). */
 static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, int flags)
 {
     const vma_t *vma;
@@ -2726,13 +2838,17 @@ retry:
             k_memset(p, 0, len);
             return 0;
         }
-        if (PROT_NO_ACCESS(vma->prot) ? !vm_resolve_forced(mm, addr)
-                                      : !vm_resolve_in(mm, addr, 0, (uintptr_t)RLIM_INFINITY)) {
+        rc = PROT_NO_ACCESS(vma->prot) ? vm_resolve_forced(mm, addr)
+                                       : vm_resolve_in(mm, addr, 0, (uintptr_t)RLIM_INFINITY);
+        if (access_lost()) {
+            return -EINTR;
+        }
+        if (!rc) {
             return -EIO;
         }
     }
-    if (write && mem_short() && mmap_may_drop(mm)) {
-        balance_unlocked(mm);
+    if (write && mem_short() && mmap_may_drop(mm) && balance_unlocked(mm) != 0) {
+        return -EINTR;
     }
     vma = vm_find(&mm->vm, addr);
     if (access_refused(mm, vma, addr, force) || (vma->prot & VM_PROT_IO) ||
@@ -2741,6 +2857,9 @@ retry:
     }
     if (write) {
         rc = access_write(mm, vma, addr);
+        if (access_lost()) {
+            return -EINTR;
+        }
         if (rc < 0) {
             goto retry;
         }
@@ -2753,13 +2872,18 @@ retry:
 
 int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int flags)
 {
+    int killable = (flags & PAGING_ACCESS_KILLABLE) != 0 && current_proc;
+    struct mm *outer = current_proc ? current_proc->access_mm : NULL;
     uint8_t *p = buf;
-    int rc = 0;
+    int rc = 0, lost = 0;
 
-    if (!(flags & PAGING_ACCESS_KILLABLE)) {
+    if (!killable) {
         mmap_read_lock(mm);
     } else if (mmap_read_lock_killable(mm) != 0) {
         return -EINTR;
+    } else {
+        current_proc->access_mm = mm;
+        current_proc->access_killed = 0;
     }
     while (len > 0 && rc == 0) {
         uint32_t chunk = PAGE_SIZE - (addr & (PAGE_SIZE - 1));
@@ -2767,12 +2891,23 @@ int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int fl
         if (chunk > len) {
             chunk = len;
         }
+        if (killable && access_sigkill()) {
+            rc = -EINTR;
+            break;
+        }
         rc = access_page(mm, addr, p, chunk, flags);
         addr += chunk;
         p += chunk;
         len -= chunk;
     }
-    mmap_unlock(mm);
+    if (killable) {
+        lost = current_proc->access_killed != 0;
+        current_proc->access_mm = outer;
+        current_proc->access_killed = 0;
+    }
+    if (!lost) {
+        mmap_unlock(mm);
+    }
     mm_reap();
     return rc;
 }
@@ -2934,11 +3069,13 @@ static void fault_oom(uintptr_t address, int write)
 static int fault_resolve(isr_params_t *params, uintptr_t addr, int write, int *key, int *mapped)
 {
     struct mm *mm = current_proc->mm;
+    struct mm *access = current_proc->access_mm;
     uint32_t was_in_call = current_proc->in_syscall;
     uint32_t irq = kirq_save();
     const vma_t *vma;
     int resolved;
 
+    current_proc->access_mm = NULL; /* a fault takes no lock killably */
     current_proc->frame_refused = 0;
     current_proc->bus_fault = 0;
     current_proc->fault_retry = 0;
@@ -2956,6 +3093,7 @@ static int fault_resolve(isr_params_t *params, uintptr_t addr, int write, int *k
     mm_reap();
     kirq_restore(irq);
     current_proc->in_syscall = was_in_call;
+    current_proc->access_mm = access;
     return resolved;
 }
 

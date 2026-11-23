@@ -3,11 +3,12 @@
  * and its allocation, /proc/uptime, the CPU times of a process and of a
  * thread, task ids, the syscall, wchan and schedstat files, descriptor links,
  * /proc/PID/mem, /proc/PID/exe, the paths of /proc/PID/maps, a read of a
- * process's arguments while the process is reaped, a read of its stat and
- * statm that does not wait while its address space's lock is held to write,
- * and of its maps, smaps, numa_maps and status that SIGKILL ends while it
- * waits for that lock, a read of its status and numa_maps while it is
- * reaped as the read waits for the lock, a read of its maps while it is
+ * process's arguments while the process is reaped, a read of its stat,
+ * statm and status that does not wait while its address space's lock is
+ * held to write, and of its maps, smaps, numa_maps, cmdline, environ and
+ * mem that SIGKILL ends while it waits for that lock, a read of its
+ * numa_maps while it is reaped as the read waits for the lock, a read of
+ * its maps while it is
  * reaped as the program's path is built, a write to its autogroup file,
  * oom_score_adj, the cache, NUMA, clock source and DMI files of /sys, and
  * the /sys entries and uevents of a DRM device and of a driver's own
@@ -518,6 +519,10 @@ extern void (*host_read_end)(struct mm *mm);
  * lock that would have waited for ever (compat/mmap_lock_host.c). */
 extern struct mm *host_write_held;
 extern int host_stuck;
+/* What another thread does while a take of that lock waits, and whether
+ * the taker then has SIGKILL pending (compat/mmap_lock_host.c). */
+extern void (*host_held_wait)(struct mm *mm);
+extern int (*host_killed)(void);
 page_dir_t *_kernel_dir;
 
 /** Record a failed invariant. */
@@ -527,6 +532,25 @@ static void check(int ok, const char *what)
         printf("procfs-hosttest: fail: %s\n", what);
         failures++;
     }
+}
+
+/* The SIGKILLs another thread sent a reader while it waited for a regions'
+ * lock held to write. */
+static int kills_sent;
+
+/** Send the reader, the current thread, SIGKILL while it waits for the
+ * lock of `mm`, as another thread would. */
+static void kill_waiter(struct mm *mm)
+{
+    (void)mm;
+    current_proc->sig_pending |= KSIG_BIT(SIGKILL);
+    kills_sent++;
+}
+
+/** Whether the reader has SIGKILL pending. */
+static int waiter_killed(void)
+{
+    return (current_proc->sig_pending & KSIG_BIT(SIGKILL)) != 0;
 }
 
 /** No queue descriptor is present in the model. */
@@ -610,11 +634,11 @@ uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
     return 0;
 }
 
-/** The resident pages of an address space, which mm.c counts; none here. */
+/** The resident pages of an address space, which mm.c counts and a row
+ * sets. */
 unsigned long mm_resident(const struct mm *mm)
 {
-    (void)mm;
-    return 0;
+    return mm->resident;
 }
 
 /** The whole process's time, its two threads' together. */
@@ -728,7 +752,10 @@ void switch_page_directory(page_dir_t *dir)
 }
 
 /**
- * Read `len` bytes at `addr`. Process 7's memory, the /proc/7/mem rows',
+ * Read `len` bytes at `addr`. The regions' lock is taken first, killably
+ * when `flags` has PAGING_ACCESS_KILLABLE, as `paging_access` takes it, so
+ * that the lock's model (`host_write_held`) sees the wait: -EINTR when
+ * SIGKILL ended it. Process 7's memory, the /proc/7/mem rows',
  * reads as 'm', and the reads that reach it are counted. The arguments of
  * process 13 are all 'a': their first read sleeps for the page, and
  * meanwhile the process ends, putting its user's count of its address space,
@@ -737,9 +764,14 @@ void switch_page_directory(page_dir_t *dir)
  * and finds none once no user is left, since the last user's put frees the
  * pages whatever holds keep the record.
  */
-int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int write)
+int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int flags)
 {
-    (void)write;
+    if (!(flags & PAGING_ACCESS_KILLABLE)) {
+        mmap_read_lock(mm);
+    } else if (mmap_read_lock_killable(mm) != 0) {
+        return -EINTR;
+    }
+    mmap_unlock(mm);
     if (mm == &space) {
         k_memset(buf, 'm', len);
         mem_reads++;
@@ -2329,6 +2361,19 @@ static void mem_descriptor(void)
               "an offset past the address width releases its user and reaches no memory");
         mem_ofd.offset = sizeof(buf);
     }
+    host_write_held = &space;
+    host_stuck = 0;
+    host_held_wait = kill_waiter;
+    host_killed = waiter_killed;
+    kills_sent = 0;
+    check(procfs_mem_read(&entries[0], (char __user *)buf, sizeof(buf)) == -EIO &&
+              kills_sent == 1 && host_stuck == 0 && mem_reads == 1 && space.users == 1,
+          "a read that SIGKILL ends while it waits for the regions' lock returns EIO, as "
+          "Linux's mem_rw");
+    current_proc->sig_pending &= ~KSIG_BIT(SIGKILL);
+    host_held_wait = NULL;
+    host_killed = NULL;
+    host_write_held = NULL;
     space.users = 0;
     check(procfs_mem_read(&entries[0], (char __user *)buf, sizeof(buf)) == 0 && mem_reads == 1,
           "a read once the process has ended returns 0 and reaches no memory");
@@ -3067,31 +3112,14 @@ unsigned long mm_resident_peak(const struct mm *mm)
     return 0;
 }
 
-/** The status rows' address space has no page resident, of any kind. */
+/** The resident pages of an address space by kind, which mm.c counts and a
+ * row sets. */
 void mm_rss_snapshot(struct mm *mm, unsigned long pages[MM_RSS_KINDS])
 {
     uint32_t k;
 
-    (void)mm;
     for (k = 0; k < MM_RSS_KINDS; k++) {
-        pages[k] = 0;
-    }
-}
-
-/** Take the walk's user's count of `mm`, as mm_read_begin does; then, as
- * while the walk waits for the lock, process 13 ends and is reaped, which
- * frees its dispositions and its record and puts its user's count. */
-static void reap_at_walk(struct mm *mm)
-{
-    mm_get(mm);
-    if (reading) {
-        struct mm *own = reading->mm;
-
-        free(reading->sigacts);
-        free(reading);
-        reading = NULL;
-        mm_put(own);
-        reaps++;
+        pages[k] = mm->rss[k];
     }
 }
 
@@ -3138,24 +3166,6 @@ static void end_reading(void)
     proc_ref_put(reading);
     reading = NULL;
     reaps++;
-}
-
-/* Another thread may reap the target as soon as the reader drops the lock. */
-static void (*host_drop)(void);
-
-/** Drop the model reader's one hold, running `host_drop` if set. */
-int bkl_drop(void)
-{
-    if (host_drop) {
-        host_drop();
-    }
-    return 1;
-}
-
-/** Restore the model reader's one hold. */
-void bkl_take(int depth)
-{
-    check(depth == 1, "the status reader restores its big-lock depth");
 }
 
 /* The walk from outside an address space, counted from 1, during whose
@@ -3223,8 +3233,8 @@ static void put_at_walk(struct mm *mm)
 
 /**
  * Make process 13 of process 7's group, so that its reader may see its
- * bounds, with an address space and dispositions from the heap, which
- * `reap_at_walk` frees: SIGINT ignored, its code, stack and data at known
+ * bounds, with an address space and dispositions from the heap, which its
+ * reap frees (`end_reading`): SIGINT ignored, its code, stack and data at known
  * addresses, and its last processor 2. 0 when the heap had no room.
  */
 static int make_reaped(void)
@@ -3264,30 +3274,37 @@ static int make_reaped(void)
     return 1;
 }
 
-/** Read process 13's `kind` with the generator `gen` while another thread
- * holds its regions' lock to write and SIGKILL ends the read's wait: -EINTR,
- * and the read keeps no user's count of the address space, no file and no
- * reference to the record. */
-static void killed_read(int (*gen)(struct procfs_text *t, int pid), const char *what)
+/** Read process 13's file with the generator `gen` while another thread
+ * holds its regions' lock to write and sends the reader SIGKILL as it
+ * waits: the generator's `want`, -EINTR or the length of what it read
+ * before the wait, after one wait SIGKILL ended, and the read keeps no
+ * user's count of the address space, no file and no reference to the
+ * record. */
+static void killed_read(int (*gen)(struct procfs_text *t, int pid), int want, const char *what)
 {
     struct procfs_text text;
     int len;
 
+    kills_sent = 0;
     procfs_text_init(&text);
     len = gen(&text, 13);
     kfree(text.buf);
-    check(len == -EINTR && reading->mm->users == 1 && reading->refs == 1 && file_holds == 0 &&
-              host_stuck == 0,
+    current_proc->sig_pending &= ~KSIG_BIT(SIGKILL);
+    check(len == want && kills_sent >= 1 && reading->mm->users == 1 && reading->refs == 1 &&
+              file_holds == 0 && host_stuck == 0,
           what);
 }
 
 /**
  * While another thread holds a process's regions' lock to write, as its own
- * mmap or fault would, a read of its stat or statm takes no regions' lock
- * and reads the record and the address space's bounds and counters as they
- * are, as Linux's do_task_stat and task_statm do with no mmap_lock; a read
- * of its maps, smaps, numa_maps or status waits for the lock killably, as
- * Linux's m_start, and once SIGKILL ends the wait returns -EINTR.
+ * mmap or fault would, a read of its stat, statm or status takes no
+ * regions' lock and reads the record and the address space's bounds and
+ * counters as they are, as Linux's do_task_stat, task_statm and task_mem
+ * do with no mmap_lock; a read of its maps, smaps or numa_maps waits for
+ * the lock killably, as Linux's m_start, and once SIGKILL ends the wait
+ * returns -EINTR; and a read of its cmdline or environ waits killably too,
+ * as access_remote_vm, and ends its text where SIGKILL ended the wait,
+ * here before the first byte.
  */
 static void reads_while_write_held(void)
 {
@@ -3300,8 +3317,14 @@ static void reads_while_write_held(void)
         return;
     }
     reading->refs = 1;
+    reading->mm->resident = 6;
+    reading->mm->rss[MM_RSS_ANON] = 3;
+    reading->mm->rss[MM_RSS_FILE] = 2;
+    reading->mm->rss[MM_RSS_SHMEM] = 1;
     host_write_held = reading->mm;
     host_stuck = 0;
+    host_held_wait = kill_waiter;
+    host_killed = waiter_killed;
     host_read_begin = get_at_walk;
     host_read_end = put_at_walk;
     procfs_text_init(&text);
@@ -3320,48 +3343,31 @@ static void reads_while_write_held(void)
     kfree(text.buf);
     procfs_text_init(&text);
     len = procfs_gen_statm(&text, 13);
-    check(len == 14 && host_stuck == 0 && text_has(text.buf, len, "0 0 0 0 0 0 0\n"),
+    check(len == 14 && host_stuck == 0 && text_has(text.buf, len, "0 6 0 0 0 0 0\n"),
           "a statm read of it does not wait");
     kfree(text.buf);
-    killed_read(procfs_gen_maps, "a maps read of it that SIGKILL ends returns EINTR");
-    killed_read(procfs_gen_smaps, "a smaps read of it that SIGKILL ends returns EINTR");
-    killed_read(procfs_gen_numa_maps, "a numa_maps read of it that SIGKILL ends returns EINTR");
-    killed_read(procfs_gen_status, "a status read of it that SIGKILL ends returns EINTR");
+    procfs_text_init(&text);
+    len = procfs_gen_status(&text, 13);
+    check(len > 0 && host_stuck == 0 && __builtin_strstr(text.buf, "\nThreads:\t") != NULL,
+          "a status read of it does not wait");
+    check(len > 0 && __builtin_strstr(text.buf, "\nVmRSS:\t      24 kB\n") != NULL &&
+              __builtin_strstr(text.buf, "\nRssAnon:\t      12 kB\n") != NULL &&
+              __builtin_strstr(text.buf, "\nRssFile:\t       8 kB\n") != NULL &&
+              __builtin_strstr(text.buf, "\nRssShmem:\t       4 kB\n") != NULL,
+          "and gives its resident pages by kind from the address space's counts");
+    kfree(text.buf);
+    killed_read(procfs_gen_maps, -EINTR, "a maps read of it that SIGKILL ends returns EINTR");
+    killed_read(procfs_gen_smaps, -EINTR, "a smaps read of it that SIGKILL ends returns EINTR");
+    killed_read(procfs_gen_numa_maps, -EINTR,
+                "a numa_maps read of it that SIGKILL ends returns EINTR");
+    killed_read(procfs_gen_cmdline, 0, "a cmdline read of it that SIGKILL ends is empty");
+    killed_read(procfs_gen_environ, 0, "an environ read of it that SIGKILL ends is empty");
+    host_held_wait = NULL;
+    host_killed = NULL;
     host_read_begin = NULL;
     host_read_end = NULL;
     host_write_held = NULL;
     end_reading();
-}
-
-/**
- * A read of the status of a process that ends and is reaped while the read
- * waits for its address space's lock gives the lines after the memory
- * sizes from the record as it was before the wait, and reads nothing of it
- * after.
- */
-static void status_reaped_during_wait(void)
-{
-    struct procfs_text text;
-    int before = reaps, len;
-
-    check(make_reaped(), "allocate the process whose status is read");
-    if (!reading) {
-        return;
-    }
-    reading->refs = 1;
-    host_drop = end_reading;
-    procfs_text_init(&text);
-    len = procfs_gen_status(&text, 13);
-    host_drop = NULL;
-    check(len > 0 && !text.nomem && reaps == before + 1 && !reading,
-          "a status read of a process reaped while it waits for the regions' lock ends");
-    check(len > 0 && !text.nomem && text.buf[len - 1] == '\n' &&
-              __builtin_strstr(text.buf, "VmSize:") != NULL &&
-              __builtin_strstr(text.buf, "\nThreads:\t1\n") != NULL &&
-              __builtin_strstr(text.buf, "\nSigIgn:\t0000000000000002\n") != NULL &&
-              __builtin_strstr(text.buf, "VmSize:") < __builtin_strstr(text.buf, "Threads:"),
-          "and gives the record's lines after the memory sizes, as it was before the wait");
-    kfree(text.buf);
 }
 
 /**
@@ -3508,7 +3514,6 @@ static void pid_file_rows(void)
 {
     reaped_during_read();
     reads_while_write_held();
-    status_reaped_during_wait();
     maps_reaped_during_names();
     numa_maps_policy_after_wait();
     autogroup_write_rows();

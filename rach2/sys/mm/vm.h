@@ -337,6 +337,9 @@ typedef struct vm_space {
      * `total`; each word is changed with the regions and may be read
      * without their lock, as Linux reads mm's counters. */
     uintptr_t type_total[VM_TYPES];
+    /* The bytes of the regions with VM_PROT_LOCKED, kept and read as
+     * `type_total`. */
+    uintptr_t locked;
     uintptr_t heap_start;  /* initial program break (base of the heap VMA) */
     uintptr_t brk;         /* current program break (top of the heap VMA)  */
     uintptr_t stack_limit; /* lowest address the stack VMA may grow down to */
@@ -650,7 +653,8 @@ void vm_lock_all(vm_space_t *vm, uint32_t bits);
 uintptr_t vm_locked_in(const vm_space_t *vm, uintptr_t start, uintptr_t end);
 
 /** Bytes the locked regions cover together: VmLck of /proc/PID/status and
- * what RLIMIT_MEMLOCK bounds for the mlock calls. */
+ * what RLIMIT_MEMLOCK bounds for the mlock calls. The count is kept with
+ * the regions, and a reader that holds no regions' lock reads it once. */
 uintptr_t vm_locked(const vm_space_t *vm);
 
 /**

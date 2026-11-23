@@ -867,12 +867,16 @@ struct mm;
  * device memory, of memfd_secret or of the vDSO's data pages, [vvar], a
  * page that cannot be backed, and a page of a read-only shared region for a
  * write are -EIO, as Linux's get_user_pages refuses them.
- * Returns 0, -EIO, or -ENOMEM when no temporary mapping was free, or with
- * PAGING_ACCESS_KILLABLE -EINTR when SIGKILL ended the wait for `mm`'s
- * regions' lock, nothing read or written. It may sleep, bringing a page in
- * or releasing a file a region let go of meanwhile, and looks each page up
- * again after a sleep; the lock taken again after a file's fill is waited
- * for whatever the flags.
+ * Returns 0, -EIO, or -ENOMEM when no temporary mapping was free. It may
+ * sleep, bringing a page in or releasing a file a region let go of
+ * meanwhile, and looks each page up again after a sleep.
+ *
+ * With PAGING_ACCESS_KILLABLE, as Linux's access_remote_vm and
+ * __get_user_pages (mm/gup.c), SIGKILL ends every wait for `mm`'s regions'
+ * lock, the first and each take again after a fill, a balance or a stack's
+ * growth let it go, and a SIGKILL pending before a page, or before a take
+ * again, ends the access there: -EINTR, the pages before it read or
+ * written. Without the flag each wait is for the lock alone.
  */
 int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int flags);
 
