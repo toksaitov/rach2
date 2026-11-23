@@ -930,14 +930,15 @@ krffs_node_t *krffs_child_err(krffs_node_t *dir, const char *name, int *err);
 krffs_node_t *krffs_child(krffs_node_t *dir, const char *name);
 
 /**
- * The low word of the boot root's lookup count, which moves once a write
- * that can change what a lookup finds is made, for a caller without the
- * big lock: one that read it under the big lock before a `krffs_child_err`
- * and reads the same word later knows that no such write has been made
- * since, though one may be under way. The VFS walk sequence covers a
- * change of a name under way.
+ * The boot root's lookup count, which moves once a write that can change
+ * what a lookup finds is made, read whole for a caller without the big
+ * lock: one that read it under the big lock before a `krffs_child_err` and
+ * reads the same count later knows that no such write has been made since,
+ * though one may be under way. The count is 64 bits and never comes round
+ * again. The VFS walk sequence covers a change of a name under way. Any
+ * context; takes a spinlock that is last in the lock order.
  */
-uint32_t krffs_names_stamp(void);
+uint64_t krffs_names_stamp(void);
 
 /**
  * Resolve `path` to its node, the root node for "/", as `krffs_walk` does.
