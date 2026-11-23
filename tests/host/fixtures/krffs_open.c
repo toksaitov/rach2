@@ -322,7 +322,8 @@ int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const c
 }
 
 /** Whether a thread sleeps in a lock's wait: the opener, from its wait for
- * the namespace lock until the writer resumes it. */
+ * the namespace lock until the writer resumes it. krffsmount_hosttest.c
+ * leaves its own out for this one. */
 int wq_active(const wait_queue_t *wq)
 {
     (void)wq;
@@ -705,9 +706,72 @@ static int sched_spin_on(const struct process *owner, int cpu)
     return 0;
 }
 
+/* The cached walk's memory of the boot root's names, `hop_memos`, is a static
+ * array, which the extractor does not copy: this storage stands in for it,
+ * checked below to be large enough. */
+static uint64_t fixture_hop_store[64];
+#define hop_memos ((struct hop_memo *)fixture_hop_store)
+
+struct walk_check;
+static int cached_cross(struct vfs_ref *cur, const struct vfs_mount **uncovered);
+static int walk_keep_take(const struct vfs_ref *ref, int locked, const struct walk_check *wc);
+
+/** Both fixture processes make system calls; neither is a kernel thread. */
+int proc_is_kthread(const process_t *p)
+{
+    (void)p;
+    return 0;
+}
+
+/** The fixture keeps no walk's answer for the rest of a call
+ * (`walk_keep_take`), so no thread needs a spare keep. */
+static int walk_keep_spare(void)
+{
+    return 0;
+}
+
+/** No page keeps a working directory, so none has moved. */
+static int path_buf_cwd_moved(const char *path)
+{
+    (void)path;
+    return 0;
+}
+
+/** No page keeps a working directory to take again. */
+static int path_buf_cwd_retake(const char *path)
+{
+    (void)path;
+    return 0;
+}
+
 #define vfs_name_put fixture_name_put
 #include "vfs_open.inc"
 #undef vfs_name_put
+#undef hop_memos
+
+typedef char
+    fixture_hop_fits[sizeof(fixture_hop_store) >= sizeof(struct hop_memo) * HOP_MEMOS ? 1 : -1];
+
+/** The walk's last check alone: the fixture keeps no walk's answer for the
+ * rest of a call. */
+static int walk_keep_take(const struct vfs_ref *ref, int locked, const struct walk_check *wc)
+{
+    (void)ref;
+    (void)locked;
+    return walk_answer(wc) ? 0 : WALK_FULL;
+}
+
+/** No thread keeps a walk's answer, so the mark of its keeps is NULL. */
+const void *vfs_walk_keeps_mark(void)
+{
+    return NULL;
+}
+
+/** No keep is newer than any mark. */
+void vfs_walk_keeps_back(const void *mark)
+{
+    (void)mark;
+}
 
 /* Storage for the two inodes constructed during the live lookup. */
 static struct synth_node *proc_pid_node, *proc_ns_node;
@@ -734,13 +798,18 @@ static int synth_take(const struct vpath *vp, void **node)
     return 0;
 }
 
-/** Look up a name in the fixture's live process tree. */
+/** Look up a name in the fixture's live process tree: -ENOENT once the
+ * process has gone, as the kernel's lookup answers for a held directory
+ * whose process has gone (`synth_held_gone`), so that the old directory
+ * cannot look up a replacement task. */
 static int synth_lookup_at(const struct vfs_ref *cur, struct synth_tail *tail, void **node,
                            const char **left)
 {
     const char *p = tail->start;
     const char *full = p[0] == '7' ? "proc/7" : "proc/7/ns";
-    check(proc_live, "the old directory cannot look up a replacement task");
+
+    if (!proc_live)
+        return -ENOENT;
     while (p < tail->end && *p != '/')
         p++;
     *left = p;
@@ -1016,6 +1085,17 @@ static int32_t cred_access_ref(const struct vfs_ref *ref, int want, int real)
     return 0;
 }
 
+/** Both fixture processes have root's credentials, whatever the attributes. */
+static int32_t cred_access_attrs(const struct vfs_ref *r, const struct vfs_stat *st, int want,
+                                 int use_real)
+{
+    (void)r;
+    (void)st;
+    (void)want;
+    (void)use_real;
+    return 0;
+}
+
 /** The memory-root permission branch is outside these rows. */
 static int32_t cred_access_node(const krffs_node_t *node, int want, int real)
 {
@@ -1097,11 +1177,14 @@ static int32_t open_mouse(int flags)
     return -EIO;
 }
 
+struct handle_want;
+
 /** Reject an unexpected O_PATH open. */
-static int32_t open_path(const char *name, int flags)
+static int32_t open_path(const char *name, int flags, const struct handle_want *want)
 {
     (void)name;
     (void)flags;
+    (void)want;
     check(0, "unexpected O_PATH open");
     return -EIO;
 }
@@ -1200,12 +1283,22 @@ static void synth_dir_record(int fd, int permanent, const char *name)
     check(0, "unexpected synthetic directory record");
 }
 
+static int32_t handle_check(struct vfs_ref *ref, const struct handle_want *want);
+
 #include "syscall_open.inc"
+
+/** No row opens a file by its handle: an open with no `want` passes, and
+ * one with a `want` is refused. */
+static int32_t handle_check(struct vfs_ref *ref, const struct handle_want *want)
+{
+    (void)ref;
+    return want ? -ESTALE : 0;
+}
 
 /** Run the real open path in the second process. */
 static void open_published(void)
 {
-    opened_fd = do_open("target", opening_flags, 0644);
+    opened_fd = do_open("target", opening_flags, 0644, NULL);
 }
 
 /**
@@ -1263,7 +1356,7 @@ static void publication_open(int flags, int before)
     mount.state = VFS_ACTIVE;
     mount.ns.holder = -1;
     hole = create("hole");
-    fd = do_open("hole", 2, 0);
+    fd = do_open("hole", 2, 0, NULL);
     check(fd >= 0, "open free-extent fixture");
     k_memset(payload, 'H', 4096);
     check(kv_write(&mount, fd_slot(writer.fds, fd)->ofd->fhandle, payload, 4096, 0) == 4096,
@@ -1271,7 +1364,7 @@ static void publication_open(int flags, int before)
     fd_free(writer.fds, fd);
     create("separator");
     original = create("target");
-    fd = do_open("target", 2, 0);
+    fd = do_open("target", 2, 0, NULL);
     check(fd >= 0, "open original target");
     first = fd_slot(writer.fds, fd)->ofd;
     check(kv_write(&mount, first->fhandle, "A", 1, 0) == 1, "seed concurrent target");
@@ -1316,7 +1409,7 @@ static void publication_open(int flags, int before)
     check(first->vnode != moved, "second relocation changes offset");
     reused = create("reuse-copy");
     check(reused == moved, "first copy offset reused");
-    reuse = do_open("reuse-copy", 2, 0);
+    reuse = do_open("reuse-copy", 2, 0, NULL);
     check(reuse >= 0, "open reused copy offset");
     check(kv_write(&mount, fd_slot(writer.fds, reuse)->ofd->fhandle, "R", 1, 0) == 1,
           "write reused copy offset");
@@ -1349,23 +1442,24 @@ static void locked_walks(void)
     mount_table[0] = &mount;
     mount.state = VFS_ACTIVE;
     mount.ns.holder = -1;
-    fd = do_open("created", 2 | O_CREAT | O_EXCL, 0644);
+    fd = do_open("created", 2 | O_CREAT | O_EXCL, 0644, NULL);
     check(fd >= 0 && mount.ns.depth == 0 && mount.inprogress == 0,
           "creating open registers and releases lock");
     if (fd >= 0) {
         fd_free(writer.fds, fd);
     }
-    check(do_open("created", O_CREAT | O_EXCL, 0644) == -EEXIST && mount.ns.depth == 0,
+    check(do_open("created", O_CREAT | O_EXCL, 0644, NULL) == -EEXIST && mount.ns.depth == 0,
           "exclusive open error releases lock");
-    check(do_open("created", O_DIRECTORY, 0) == -ENOTDIR && mount.ns.depth == 0,
+    check(do_open("created", O_DIRECTORY, 0, NULL) == -ENOTDIR && mount.ns.depth == 0,
           "directory open error releases lock");
-    check(do_open("absent", 0, 0) == -ENOENT && mount.ns.depth == 0, "missing path releases lock");
-    check(do_open("created/child", 0, 0) == -ENOTDIR && mount.ns.depth == 0,
+    check(do_open("absent", 0, 0, NULL) == -ENOENT && mount.ns.depth == 0,
+          "missing path releases lock");
+    check(do_open("created/child", 0, 0, NULL) == -ENOTDIR && mount.ns.depth == 0,
           "non-directory prefix releases lock");
     mount.flags |= VFS_MS_RDONLY;
-    check(do_open("created", 2, 0) == -EROFS && mount.ns.depth == 0,
+    check(do_open("created", 2, 0, NULL) == -EROFS && mount.ns.depth == 0,
           "read-only open error releases lock");
-    check(do_open("absent", O_CREAT, 0644) == -EROFS && mount.ns.depth == 0,
+    check(do_open("absent", O_CREAT, 0644, NULL) == -EROFS && mount.ns.depth == 0,
           "read-only creation error releases lock");
     mount.flags = 0;
     vfs_ns_lock(&mount);

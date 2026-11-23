@@ -186,12 +186,15 @@ void wait_queue_init(wait_queue_t *wq)
     wq->head = NULL;
 }
 
+#ifndef KRFFS_OPEN_TEST
 /** No row waits on a descriptor's queue. */
 int wq_active(const wait_queue_t *wq)
 {
     (void)wq;
     return 0;
 }
+
+#endif
 
 /** Ignore unused descriptor wakeups. */
 void wq_wake_all(wait_queue_t *wq)
