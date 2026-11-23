@@ -744,10 +744,9 @@ static void shared_limits(void)
 /**
  * A descriptor of a shared table: a reservation is no descriptor to a
  * lookup, a copy, a listing or a close until it is published; a close of a
- * descriptor that another sharer's call holds only marks it closing, which
- * no lookup or second close passes, and the end of the holder's call claims
- * its release, as Linux's last `fput` releases a file another thread's call
- * kept.
+ * descriptor that another sharer's call holds marks it closing, which no
+ * lookup or second close passes. The closer keeps a hold through its
+ * cleanup, so the last call to give up a hold claims the release.
  */
 static void shared_closes(void)
 {
@@ -757,6 +756,7 @@ static void shared_closes(void)
     fd_entry_t copy, *claimed = 0;
     int i, fd;
 
+    check(fd_close_claim(NULL, 0, &claimed) == -EBADF, "a missing table has no descriptor");
     check(first && second, "two processes for the closes");
     if (!first || !second) {
         return;
