@@ -7,6 +7,10 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
  *
+ * The transport's DMA memory past a page comes as one run of consecutive
+ * frames of any length, 255 MiB in its row, from the heap
+ * (`kalloc_contig`), zeroed, and is given back whole.
+ *
  * The first function is QEMU 10.2.1's virtio-vga-gl with hostmem=4G: its
  * common, ISR, device and notification capabilities in BAR 2, and the
  * host-visible region, shared memory 1, the whole of the 64-bit BAR 4 that
@@ -477,17 +481,28 @@ void free_dma64_frame(void *frame)
     (void)frame;
 }
 
+/* The heap's runs: the pages of the last one given and the last one given
+ * back, and those still out. */
+static uint32_t contig_given, contig_back, contig_out;
+
+/** A run of `count` frames, memory of the host's at its own address. */
 void *kalloc_contig(uint32_t count, uintptr_t *phys)
 {
-    (void)count;
-    (void)phys;
-    return 0;
+    void *p = __builtin_malloc((size_t)count * PAGE_SIZE);
+
+    if (p) {
+        contig_given = count;
+        contig_out++;
+        *phys = (uintptr_t)p;
+    }
+    return p;
 }
 
 void kfree_pages(void *p, uint32_t count)
 {
-    (void)p;
-    (void)count;
+    contig_back = count;
+    contig_out--;
+    __builtin_free(p);
 }
 
 /** Allocate from a small vector pool to force shared-vector fallback. */
@@ -869,6 +884,30 @@ static void qemu_layout(void)
           "the region is logged once with its address and size");
 }
 
+/** The transport's DMA memory past a page: a run of consecutive frames of
+ * any length, here 255 MiB, from the heap of i686 (`kalloc_contig`), its
+ * address the run's, zeroed and given back whole. */
+static void dma_runs(void)
+{
+    const uint32_t pages = 255u * 256u;
+    struct virtio_dev *d;
+    uint64_t addr = 0;
+    uint8_t *p;
+
+    CHECK(virtio_pci_find(VIRTIO_ID_GPU, 0, &d) == 0 && d->dma_max == VIRTIO_DMA_ANY,
+          "dma: virtio-pci gives runs of any length");
+    p = d->ops->dma_alloc(d, pages * PAGE_SIZE, &addr);
+    CHECK(p != 0 && contig_given == pages && addr == (uint64_t)(uintptr_t)p,
+          "dma: 255 MiB is one run of consecutive frames at its address");
+    CHECK(p != 0 && p[0] == 0 && p[(size_t)pages * PAGE_SIZE / 2] == 0 &&
+              p[(size_t)pages * PAGE_SIZE - 1] == 0,
+          "dma: the run is zeroed");
+    if (p) {
+        d->ops->dma_free(d, p, pages * PAGE_SIZE);
+    }
+    CHECK(contig_back == pages && contig_out == 0, "dma: the run is given back whole");
+}
+
 /** Capabilities a region cannot be taken from, refused with a record. */
 static void refusals(void)
 {
@@ -1246,6 +1285,7 @@ static void legacy_function(void)
 int main(void)
 {
     qemu_layout();
+    dma_runs();
     refusals();
     interrupts();
     probe_refused();
