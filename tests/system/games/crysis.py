@@ -54,6 +54,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 import wm
@@ -542,29 +543,65 @@ def thread_rows():
     return rows
 
 
+def bounded(work, seconds):
+    """Run WORK() in a daemon thread and wait SECONDS for it; return whether
+    it ended. A read of /proc/PID can wait on that process's memory map for
+    as long as another thread holds it, and a daemon thread left in such a
+    read does not hold the script's exit."""
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    thread.join(seconds)
+    return not thread.is_alive()
+
+
+# The longest a load trace samples, and the longest it waits for the HUD's
+# FIRST frame once the level is loaded, in seconds.
+TRACE_SPAN = 30
+# The longest the trace takes to copy its counts and write its summary.
+TRACE_END = 10
+
+
 class LoadTrace:
     """Sample every thread across the frames that end the level's load, the
     longest of which has taken 1.5 s on Rach2: from the HUD's FIRST frame,
     every 50 ms, until a frame of 1 s or more and ten frames after it are in
-    the dump, or 30 s have passed. WHERE gets `samples`, each sample a line
-    `sample NS FRAMES`, the monotonic time and the HUD's frame count, then
-    thread_rows(); `calls`, the profiling kernel's bkl/calls over the trace,
-    for every thread, when it has one; and `summary`, which names the long
-    frame and the states, wait channels and system calls in the samples
-    taken during it of each thread of the game's processes and wineserver,
-    and of any other thread running or in a disk wait."""
+    the dump, or TRACE_SPAN seconds have passed, however long one read takes.
+    WHERE gets `samples`, each sample a line `sample NS BEFORE AFTER`, the
+    monotonic time and the HUD's frame counts before and after the walk,
+    then thread_rows(), written as each sample is taken; `calls`, the
+    profiling kernel's bkl/calls over the trace, for every thread, when it
+    has one; and `summary`, which names the long frame by its 1-based line
+    in the dump and the states, wait channels and system calls of each
+    thread of the game's processes and wineserver, and of any other thread
+    running or in a disk wait, in the samples whose walk lay wholly inside
+    that frame."""
 
     def __init__(self, game, where, first):
         self.game, self.where, self.first = game, where, first
         self.done = False
         self.mark = None  # the load mark, if it came in the trace (loop_windows)
+        self.loaded_at = None  # when step() first saw the level loaded
+        self.samples = []  # (ns, before, after, rows), appended by sample()
+        self.long_at = None  # the long frame's index in the dump
+        self.counting = False
 
     def step(self):
-        """Run the trace once the HUD holds FIRST frames; return whether it
-        has run."""
-        if not self.done and self.game.frames() >= self.first:
+        """Run the trace once the HUD holds FIRST frames, or give it up when
+        the HUD has not reached them TRACE_SPAN seconds after the level was
+        seen loaded; return whether it has run or been given up."""
+        if self.done:
+            return True
+        if self.game.frames() >= self.first:
             self.run()
             self.done = True
+        elif self.game.loaded() is not None:
+            if self.loaded_at is None:
+                self.loaded_at = time.monotonic()
+            elif time.monotonic() - self.loaded_at > TRACE_SPAN:
+                text = "the HUD held no frame %d %d s after the load\n" % (self.first, TRACE_SPAN)
+                bounded(lambda: (self.where / "summary").write_text(text), TRACE_END)
+                say("load trace: " + text.strip())
+                self.done = True
         return self.done
 
     def times(self):
@@ -575,45 +612,66 @@ class LoadTrace:
         except OSError:
             return []
 
-    def run(self):
-        """Take the samples, the counts and the summary."""
-        counting = True
+    def sample(self, stop):
+        """Take samples into self.samples and the `samples` file until the
+        long frame and ten after it are in the dump or STOP is set."""
         try:
             BKL_CALLS.write_text("all\n")  # any word but `thread` counts every thread
+            self.counting = True
         except OSError:
-            counting = False
-        samples, long_at = [], None
-        end = time.monotonic() + 30
-        while time.monotonic() < end:
-            times = self.times()
-            if self.mark is None and self.game.loaded() is not None:
-                self.mark = len(times)
-            if long_at is None:
-                long_at = next((i for i in range(self.first, len(times)) if times[i] >= 1000), None)
-            if long_at is not None and len(times) > long_at + 10:
-                break
-            samples.append((time.monotonic_ns(), len(times), thread_rows()))
-            time.sleep(0.05)
-        times = self.times()
-        if counting:
-            try:
-                shutil.copyfile(BKL_CALLS, self.where / "calls")
-            except OSError:
-                pass
+            pass
         with open(self.where / "samples", "w") as f:
-            for ns, frames, rows in samples:
-                f.write("sample %d %d\n" % (ns, frames))
+            while not stop.is_set():
+                times = self.times()
+                if self.mark is None and self.game.loaded() is not None:
+                    self.mark = len(times)
+                if self.long_at is None:
+                    self.long_at = next((i for i in range(self.first, len(times))
+                                         if times[i] >= 1000), None)
+                if self.long_at is not None and len(times) > self.long_at + 10:
+                    return
+                ns, rows = time.monotonic_ns(), thread_rows()
+                after = self.game.frames()
+                if stop.is_set():
+                    return
+                self.samples.append((ns, len(times), after, rows))
+                f.write("sample %d %d %d\n" % (ns, len(times), after))
                 f.writelines(row + "\n" for row in rows)
-        self.summary(samples, times, long_at)
+                f.flush()
+                time.sleep(0.05)
+
+    def run(self):
+        """Take the samples for TRACE_SPAN seconds at most, then the counts
+        and the summary."""
+        stop = threading.Event()
+        whole = bounded(lambda: self.sample(stop), TRACE_SPAN)
+        stop.set()
+        samples = list(self.samples)
+        if not whole:
+            say("load trace: a read had not returned at %d s; %d samples kept" % (
+                TRACE_SPAN, len(samples)))
+
+        def finish():
+            if self.counting:
+                try:
+                    shutil.copyfile(BKL_CALLS, self.where / "calls")
+                except OSError:
+                    pass
+            self.summary(samples, self.times(), self.long_at)
+        if not bounded(finish, TRACE_END):
+            say("load trace: its counts and summary were not written in %d s" % TRACE_END)
 
     def summary(self, samples, times, long_at):
         """Write and say what the game's threads did in the long frame: the
-        samples taken while the HUD held long_at frames, that frame not yet
-        presented."""
+        samples whose walk began and ended while the HUD held long_at
+        frames, that frame not yet presented. The frame is named by its
+        line in the dump, counted from 1."""
         if long_at is None:
-            text = "no frame of 1 s or more in %d samples to frame %d\n" % (len(samples), len(times))
+            text = "no frame of 1 s or more in %d samples to the dump's line %d\n" % (
+                len(samples), len(times))
         else:
-            during = [rows for ns, frames, rows in samples if frames == long_at]
+            during = [rows for ns, before, after, rows in samples
+                      if before == long_at and after == long_at]
             states, ticks = {}, {}
             for rows in during:
                 split = [row.split(" ", 7) for row in rows]
@@ -625,7 +683,8 @@ class LoadTrace:
                     key = "%s %s %s %s %s" % (tid, name.replace(" ", "_"), state, wchan, call)
                     states[key] = states.get(key, 0) + 1
                     ticks.setdefault(tid, []).append(int(user) + int(system))
-            text = "frame %d of %.1f ms, %d samples in it\n" % (long_at, times[long_at], len(during))
+            text = "frame %d of %.1f ms, %d samples in it\n" % (
+                long_at + 1, times[long_at], len(during))
             for key, n in sorted(states.items(), key=lambda kv: -kv[1])[:40]:
                 tid = key.split()[0]
                 text += "%3d %s ticks %d\n" % (n, key, ticks[tid][-1] - ticks[tid][0])
