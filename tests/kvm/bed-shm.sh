@@ -247,7 +247,9 @@ gpu_started=0 cleaned=0
 # 1 once this run, with -g on a machine that ran no session, has asked for
 # one, which must end once the GPU is back, at the end or on a signal.
 session_owed=0
-crysis_ini=/etc/xdg/weston/weston.ini crysis_ini_saved=''
+# The compositor's settings, their copy saved before the flyby, and the
+# flyby's keeper, whose preparation writes them.
+crysis_ini=/etc/xdg/weston/weston.ini crysis_ini_saved='' crysis_keep=''
 # NOCOPY_INTEL, for nocopy: with -g, the GPU's Venus device or a failure.
 intel=''
 [ -z "$bdf" ] || intel=1
@@ -477,12 +479,24 @@ holding()
 }
 
 # crysis_restore_ini: put back the compositor's settings before the GPU
-# returns and the native session starts. A session that started on the
-# changed file first, as when QEMU ended early, crysis-shm.sh starts again
-# at its end.
+# returns and the native session starts, only once the flyby's keeper is
+# done, having reaped every process its command left, since the flyby's
+# preparation writes the file. 1, with the reason in crysis_why and the
+# saved copy kept for a later call, while the keeper is not done or the
+# copy fails. A session that started on the changed file first, as when
+# QEMU ended early, crysis-shm.sh starts again at its end.
 crysis_restore_ini()
 {
-    [ -z "$crysis_ini_saved" ] || cp -p "$crysis_ini_saved" "$crysis_ini" || return 1
+    crysis_why=''
+    [ -n "$crysis_ini_saved" ] || return 0
+    if [ -n "$crysis_keep" ] && ! grep -q '^done ' "$out/keep-$crysis_keep.status" 2>/dev/null; then
+        crysis_why="the flyby's keeper is not done, so its preparation may still write weston.ini; left changed, saved as $crysis_ini_saved"
+        return 1
+    fi
+    if ! cp -p "$crysis_ini_saved" "$crysis_ini"; then
+        crysis_why="could not copy $crysis_ini_saved to $crysis_ini"
+        return 1
+    fi
     crysis_ini_saved=''
 }
 
@@ -541,9 +555,8 @@ cleanup()
     # shellcheck disable=SC2086 # a list of keepers' numbers
     keep_end $first || survivors=$keep_left
     # The flyby's preparation writes weston.ini, so the saved file goes back
-    # only once its keeper has ended it, or has sent KILL to what outlived
-    # TERM, which runs no more of its code.
-    crysis_restore_ini || fail settings 'failed to restore weston.ini'
+    # only once the flyby's keeper is done (crysis_restore_ini).
+    crysis_restore_ini || fail settings "$crysis_why"
     load='' fig='' waiter='' holder='' pid='' umon='' sampler=''
     vm=$vmk
     [ -z "$gpu" ] || vm=''
@@ -1777,6 +1790,7 @@ crysis_figure()
     crysis_ini_saved=$out/weston.ini
     crysis_counts > "$out/crysis-counts.before"
     keep_new 'the flyby'
+    crysis_keep=$keepn
     # shellcheck disable=SC2016 # the child shell reads its output directory
     "$keep" "$$" "$kb" sh -c '
         export CRYSIS_STATE=$1/crysis-state CRYSIS_GATE=0
@@ -1870,7 +1884,7 @@ crysis_account()
 # check the restored session.
 crysis_return()
 {
-    crysis_restore_ini || fail return 'could not restore weston.ini'
+    crysis_restore_ini || fail return "$crysis_why"
     dead=$(command stat -c %s "$services" 2>/dev/null || echo 0)
     tail -c 16384 "$services" > "$out/services-death.txt"
     crysis_account
