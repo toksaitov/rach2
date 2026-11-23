@@ -16116,12 +16116,15 @@ static int32_t new_name_parent(const char *path, struct vfs_ref *parent, char *l
  * fs/namei.c): a type changes a directory's names under the directory's
  * lock and forgets each name it changes, so the cache answers as the type
  * would at some moment of the call, and a name made after it is the type's
- * own -EEXIST at the creation.
+ * own -EEXIST at the creation. The cache is keyed by the base mount
+ * (`vfs_mount_base`), the one every change forgets names under, so a bind
+ * or a namespace's copy reads the same entries.
  */
 static int name_present(struct vfs_mount *mnt, void *dir, const char *name)
 {
+    struct vfs_mount *base = mnt->bind_of ? mnt->bind_of : mnt;
     void *found;
-    int rc = dcache_lookup(mnt, dir, name, &found);
+    int rc = dcache_lookup(base, dir, name, &found);
 
     if (rc == -ENOENT) {
         return 0;
@@ -16129,8 +16132,8 @@ static int name_present(struct vfs_mount *mnt, void *dir, const char *name)
     if (rc != 0) {
         return rc;
     }
-    if (mnt->type->ops->put) {
-        mnt->type->ops->put(mnt, found);
+    if (base->type->ops->put) {
+        base->type->ops->put(base, found);
     }
     return 1;
 }
