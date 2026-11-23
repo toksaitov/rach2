@@ -4,8 +4,10 @@ Usage: serial.py KERNEL IMAGE BARECALL PASSWORD_FILE LOG [ARG...]
 
 Logs in as root on the serial console, writes BARECALL to /tmp through
 base64, and runs it on itself with ARG, or runs the shell command
-BARECALL_CMD from the environment instead; BARECALL_QEMU adds QEMU
-arguments. The console goes to LOG, and the guest is powered off once
+BARECALL_CMD from the environment instead, until the console shows
+BARECALL_DONE, "barecall: openclose" unless given; BARECALL_QEMU adds QEMU
+arguments, and BARECALL_ACCEL and BARECALL_CPU replace the accelerator,
+multi-threaded TCG, and the processor model, max. The console goes to LOG, and the guest is powered off once
 barecall's last line has come. Each wait for the console has a limit, and
 a wait that passes it ends the run with an error.
 """
@@ -30,7 +32,8 @@ def main():
     scratch = tempfile.mkdtemp(dir=os.environ.get("TMPDIR"))
     path = os.path.join(scratch, "console")
     qemu = subprocess.Popen([
-        "qemu-system-x86_64", "-accel", "tcg,thread=multi", "-cpu", "max",
+        "qemu-system-x86_64", "-accel", os.environ.get("BARECALL_ACCEL", "tcg,thread=multi"),
+        "-cpu", os.environ.get("BARECALL_CPU", "max"),
         "-smp", "4", "-m", "3G", "-machine", "q35", "-kernel", kernel,
         "-initrd", image, "-display", "none", "-vga", "none",
         "-monitor", "none", "-no-reboot", "-nic", "none",
@@ -91,7 +94,7 @@ def main():
         send("chmod 755 /tmp/barecall && uname -a")
         until("\n# ")
         send(os.environ.get("BARECALL_CMD", "/tmp/barecall /tmp/barecall " + args))
-        until("barecall: openclose", 1800, "failed")
+        until(os.environ.get("BARECALL_DONE", "barecall: openclose"), 1800, "failed")
         until("\n# ")
         send("poweroff -f")
         qemu.wait(60)
