@@ -96,6 +96,20 @@ void console_printf(const char *format, ...)
     (void)format;
 }
 
+/** The test runs on one thread, so the lock is never contended. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    (void)lock;
+    return 0;
+}
+
+/** Let go of what `spin_lock_irqsave` took: nothing. */
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    (void)lock;
+    (void)flags;
+}
+
 /* The time `rtc_realtime` reports, which the rows set. */
 static int64_t fake_seconds = 1000;
 static int64_t fake_nanoseconds;
