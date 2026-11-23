@@ -1017,7 +1017,7 @@ static int scan_has(const struct gpu_scan *s, long pid, int fd)
  */
 static void scan_fds(struct gpu_scan *s, long pid)
 {
-    char base[64], path[128];
+    char base[64], path[512];
     struct dirent *e;
     struct stat st;
     unsigned int major_of;
