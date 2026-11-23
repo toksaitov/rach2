@@ -44,6 +44,7 @@ static volatile unsigned int bkl_lent;
 
 #define BKL_TRACE_SLOTS (1u << 19)
 #define BKL_TRACE_HOLD  4
+#define BKL_TRACE_CALL  5
 
 struct bkl_trace_stamp {
     uint64_t before, after; /* TSC enclosing the monotonic reading */
@@ -57,8 +58,8 @@ struct bkl_trace_header {
 };
 
 struct bkl_trace_row {
-    uint64_t at;     /* wake, select, run or hold end, in TSC cycles */
-    uint64_t since;  /* hold start */
+    uint64_t at;     /* wake, select, run or end of a call or hold, in TSC cycles */
+    uint64_t since;  /* call or hold start */
     uint64_t waited; /* cycles before the hold */
     uint32_t tid;
     int32_t nr;   /* syscall (or BKL_NR_*), -1 for none */
@@ -71,6 +72,7 @@ struct bkl_trace_row {
  * The big lock serializes control and reads. A stopped buffer is immutable. */
 static struct spinlock bkl_trace_lock = SPINLOCK_INIT_NAMED("bkl_trace");
 static volatile int bkl_tracing;
+static volatile uint32_t bkl_trace_thread; /* 0 for scheduler and holds of all threads */
 static struct bkl_trace_header bkl_trace;
 static struct bkl_trace_row *bkl_trace_rows;
 
@@ -553,12 +555,15 @@ static struct bkl_trace_row *trace_append(void)
 void bkl_trace_sched(unsigned int kind, uint32_t tid, uint32_t prev)
 {
     struct bkl_trace_row *row;
+    uint32_t thread = bkl_trace_thread;
 
-    if (!bkl_tracing) {
+    if (!bkl_tracing || (thread && thread != tid && thread != prev)) {
         return;
     }
     spin_lock(&bkl_trace_lock);
-    if (bkl_tracing && (row = trace_append()) != NULL) {
+    thread = bkl_trace_thread;
+    if (bkl_tracing && (!thread || thread == tid || thread == prev) &&
+        (row = trace_append()) != NULL) {
         row->at = arch_cycles();
         row->since = 0;
         row->waited = 0;
@@ -577,12 +582,14 @@ void bkl_trace_sched(unsigned int kind, uint32_t tid, uint32_t prev)
 static void trace_hold(const struct percpu *cpu, int c, uint64_t now, uint64_t waited, int ioctl)
 {
     struct bkl_trace_row *row;
+    uint32_t thread = bkl_trace_thread;
 
-    if (!bkl_tracing) {
+    if (!bkl_tracing || (thread && thread != cpu->bkl_trace_tid)) {
         return;
     }
     spin_lock(&bkl_trace_lock);
-    if (bkl_tracing && cpu->bkl_since >= bkl_trace.first.after && (row = trace_append()) != NULL) {
+    if (bkl_tracing && (!bkl_trace_thread || bkl_trace_thread == cpu->bkl_trace_tid) &&
+        cpu->bkl_since >= bkl_trace.first.after && (row = trace_append()) != NULL) {
         row->at = now;
         row->since = cpu->bkl_since;
         row->waited = waited;
@@ -592,6 +599,36 @@ static void trace_hold(const struct percpu *cpu, int c, uint64_t now, uint64_t w
         row->vector = (uint16_t)cpu->bkl_vector;
         row->cpu = (uint8_t)c;
         row->kind = BKL_TRACE_HOLD;
+    }
+    spin_unlock(&bkl_trace_lock);
+}
+
+/** Record the call of the selected thread, whether it took the lock or not.
+ * Interrupts are off and the caller took both stamps on the trace's clock. */
+static void trace_call(uint32_t nr, uint64_t start, uint64_t end)
+{
+    struct bkl_trace_row *row;
+    uint32_t tid;
+
+    if (!start || !bkl_tracing || !bkl_trace_thread || !current_proc) {
+        return;
+    }
+    tid = current_proc->pid;
+    if (bkl_trace_thread != tid) {
+        return;
+    }
+    spin_lock(&bkl_trace_lock);
+    if (bkl_tracing && bkl_trace_thread == tid && start >= bkl_trace.first.after &&
+        (row = trace_append()) != NULL) {
+        row->at = end;
+        row->since = start;
+        row->waited = 0;
+        row->tid = tid;
+        row->nr = (int32_t)nr;
+        row->arg = 0;
+        row->vector = BKL_CALL_VECTOR;
+        row->cpu = (uint8_t)arch_cpu_id();
+        row->kind = BKL_TRACE_CALL;
     }
     spin_unlock(&bkl_trace_lock);
 }
@@ -877,10 +914,12 @@ int bkl_note_ioctl(uint32_t cmd)
 
 void smp_call_end(uint32_t nr, int ioctl, uint64_t start)
 {
-    uint64_t wall = start != 0 ? arch_cycles() - start : 0;
+    uint64_t end = start != 0 ? arch_cycles() : 0;
+    uint64_t wall = end != 0 ? end - start : 0;
     struct bkl_tally *t = tallies_for(current_proc);
     int key = nr < BKL_ENTRY_SYSCALLS ? (int)nr : BKL_KEY_BIGCALL;
 
+    trace_call(nr, start, end);
     if (!t) {
         return;
     }
@@ -1628,11 +1667,26 @@ static int trace_command(const char *word, uint32_t len, const char *cmd)
     return i == len && cmd[i] == 0;
 }
 
+/** Read a positive decimal TID, or zero for an invalid or absent one. */
+static uint32_t trace_thread_id(const char *digits, uint32_t len)
+{
+    uint32_t tid = 0, i, digit;
+
+    for (i = 0; i < len; i++) {
+        digit = (uint32_t)(digits[i] - '0');
+        if (digit > 9 || tid > (0x7fffffffu - digit) / 10u) {
+            return 0;
+        }
+        tid = tid * 10u + digit;
+    }
+    return tid;
+}
+
 int32_t smp_trace_store(void *data, const char __user *buf, uint32_t len)
 {
     struct bkl_trace_row *rows = NULL;
-    char word[7];
-    uint32_t n = len, flags;
+    char word[18];
+    uint32_t n = len, flags, thread = 0;
     int start, stop;
 
     (void)data;
@@ -1646,6 +1700,10 @@ int32_t smp_trace_store(void *data, const char __user *buf, uint32_t len)
         n--;
     }
     start = trace_command(word, n, "start");
+    if (n > 6 && trace_command(word, 6, "start ")) {
+        thread = trace_thread_id(word + 6, n - 6);
+        start = thread != 0;
+    }
     stop = trace_command(word, n, "stop");
     if (!start && !stop && !trace_command(word, n, "clear")) {
         return -EINVAL;
@@ -1668,6 +1726,7 @@ int32_t smp_trace_store(void *data, const char __user *buf, uint32_t len)
         }
     } else {
         bkl_tracing = 0;
+        bkl_trace_thread = thread;
         bkl_trace.version = 1;
         bkl_trace.count = 0;
         bkl_trace.lost = 0;
