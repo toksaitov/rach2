@@ -207,7 +207,11 @@ def main():
                         help="Debian's reference: no Rach2 kernel traces")
     parser.add_argument("--mesa-cache-parent", type=Path, metavar="DIR",
                         help="put the pictures' fresh Mesa caches under DIR")
+    parser.add_argument("--mesa-cache-parts", type=int, metavar="N",
+                        help="set the number of parts in the browser's Mesa cache database")
     args = parser.parse_args()
+    if args.mesa_cache_parts is not None and args.mesa_cache_parts < 1:
+        parser.error("--mesa-cache-parts must be positive")
     user = args.user
     account = pwd.getpwnam(user)
     if os.getuid() != 0 or account.pw_uid == 0:
@@ -246,6 +250,8 @@ def main():
             pid = weston_pid()
             run(client_command(user, ["vkcube", "--wsi", "wayland", "--c", "300"]),
                 display / "cube.log", env)
+            if args.mesa_cache_parts is not None:
+                env["MESA_DISK_CACHE_DATABASE_NUM_PARTS"] = str(args.mesa_cache_parts)
             bare_pictures(out, work, pid, account, env, args.bare, cache_root)
             if args.profiled:
                 profiled_pictures(out, work, pid, account, env, not args.linux, args.all, cache_root)
