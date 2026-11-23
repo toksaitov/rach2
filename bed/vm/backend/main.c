@@ -608,7 +608,10 @@ static void beat_stop(struct beater *b)
  * until idle, then wait on the doorbells and virglrenderer's poll
  * descriptor. Fences complete on virglrenderer's threads as they signal
  * (`retire` in virgl.c); only when they are polled instead does a fence
- * pending cut the wait to a millisecond. A transport with doorbells sleeps
+ * pending cut the wait to a millisecond, and so does, either way, a
+ * command held whose fence the renderer refused, which no renderer thread
+ * will wake the loop for and which each turn asks the renderer for again
+ * (`fence_retry` in device.c). A transport with doorbells sleeps
  * until one rings; without, it polls each millisecond. A step that finds
  * work after a wait no doorbell ended counts as polled. Each turn beats for the stall report's
  * watch, and a fenced command that waits too long is reported (`fence_watch`).
@@ -617,6 +620,7 @@ static void serve(struct vd *d, struct src *s, struct vr *r, int once, const cha
 {
     struct pollfd p[VECTORS + 1];
     int i, ret = VD_IDLE, rung = 1, timeout;
+    uint32_t pending, unfenced;
     uint64_t seen = 0;
     time_t since = 0, next = 0;
 
@@ -646,7 +650,8 @@ static void serve(struct vd *d, struct src *s, struct vr *r, int once, const cha
         vr_poll(r);
         vd_kick(d);
         fence_watch(d, s, r, &seen, &since, &next);
-        timeout = !vr_async_fence(r) && vd_pending(d, 0, 0) ? 1 : 1000;
+        pending = vd_pending(d, 0, &unfenced);
+        timeout = unfenced || (!vr_async_fence(r) && pending) ? 1 : 1000;
         if (s->efd[0] < 0 || !(d->drv.transport_features & VGS_TF_DOORBELL) ||
             d->me.state != VGS_DEV_RUNNING) {
             timeout = 1;
