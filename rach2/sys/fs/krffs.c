@@ -354,11 +354,20 @@ struct krffs_name_entry {
 static struct krffs_name_entry krffs_names[KRFFS_NAMES];
 /* Never 0, which marks an empty entry. */
 static uint64_t krffs_names_gen = 1;
+/* The low word of `krffs_names_gen`, one store that a reader without the
+ * big lock cannot see half made (`krffs_names_stamp`). */
+static volatile uint32_t krffs_names_word = 1;
 
 /** Make every entry of the lookup cache stale. */
 static void krffs_names_moved(void)
 {
     krffs_names_gen++;
+    krffs_names_word = (uint32_t)krffs_names_gen;
+}
+
+uint32_t krffs_names_stamp(void)
+{
+    return krffs_names_word;
 }
 
 /**
