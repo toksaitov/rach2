@@ -216,11 +216,11 @@ def bare_pictures(out, work, weston, account, env, count, cache_root):
         missed(out / name, name)
 
 
-def profiled_pictures(out, work, weston, account, env, kernel, every, cache_root, gpu_calls):
-    """Trace fresh immediate pictures until a frame misses its bound, or all four with EVERY."""
+def profiled_pictures(out, work, weston, account, env, kernel, count, every, cache_root, gpu_calls):
+    """Trace up to COUNT fresh pictures, stopping at a miss unless EVERY is set."""
     env = dict(env, RACH2_BROWSER_TRACE="1")
     what = "Chromium, Weston and DRM" if kernel else "Chromium and Weston"
-    for index in range(1, 5):
+    for index in range(1, count + 1):
         name = "immediate-%d" % index
         print("webgpu: measure %s with %s tracing" % (name, what), flush=True)
         collect(out / name, work / name, 0, weston, account, env, joined=True, kernel=kernel,
@@ -240,8 +240,10 @@ def main():
                        help="draw one picture with Chromium and GPU file calls traced")
     parser.add_argument("--bare", type=int, default=0, metavar="N",
                         help="first draw N pictures without probes")
+    parser.add_argument("--traced", type=int, default=4, metavar="N",
+                        help="draw up to N pictures with --profiled")
     parser.add_argument("--all", action="store_true",
-                        help="trace all four pictures, not only up to the first miss")
+                        help="draw the full traced count even when a picture misses")
     parser.add_argument("--linux", action="store_true",
                         help="Debian's reference: no Rach2 kernel traces")
     parser.add_argument("--gpu-calls", action="store_true",
@@ -251,6 +253,8 @@ def main():
     parser.add_argument("--mesa-cache-parts", type=int, metavar="N",
                         help="set the number of parts in the browser's Mesa cache database")
     args = parser.parse_args()
+    if args.traced < 1:
+        parser.error("--traced must be positive")
     if args.mesa_cache_parts is not None and args.mesa_cache_parts < 1:
         parser.error("--mesa-cache-parts must be positive")
     if args.gpu_calls and not args.profiled:
@@ -297,7 +301,7 @@ def main():
                 env["MESA_DISK_CACHE_DATABASE_NUM_PARTS"] = str(args.mesa_cache_parts)
             bare_pictures(out, work, pid, account, env, args.bare, cache_root)
             if args.profiled:
-                profiled_pictures(out, work, pid, account, env, not args.linux, args.all,
+                profiled_pictures(out, work, pid, account, env, not args.linux, args.traced, args.all,
                                   cache_root, args.gpu_calls)
             elif args.file_trace:
                 print("webgpu: measure GPU file calls", flush=True)

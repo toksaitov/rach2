@@ -1,10 +1,11 @@
 """Account for the first WebGPU command batch on the GPU's main thread."""
+import argparse
 from collections import Counter
 import gzip
 import json
 from pathlib import Path
 import re
-import sys
+from statistics import median
 
 from read import HOLD, RUN, SELECT, kernel
 
@@ -174,6 +175,47 @@ def report(case):
                   (FILE.get(nr, nr), counts[nr], wall[nr] * scale, cycles * scale))
 
 
+def sample(out):
+    """Read the 30 probe-free and 10 traced pictures of a matched run."""
+    bare = sorted(out.glob("bare-*"))
+    traced = sorted(out.glob("immediate-*"))
+    if len(bare) != 30 or len(traced) != 10:
+        raise ValueError(f"{out} needs 30 probe-free and 10 traced pictures")
+    misses = 0
+    for case in bare + traced:
+        data = json.loads((case / "out/result.json").read_text())
+        picture, readback = data["picture"], data["readback"]
+        times = picture["frameTimes"]
+        if (len(times) != 480 or picture["frames"] != 480 or not picture["ok"]
+                or picture["adapter"]["vendor"] != "intel"
+                or picture["adapter"]["architecture"] != "gen-7"
+                or readback["words"] != 1024 or readback["errors"] != 0
+                or readback["pixel"] != [255, 128, 0, 255]):
+            raise ValueError(f"{case} did not draw the reference picture")
+        early = max(round(times[index + 1] - times[index], 3) for index in range(15))
+        misses += case in bare and early > 33.5
+    durations = sorted(batch(case)["dur"] / 1000 for case in traced)
+    return misses, median(durations), durations[8]
+
+
+def compare(rach2, debian):
+    """Compare the miss count, median and nearest-rank 90th percentile."""
+    actual, reference = sample(rach2), sample(debian)
+    for system, (misses, middle, p90) in (("Rach2", actual), ("Debian", reference)):
+        print(f"{system}: {misses}/30 early misses, batch median {middle:.3f} ms,"
+              f" p90 {p90:.3f} ms")
+    return 0 if all(value <= limit for value, limit in zip(actual, reference)) else 1
+
+
 if __name__ == "__main__":
-    for arg in sys.argv[1:]:
-        report(Path(arg))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("capture", nargs="*", type=Path, help="traced picture directory")
+    parser.add_argument("--compare", nargs=2, type=Path, metavar=("RACH2", "DEBIAN"),
+                        help="judge the two matched 40-picture runs")
+    args = parser.parse_args()
+    if args.compare:
+        if args.capture:
+            parser.error("--compare takes the two run directories")
+        raise SystemExit(compare(*args.compare))
+    for capture in args.capture:
+        report(capture)
