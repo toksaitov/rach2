@@ -158,6 +158,9 @@ typedef enum {
     VM_SHARED /* a shared mapping: of a file in memory, or of shared anonymous memory */
 } vm_type_t;
 
+/* The number of region types, VM_NONE among them. */
+#define VM_TYPES 8
+
 /*
  * A file a region maps. The record is the first member of its owner's own,
  * which keeps the open file; `refs` counts the regions that map it and the
@@ -329,7 +332,11 @@ typedef struct vm_space {
     struct vm_chunk *chunks; /* allocations owned by this space */
     uint32_t cap;            /* allocated nodes: live, detached and spare */
     uint32_t count;
-    uintptr_t total;       /* bytes covered by all regions */
+    uintptr_t total; /* bytes covered by all regions */
+    /* The bytes of the regions of each type, by vm_type_t, which sum to
+     * `total`; each word is changed with the regions and may be read
+     * without their lock, as Linux reads mm's counters. */
+    uintptr_t type_total[VM_TYPES];
     uintptr_t heap_start;  /* initial program break (base of the heap VMA) */
     uintptr_t brk;         /* current program break (top of the heap VMA)  */
     uintptr_t stack_limit; /* lowest address the stack VMA may grow down to */
@@ -681,8 +688,12 @@ uintptr_t vm_find_mmap(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t ba
 /** Bytes of [start, end) that regions cover. */
 uintptr_t vm_covered(const vm_space_t *vm, uintptr_t start, uintptr_t end);
 
-/** Bytes the regions cover together: what RLIMIT_AS is measured against. */
+/** Bytes the regions cover together: what RLIMIT_AS is measured against.
+ * The word is read once, and the caller need not hold the regions' lock. */
 uintptr_t vm_total(const vm_space_t *vm);
+
+/** Bytes the regions of type `type` cover together, read as `vm_total`. */
+uintptr_t vm_type_total(const vm_space_t *vm, vm_type_t type);
 
 /**
  * Grow a VM_STACK region down to start at `page`, page-aligned, for a fault
