@@ -1808,19 +1808,9 @@ void bkl_enter(void)
 
 int bkl_held(void)
 {
-    const process_t *p = current_proc;
-    uintptr_t here = (uintptr_t)&p;
-    uint32_t flags;
-    int held;
+    uint32_t flags = kirq_save();
+    int held = this_cpu()->bkl_depth > 0;
 
-    /* The thread found is the caller only when this frame is on its stack,
-     * since a switchable caller may move between the two reads. */
-    if (p && (p->no_tick_switch || p->in_syscall || p->in_fault) && here < p->kernel_stack &&
-        here >= p->kernel_stack - KERNEL_STACK_SIZE) {
-        return this_cpu()->bkl_depth > 0;
-    }
-    flags = kirq_save();
-    held = this_cpu()->bkl_depth > 0;
     kirq_restore(flags);
     return held;
 }
