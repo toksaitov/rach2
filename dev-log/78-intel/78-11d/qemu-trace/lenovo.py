@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(Path("tests/graphics/lenovo").resolve()))
@@ -20,6 +20,7 @@ from stall import frames
 
 TRACE = Path("/sys/kernel/debug/bkl/trace")
 DRM_TRACE = Path("/sys/kernel/debug/drm_frame_trace")
+TRACEFS = Path("/sys/kernel/tracing/instances")
 
 
 def desktop_dir(path, account):
@@ -81,9 +82,39 @@ def file_tracer(process, output, log):
         if not attached:
             stop(tracer)
 
+@contextmanager
+def linux_calls(tid, output):
+    """Record syscall edges and scheduler switches of one Debian thread."""
+    instance = TRACEFS / ("webgpu-%d" % os.getpid())
+    instance.mkdir()
+    running = instance / "tracing_on"
+    try:
+        running.write_text("0\n")
+        (instance / "trace_clock").write_text("mono\n")
+        (instance / "buffer_size_kb").write_text("8192\n")
+        filters = {
+            "events/raw_syscalls/sys_enter": "common_pid == %d" % tid,
+            "events/raw_syscalls/sys_exit": "common_pid == %d" % tid,
+            "events/sched/sched_switch": "prev_pid == %d || next_pid == %d" % (tid, tid),
+        }
+        for event, predicate in filters.items():
+            (instance / event / "filter").write_text(predicate + "\n")
+            (instance / event / "enable").write_text("1\n")
+        marker = instance / "trace_marker"
+        running.write_text("1\n")
+        try:
+            marker.write_text("webgpu-start\n")
+            yield
+        finally:
+            marker.write_text("webgpu-stop\n")
+            running.write_text("0\n")
+            shutil.copyfile(instance / "trace", output)
+    finally:
+        instance.rmdir()
+
 
 def collect(case, work, settle, weston, account, env, joined=False, kernel=True,
-            cache_root=None, files=False):
+            cache_root=None, files=False, gpu_calls=False):
     """Record the picture, with the kernel from just before readback until it answers.
 
     JOINED adds Weston's timeline and drm-backend streams, and on Rach2 the
@@ -92,6 +123,7 @@ def collect(case, work, settle, weston, account, env, joined=False, kernel=True,
     CACHE_ROOT puts this picture's fresh Mesa cache outside the browser's
     work directory without moving its profile or Weston's cache.
     FILES records the GPU thread's file calls and changes their timing.
+    GPU_CALLS traces its system calls and switches in the kernel.
     """
     case.mkdir()
     out = case / "out"
@@ -111,7 +143,7 @@ def collect(case, work, settle, weston, account, env, joined=False, kernel=True,
     begun = stopped = False
     tracer = None
     calls = case / "gpu-files.strace"
-    with streams, (case / "measure.log").open("w", buffering=1) as log:
+    with streams, ExitStack() as calls_trace, (case / "measure.log").open("w", buffering=1) as log:
         browser = subprocess.Popen(command, env=env, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=log, text=True,
                                    start_new_session=True)
@@ -122,8 +154,14 @@ def collect(case, work, settle, weston, account, env, joined=False, kernel=True,
                 if line == "webgpu: trace start\n" and not begun:
                     if files:
                         tracer = file_tracer(browser_gpu(work / "profile"), calls, log)
+                    if gpu_calls:
+                        tid = int(browser_gpu(work / "profile").name)
+                        (case / "gpu-tid").write_text("%d\n" % tid)
+                        if not kernel:
+                            calls_trace.enter_context(linux_calls(tid, case / "linux-calls"))
                     for path, name in traces:
-                        path.write_text("start\n")
+                        path.write_text("start %d\n" % tid if path == TRACE and gpu_calls
+                                        else "start\n")
                         started.append((path, name))
                     begun = True
                     browser.stdin.write("start\n")
@@ -131,6 +169,7 @@ def collect(case, work, settle, weston, account, env, joined=False, kernel=True,
                 elif line == "webgpu: trace stop\n" and begun and not stopped:
                     for path, _ in reversed(started):
                         path.write_text("stop\n")
+                    calls_trace.close()
                     stop(tracer)
                     tracer = None
                     stopped = True
@@ -177,7 +216,7 @@ def bare_pictures(out, work, weston, account, env, count, cache_root):
         missed(out / name, name)
 
 
-def profiled_pictures(out, work, weston, account, env, kernel, every, cache_root):
+def profiled_pictures(out, work, weston, account, env, kernel, every, cache_root, gpu_calls):
     """Trace fresh immediate pictures until a frame misses its bound, or all four with EVERY."""
     env = dict(env, RACH2_BROWSER_TRACE="1")
     what = "Chromium, Weston and DRM" if kernel else "Chromium and Weston"
@@ -185,7 +224,7 @@ def profiled_pictures(out, work, weston, account, env, kernel, every, cache_root
         name = "immediate-%d" % index
         print("webgpu: measure %s with %s tracing" % (name, what), flush=True)
         collect(out / name, work / name, 0, weston, account, env, joined=True, kernel=kernel,
-                cache_root=cache_root)
+                cache_root=cache_root, gpu_calls=gpu_calls)
         if missed(out / name, name) and not every:
             break
 
@@ -205,6 +244,8 @@ def main():
                         help="trace all four pictures, not only up to the first miss")
     parser.add_argument("--linux", action="store_true",
                         help="Debian's reference: no Rach2 kernel traces")
+    parser.add_argument("--gpu-calls", action="store_true",
+                        help="trace only the GPU thread's calls, switches and lock holds")
     parser.add_argument("--mesa-cache-parent", type=Path, metavar="DIR",
                         help="put the pictures' fresh Mesa caches under DIR")
     parser.add_argument("--mesa-cache-parts", type=int, metavar="N",
@@ -212,6 +253,8 @@ def main():
     args = parser.parse_args()
     if args.mesa_cache_parts is not None and args.mesa_cache_parts < 1:
         parser.error("--mesa-cache-parts must be positive")
+    if args.gpu_calls and not args.profiled:
+        parser.error("--gpu-calls needs --profiled")
     user = args.user
     account = pwd.getpwnam(user)
     if os.getuid() != 0 or account.pw_uid == 0:
@@ -254,7 +297,8 @@ def main():
                 env["MESA_DISK_CACHE_DATABASE_NUM_PARTS"] = str(args.mesa_cache_parts)
             bare_pictures(out, work, pid, account, env, args.bare, cache_root)
             if args.profiled:
-                profiled_pictures(out, work, pid, account, env, not args.linux, args.all, cache_root)
+                profiled_pictures(out, work, pid, account, env, not args.linux, args.all,
+                                  cache_root, args.gpu_calls)
             elif args.file_trace:
                 print("webgpu: measure GPU file calls", flush=True)
                 collect(out / "files", work / "files", 0, pid, account,

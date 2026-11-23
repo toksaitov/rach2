@@ -352,6 +352,11 @@ on the guest's time-stamp counter.
 A write of
 .Ql start
 allocates and empties a buffer of 524288 records and starts recording.
+.Ql start TID
+limits the trace to a positive decimal thread ID.
+It also records that thread's completed system calls when the kernel
+was booted with
+.Ql rach2.cycleaccount .
 A write of
 .Ql stop
 stops recording for a read, and
@@ -367,12 +372,14 @@ Each is three little-endian 64-bit words: the cycle count before the
 monotonic clock reading, the count after it, and the monotonic nanoseconds.
 .Pp
 Each 40-byte record has three 64-bit words for the event timestamp, the
-hold's start and its wait in cycles; three 32-bit words for the guest thread
+hold or call's start and the hold's wait in cycles; three 32-bit words for the guest thread
 ID, the signed system call number and a kind-specific argument; a 16-bit
 interrupt vector and one byte each for processor and record kind.
 Kind 1 is a wake, kind 2 a selection (its argument is the outgoing thread
 ID), kind 3 a resumption, and kind 4 a lock hold (its argument is the ioctl
 request if known, or zero).
+Kind 5 is a completed system call, with the end timestamp and no wait
+or argument.
 For a hold, the thread ID is that of the thread at acquisition and the
 event timestamp is the end; the wait spans the cycles preceding its start.
 The vector and system call are the entry the hold is charged to, as in
