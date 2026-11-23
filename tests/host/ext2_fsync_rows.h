@@ -167,8 +167,10 @@ static void fsync_pad(void)
  * table block: it writes the file's blocks in one run, on a device that
  * takes 32 blocks at once, its bitmap and descriptor block and its inode's
  * table block, four requests, and leaves every block of the neighbour
- * dirty. Both files' writes are drained into the cache first by a close,
- * which writes nothing, so the row sees which blocks were dirty and for whom.
+ * dirty. The neighbour's close drains its writes into the cache, and the
+ * close of a second open of the file drains the file's, since a close drains
+ * only a batch that holds its node; neither writes, so the row sees which
+ * blocks were dirty and for whom.
  */
 static void fsync_neighbour_row(void)
 {
@@ -201,11 +203,11 @@ static void fsync_neighbour_row(void)
     check(write_at(b, next, sizeof(next), 0) == 0 &&
               OPS->write(&mnt, h, own, sizeof(own), 4096) == (int32_t)sizeof(own),
           "its neighbour writes 150 blocks and the file four more");
-    check(OPS->open(&mnt, b, 2, &drain) == 0, "the neighbour opens again");
+    check(OPS->open(&mnt, a, 2, &drain) == 0, "the file opens again");
     if (drain) {
         OPS->release(&mnt, drain);
     }
-    check(writes_made == before, "and a close drains both into the cache with no write");
+    check(writes_made == before, "and the closes drain both into the cache with no write");
     fsync_note();
     neighbour = fsync_owned_dirty(other);
     check(neighbour == 151 && fsync_owned_dirty(ino) == 4,
