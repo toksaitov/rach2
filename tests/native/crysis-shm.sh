@@ -44,9 +44,11 @@ cleanup()
             fi
             sleep 0.1
         done
-        # bed-shm.sh put weston.ini back, but a session may have started
-        # on the changed file, as when QEMU ended early and the GPU came
-        # back before that; start it again, or end it if none ran before.
+        # bed-shm.sh put weston.ini back, or failed the run and left it
+        # changed while the flyby's preparation might still write it; a
+        # session may have started on the changed file, as when QEMU ended
+        # early and the GPU came back before that; start it again, or end
+        # it if none ran before.
         if [ "$weston" = 1 ]; then
             sh ./crysis.sh session ran || status=1
         else
