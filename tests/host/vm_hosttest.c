@@ -335,13 +335,15 @@ static unsigned int tree_height(const vma_t *r, const vma_t *parent)
     return 1 + (l > h ? l : h);
 }
 
-/** Check ordered links, the cached byte count and a logarithmic tree height. */
+/** Check ordered links, the cached byte counts, the whole and of each type,
+ * and a logarithmic tree height. */
 static void tree_check(vm_space_t *vm)
 {
     const vma_t *r, *prev = NULL;
-    uintptr_t total = 0;
+    uintptr_t total = 0, types[VM_TYPES] = {0};
     uint32_t count = 0, n = vm->count;
     unsigned int bound = 0;
+    int type;
 
     for (r = vm_first(vm); r; r = vm_next(r)) {
         CHECK(r->prev == prev);
@@ -349,8 +351,12 @@ static void tree_check(vm_space_t *vm)
         CHECK(vm_find(vm, r->start) == r);
         CHECK(vm_find(vm, r->end - 1) == r);
         total += r->end - r->start;
+        types[r->type] += r->end - r->start;
         count++;
         prev = r;
+    }
+    for (type = 0; type < VM_TYPES; type++) {
+        CHECK(types[type] == vm_type_total(vm, (vm_type_t)type));
     }
     while (n) {
         bound += 2;
@@ -556,6 +562,7 @@ static void run_mapping_edges(void)
         CHECK(vm_insert(&s, 0x200000, 0x201000, VM_PROT_READ | VM_PROT_WRITE, VM_STACK) == 0);
         CHECK(vm_grow_stack(&s, 0x20000 + VM_STACK_GUARD_GAP - PG, 0xFFFFFFFFu) == 0);
         CHECK(vm_grow_stack(&s, 0x20000 + VM_STACK_GUARD_GAP, 0xFFFFFFFFu) == 1);
+        tree_check(&s);
         vm_free(&s);
     }
 }
