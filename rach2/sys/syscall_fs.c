@@ -40,6 +40,7 @@
 #include "dmabuf/dmabuf.h"
 #include "fs/lock.h"
 #include "fs/pathbuf.h"
+#include "fs/dcache.h"
 #include "ipc/pipe.h"
 #include "ipc/mqueue.h"
 #include "io/poll.h"
@@ -16110,11 +16111,17 @@ static int32_t new_name_parent(const char *path, struct vfs_ref *parent, char *l
 /**
  * Whether `name` is in directory `dir` of `mnt`: 1 or 0, or a negative errno
  * for a lookup that failed another way. The node a lookup takes goes back.
+ * The name is looked up through the name cache (`dcache_lookup`), as Linux's
+ * walk to a new name looks in the dcache first (`lookup_one_qstr_excl`,
+ * fs/namei.c): a type changes a directory's names under the directory's
+ * lock and forgets each name it changes, so the cache answers as the type
+ * would at some moment of the call, and a name made after it is the type's
+ * own -EEXIST at the creation.
  */
 static int name_present(struct vfs_mount *mnt, void *dir, const char *name)
 {
     void *found;
-    int rc = mnt->type->ops->lookup(mnt, dir, name, &found);
+    int rc = dcache_lookup(mnt, dir, name, &found);
 
     if (rc == -ENOENT) {
         return 0;
