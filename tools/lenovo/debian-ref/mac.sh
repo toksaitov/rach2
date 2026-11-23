@@ -29,7 +29,7 @@ OUTDIR=$M/build/runs/80-2
 LOCK=$M/build/flow/lenovo
 HOST=192.168.0.106
 SSHO="-i $KEY -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15"
-rssh() { /usr/bin/ssh $SSHO -o UserKnownHostsFile=$K2/lenovo-known root@$HOST "$@"; }
+rssh() { /usr/bin/ssh -o StrictHostKeyChecking=yes $SSHO -o UserKnownHostsFile=$K2/lenovo-known root@$HOST "$@"; }
 if [ "${REHEARSE:-0}" = 1 ]; then
 	OUTDIR=$M/build/runs/80-2-rehearsal
 	tssh() { /usr/bin/ssh $SSHO -o UserKnownHostsFile=$C/rehearse/known -p 2280 root@127.0.0.1 "$@"; }
@@ -45,19 +45,6 @@ waitfor() {
 		sleep 5
 	done
 	say "no answer in 360 s"; return 1
-}
-# p1write IMG: write the runs where IMG differs from p1 as read now, through
-# /dev/bootpart on the running Rach2, and print p1's hash afterwards.
-p1write() {
-	rssh 'dd if=/dev/bootpart bs=1048576 2>/dev/null' > $C/p1-now.img
-	python3 -I $D/p1runs.py "$1" $C/p1-now.img > $C/p1-write-runs.txt
-	say "p1: $(wc -l < $C/p1-write-runs.txt | tr -d ' ') runs differ from $(basename "$1")"
-	/usr/bin/scp -q $SSHO -o UserKnownHostsFile=$K2/lenovo-known "$1" root@$HOST:/dev/shm/p1-want.img
-	want=$(shasum -a 256 "$1" | cut -d' ' -f1)
-	{ echo 'set -e'; echo "[ \"\$(sha256sum /dev/shm/p1-want.img | cut -d' ' -f1)\" = $want ]"
-	  while read -r s n; do echo "dd if=/dev/shm/p1-want.img of=/dev/bootpart bs=1M iflag=skip_bytes,count_bytes oflag=seek_bytes skip=$((s * 512)) seek=$((s * 512)) count=$((n * 512)) status=none"; done < $C/p1-write-runs.txt
-	  echo 'sync; rm -f /dev/shm/p1-want.img; sha256sum /dev/bootpart'; } | rssh 'sh -s'
-	rm -f $C/p1-now.img
 }
 # grubmods: GRUB's linux, ext2 and fshelp modules in $C/grub, from the
 # grub-efi-amd64-bin package that vendor/grub/manifest.txt pins, whose build
@@ -82,24 +69,34 @@ lock)
 	echo 2560 > "$LOCK/issue"; say "lock taken for 2560" ;;
 unlock) rm -rf "$LOCK"; say "lock given back" ;;
 arm)
-	rssh 'grep -q rach2.slot=candidate /proc/cmdline' || { echo "mac: the Lenovo is not running Rach2's candidate" >&2; exit 1; }
-	rssh 'cat /etc/rach2/release; bootctl status' | tee $C/rach2-before.txt
-	rssh 'dd if=/dev/bootpart bs=1048576 2>/dev/null' > $C/p1-before.img
-	shasum -a 256 $C/p1-before.img | tee $C/p1-before.sha256
-	# Allocate in the current FAT: old sector runs can name a new file's
-	# clusters, and old FAT sectors can discard its allocation chains.
-	# Debian's kernel and initrd stay on p5, since with 16 MiB kernel slots
-	# p1 has 31 MB free and they take 49.
+	[ "${REHEARSE:-0}" != 1 ] && [ -s "$LOCK/issue" ] || exit 1
 	grubmods
-	cp $C/p1-before.img $C/p1-debian.img
-	mmd -i $C/p1-debian.img ::/boot/grub/x86_64-efi 2>/dev/null ||
-	    mdir -i $C/p1-debian.img ::/boot/grub/x86_64-efi > /dev/null
-	mcopy -o -i $C/p1-debian.img $C/grub/linux.mod $C/grub/ext2.mod $C/grub/fshelp.mod ::/boot/grub/x86_64-efi/
-	p1write $C/p1-debian.img
-	/usr/bin/scp -q $SSHO -o UserKnownHostsFile=$K2/lenovo-known $D/boot.cfg root@$HOST:/dev/shm/boot.cfg
-	rssh 'bootctl config /dev/shm/boot.cfg && bootctl trial recovery && bootctl status && rm -f /dev/shm/boot.cfg' | tee $C/arm.txt
+	rssh 'cat /etc/rach2/release; bootctl status' > "$C/rach2-before.txt"
+	cat "$C/rach2-before.txt"
+	stage_cmd=$(cat <<'REMOTE'
+set -eu
+stage=
+finished=
+trap 'rc=$?; [ -z "$stage" ] || rm -rf "$stage" || rc=1; [ -n "$finished" ] || [ "$rc" -ne 0 ] || rc=1; exit "$rc"' EXIT
+trap 'exit 1' HUP INT TERM
+stage=$(mktemp -d /dev/shm/debian-ref.XXXXXX)
+tar -xf - -C "$stage"
+sh "$stage/bootpart.sh" arm "$stage"
+finished=1
+REMOTE
+)
+	rc=0
+	COPYFILE_DISABLE=1 tar --no-xattrs --uid 0 --gid 0 -cf - \
+	    -C "$D" bootpart.sh boot.cfg p1runs.py -C "$C/grub" linux.mod ext2.mod fshelp.mod |
+	    rssh "$stage_cmd" > "$C/arm.txt" || rc=$?
+	cat "$C/arm.txt"
+	before=$(sed -n 's/^debian-boot: before: //p' "$C/arm.txt")
+	if [ -n "$before" ]; then printf '%s\n' "$before" > "$C/p1-before.sha256"; fi
+	[ "$rc" -eq 0 ] || exit "$rc"
+	printf '%s\n' "$before" | grep -Eq '^[0-9a-f]{64}$'
+	grep -Fxq 'bootctl: next_entry: recovery' "$C/arm.txt"
 	say "rebooting Rach2 into Debian"
-	rssh 'nohup sh -c "sleep 2; reboot" > /dev/null 2>&1 &'
+	rssh 'nohup sh -c "sleep 2; reboot" > /dev/null 2>&1 < /dev/null &' </dev/null
 	;;
 wait-debian) waitfor tssh ;;
 wait-rach2) waitfor rssh ;;
@@ -124,10 +121,16 @@ fetch)
 	;;
 leave) tssh 'sh /root/ref80/leave.sh --now' ;;
 restore)
-	rssh 'grep -q rach2.slot=candidate /proc/cmdline' || { echo "mac: the Lenovo is not running Rach2's candidate" >&2; exit 1; }
-	p1write $C/p1-before.img
-	echo "mac: want $(cut -d' ' -f1 $C/p1-before.sha256)"
-	rssh 'bootctl status'
+	[ "${REHEARSE:-0}" != 1 ] && [ -s "$LOCK/issue" ] || exit 1
+	if ! rssh 'sh -s restore' < "$D/bootpart.sh" > "$C/restore.txt"; then
+	    cat "$C/restore.txt" >&2
+	    exit 1
+	fi
+	cat "$C/restore.txt"
+	if [ -s "$C/p1-before.sha256" ]; then
+	    want=$(awk 'NR == 1 {print $1}' "$C/p1-before.sha256")
+	    grep -Fxq "debian-boot: restored: $want" "$C/restore.txt"
+	fi
 	;;
 rehearse-up) sh $D/rehearse.sh up ;;
 rehearse-down) sh $D/rehearse.sh down ;;
