@@ -5811,8 +5811,9 @@ int main(int argc, char **argv)
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
                "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
-               "process's arguments and status, stat and statm read and maps, smaps, numa_maps "
-               "and status killed under a held regions' lock, autogroup writes, oom_score_adj, "
+               "process's arguments, stat, statm and status read and maps, smaps, numa_maps, "
+               "cmdline, environ and mem killed under a held regions' lock, autogroup writes, "
+               "oom_score_adj, "
                "the maps' "
                "paths, the uptime idle sum, an interface's counts, a DRM device's /sys entries and "
                "uevents, a driver's attribute, link and PCI identity, a PCI function's BARs mapped "
