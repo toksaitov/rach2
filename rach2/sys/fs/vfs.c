@@ -2320,6 +2320,94 @@ struct cached_root {
     void *node;
 };
 
+/* `cached_named`'s answer for a nameless mount it entered. */
+#define WALK_NAMED 3
+
+static int cached_named(struct vfs_mount *mnt, const char *comp, struct vfs_ref *next);
+static int cached_cross(struct vfs_ref *cur, const struct vfs_mount **uncovered);
+
+/** Whether `mnt` with its node `node` is the root directory of the KRFFS
+ * boot root at the top of the mount table, or of a namespace's copy of it,
+ * where the cached walk may step to a mount without a lookup
+ * (`cached_hop`). The caller holds a lock that keeps `mnt`. */
+static int cached_hop_root(const struct vfs_mount *mnt, const void *node)
+{
+    return mnt->type == &vfs_krffs_type && node == mnt->root && node == krffs_fs->node &&
+           path_below(mnt) == 0;
+}
+
+/**
+ * The cached walk's first step from `root`, the root directory of the
+ * KRFFS boot root (`cached_hop_root`), whose names the name cache does not
+ * keep: into the mount that the first name of the absolute `*path` enters,
+ * as the full walk would after its lookup of that name, with `*path` moved
+ * past the name. That is a nameless mount entered by the name
+ * (`cached_named`), or the mount that covers the node of that name, whose
+ * recorded path is a slash and the name, since a mount's target is neither
+ * renamed nor removed and a KRFFS directory never moves; then the mounts
+ * over its root in turn (`cached_cross`). The search check of the root
+ * directory, whose mode is 0755 whatever its header says (`kfs_getattr`),
+ * passes for every caller. `root` is compared and not read, so the caller
+ * need not hold it. 0 with `cur` entered and held, or WALK_FULL with
+ * nothing taken, for a name no mount takes, `.` and `..` among them, and
+ * for what `cached_named` and `cached_cross` leave to the full walk. The
+ * caller checks the walk sequence before using the answer. May sleep
+ * (`cached_put`).
+ */
+static int cached_hop(struct vfs_mount *root, const char **path, struct vfs_ref *cur)
+{
+    const char *p = *path + 1;
+    char comp[VFS_NAME_MAX + 1];
+    struct vfs_mount *over = NULL;
+    uint32_t len = 0, flags;
+    int i, rc = 0;
+
+    while (p[len] != '\0' && p[len] != '/') {
+        len++;
+    }
+    if (len == 0 || len > VFS_NAME_MAX) {
+        return WALK_FULL;
+    }
+    k_memcpy(comp, p, len);
+    comp[len] = '\0';
+    if (streq(comp, ".") || streq(comp, "..")) {
+        return WALK_FULL;
+    }
+    rc = cached_named(root, comp, cur);
+    if (rc == 0) {
+        flags = spin_lock_irqsave(&mount_table_lock);
+        for (i = 1; i < mount_slots && !over && rc == 0; i++) {
+            struct vfs_mount *m = mounts[i];
+            int seen;
+
+            if (!m || m->state == VFS_FREE || m->parent != root || !m->covered ||
+                m->covered_path[0] != '/' || !streq(m->covered_path + 1, comp)) {
+                continue;
+            }
+            seen = vfs_mount_seen_word(m);
+            if (seen < 0) {
+                rc = WALK_FULL;
+            } else if (seen) {
+                over = m;
+            }
+        }
+        rc = rc != 0 || !over ? WALK_FULL : cached_take(over, over->root, cur);
+        spin_unlock_irqrestore(&mount_table_lock, flags);
+    } else if (rc == WALK_NAMED) {
+        rc = 0;
+    }
+    if (rc != 0) {
+        return WALK_FULL;
+    }
+    if (cached_cross(cur, NULL) != 0) {
+        cached_put(cur->mnt, cur->node);
+        vfs_leave(cur->mnt);
+        return WALK_FULL;
+    }
+    *path = p + len;
+    return 0;
+}
+
 /**
  * Where the cached walk of `path` starts, entered and held into `cur`: the
  * caller's `start` for a relative path, which the caller holds, else the
@@ -2337,46 +2425,59 @@ struct cached_root {
  * does not judge, among others. May sleep, to drop a root that moved
  * (`cached_put`).
  */
-static int cached_start(const struct vfs_ref *start, const char *path, struct vfs_ref *cur,
+static int cached_start(const struct vfs_ref *start, const char **path, struct vfs_ref *cur,
                         struct cached_root *seen)
 {
     struct fs_struct *fs = current_proc ? current_proc->fs : NULL;
+    struct vfs_ref root = {NULL, NULL};
+    const char *p = *path;
     uint32_t flags;
+    int hop = 0;
     int rc = -1;
 
-    if (path[0] != '/' && start) {
+    if (p[0] != '/' && start) {
         return vfs_mount_seen_word(start->mnt) == 1 ? cached_take(start->mnt, start->node, cur)
                                                     : WALK_FULL;
     }
-    if (path[0] == '/' && path[1] == '/') {
+    if (p[0] == '/' && p[1] == '/') {
         return WALK_FULL;
     }
     if (fs) {
         flags = spin_lock_irqsave(&fs->lock);
-        rc = fs->root_mnt ? cached_take(fs->root_mnt, fs->root_node, cur) : -1;
+        if (fs->root_mnt) {
+            root.mnt = fs->root_mnt;
+            root.node = fs->root_node;
+            hop = p[0] == '/' && cached_hop_root(root.mnt, root.node);
+            rc = hop ? 0 : cached_take(root.mnt, root.node, cur);
+        }
         spin_unlock_irqrestore(&fs->lock, flags);
     }
     if (rc < 0) {
         flags = spin_lock_irqsave(&mount_table_lock);
-        rc = cached_take(mounts[0], mounts[0]->root, cur);
+        root.mnt = mounts[0];
+        root.node = mounts[0]->root;
+        hop = p[0] == '/' && cached_hop_root(root.mnt, root.node);
+        rc = hop ? 0 : cached_take(root.mnt, root.node, cur);
         spin_unlock_irqrestore(&mount_table_lock, flags);
     }
     if (rc != 0) {
         return rc;
     }
-    if (seen->taken && (seen->mnt != cur->mnt || seen->node != cur->node)) {
-        cached_put(cur->mnt, cur->node);
-        vfs_leave(cur->mnt);
+    if (seen->taken && (seen->mnt != root.mnt || seen->node != root.node)) {
+        if (!hop) {
+            cached_put(cur->mnt, cur->node);
+            vfs_leave(cur->mnt);
+        }
+        return WALK_FULL;
+    }
+    if (hop && cached_hop(root.mnt, path, cur) != 0) {
         return WALK_FULL;
     }
     seen->taken = 1;
-    seen->mnt = cur->mnt;
-    seen->node = cur->node;
+    seen->mnt = root.mnt;
+    seen->node = root.node;
     return 0;
 }
-
-/* `cached_named`'s answer for a nameless mount it entered. */
-#define WALK_NAMED 3
 
 /**
  * Enter the nameless mount that `comp` names from the root directory of
@@ -2683,6 +2784,7 @@ static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struc
                        struct cached_dots *dd)
 {
     struct vfs_ref root = {NULL, NULL};
+    const char *slash = "/";
     int tlen = -1, rc;
 
     if (cur->mnt->type->ops->readlink_cached && ++lk->links <= VFS_LINK_MAX &&
@@ -2692,7 +2794,7 @@ static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struc
     }
     cached_put(cur->mnt, found);
     rc = tlen < 0 ? -1 : walk_splice(lk->linkpath, lk->target, tlen, rest);
-    if (rc < 0 || (rc == 1 && cached_start(NULL, "/", &root, &lk->root) != 0)) {
+    if (rc < 0 || (rc == 1 && cached_start(NULL, &slash, &root, &lk->root) != 0)) {
         return WALK_FULL;
     }
     if (rc == 1) {
@@ -2769,7 +2871,7 @@ static int resolve_cached(const struct vfs_ref *start, uint64_t seq, const char 
     rec.entry = entry;
     rec.mode = 0;
     rec.seq = seq;
-    if (cached_start(start, path, &cur, &lk.root) != 0) {
+    if (cached_start(start, &p, &cur, &lk.root) != 0) {
         return WALK_FULL;
     }
     for (;;) {
