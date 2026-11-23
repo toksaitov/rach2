@@ -4597,7 +4597,7 @@ uint64_t vfs_data_at(struct vfs_mount *mnt, void *handle, uint64_t offset, uint6
     return mnt->type->ops->data_at(mount_base(mnt), handle, offset, end);
 }
 
-int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
+int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name, int missing)
 {
     struct vfs_stat was, parent;
     int watched;
@@ -4610,10 +4610,10 @@ int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
     if (mount_rdonly(mnt) || !mnt->type->ops->unlink) {
         return -EROFS;
     }
-    if (guard_node(mnt, dir) || guard_entry(mnt, dir, name)) {
+    if (guard_node(mnt, dir) || (!missing && guard_entry(mnt, dir, name))) {
         return -EPERM; /* may_delete's rule */
     }
-    watched = inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
+    watched = !missing && inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
               watched_node(mnt, dir, &parent) == 0;
     vfs_name_change_begin();
     dcache_forget(mount_base(mnt), dir, name);
