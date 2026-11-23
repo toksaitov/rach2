@@ -453,7 +453,13 @@ static int ofd_idle(void *arg)
  * namespace lock (`fs_read_at`). `busy` is taken by an atomic exchange,
  * since a read of a file of a type that sets `reads_unlocked` takes it
  * without the big lock; the waiter is on the queue before it looks again,
- * so the give's wake does not pass it by.
+ * so the give's wake does not pass it by. The give wakes the queue only
+ * when it has a sleeper, as Linux's `__mutex_unlock_slowpath` wakes only
+ * with a waiter recorded: a wake of an empty queue costs a pass with
+ * interrupts off, on every read and seek. Its exchange is a full barrier
+ * before the read of the queue, and a waiter passes one between its filing
+ * and its test (`wq_wait`), so either the waiter sees the lock free or the
+ * give sees the waiter.
  */
 void fd_ofd_lock(struct open_file *ofd)
 {
@@ -473,7 +479,9 @@ void fd_ofd_unlock(struct open_file *ofd)
         vfs_ns_unlock(ofd->vmnt);
     }
     (void)arch_atomic_xchg((volatile unsigned int *)&ofd->busy, 0);
-    wq_wake_all(&ofd_rec_of(ofd)->wq);
+    if (wq_active(&ofd_rec_of(ofd)->wq)) {
+        wq_wake_all(&ofd_rec_of(ofd)->wq);
+    }
 }
 
 int fd_node_busy(struct vfs_mount *mnt, void *node)
