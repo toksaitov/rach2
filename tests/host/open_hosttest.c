@@ -2343,6 +2343,12 @@ void bkl_yield(void)
 void arch_relax(void)
 {}
 
+/** Whether a parked call waits on `wq`. */
+int wq_active(const wait_queue_t *wq)
+{
+    return parked_on && wq == parked_on;
+}
+
 /** Count a wake of the queue a parked call waits on. */
 void wq_wake_all(wait_queue_t *wq)
 {
