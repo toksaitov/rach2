@@ -310,19 +310,89 @@ static int krffs_write_fits(krffs_mount_t *mount, uint64_t at, const void *value
 }
 
 /**
- * Write `size` bytes of `buffer` at `at` of the region through the backend.
- * Every write of the core comes here. A halted mount (`krffs_withdraw`) has
+ * Write `size` bytes of `buffer` at `at` of the region through the backend,
+ * leaving the lookup cache's count, for a write that changes no answer of a
+ * lookup (`krffs_backend_write` moves it). Every write of the core comes
+ * here. A halted mount (`krffs_withdraw`) has
  * one name on two nodes in the running kernel, so it takes no write at all
  * until the next mount's repair, as Linux's ext4 turns read-only after an
  * error: a write to either node, a removal or a rename would act on one
  * node of the two. Returns the backend's answer, or -1 when halted.
  */
-static int krffs_backend_write(krffs_mount_t *mount, uint64_t at, const void *buffer, uint32_t size)
+static int krffs_backend_store(krffs_mount_t *mount, uint64_t at, const void *buffer, uint32_t size)
 {
     if (mount->halted) {
         return -1;
     }
     return mount->backend->write(mount->ctx, at, buffer, size);
+}
+
+/*
+ * The boot root's lookup cache: what `krffs_find_child_err` answered, a
+ * node's offset or none, by directory and name, since a lookup that is not
+ * in it reads the brief header of every node in the ring. A write that can
+ * change what a lookup finds, of a header's type, identifier, name, sizes
+ * or parent, moves `krffs_names_gen` once it is made, and an entry stands
+ * only while the count is the one its lookup began with, so no entry
+ * outlives a change of the ring. A file's bytes, mode, owner, times and
+ * length leave every lookup's answer, and their writes leave the count
+ * (`krffs_backend_store`). The kernel calls the core under the big lock; a
+ * lookup that slept on a read and finds the count moved keeps nothing.
+ */
+#define KRFFS_NAMES     512u /* entries, a power of two */
+#define KRFFS_NAMES_LOG 9u
+#define KRFFS_NAMES_LEN 39u /* the longest name an entry holds */
+
+struct krffs_name_entry {
+    uint64_t gen;    /* `krffs_names_gen` its lookup began with; 0 for none */
+    uint64_t dir;    /* the directory's identifier */
+    uint64_t offset; /* the child's node, or KRFFS_NO_NODE for none */
+    uint8_t len;
+    char name[KRFFS_NAMES_LEN];
+};
+
+static struct krffs_name_entry krffs_names[KRFFS_NAMES];
+/* Never 0, which marks an empty entry. */
+static uint64_t krffs_names_gen = 1;
+
+/** Make every entry of the lookup cache stale. */
+static void krffs_names_moved(void)
+{
+    krffs_names_gen++;
+}
+
+/**
+ * Write `size` bytes of `buffer` at `at` of the region through the backend,
+ * as `krffs_backend_store` does, as a write that may change what a lookup
+ * finds (`krffs_names_moved`), whether or not it reaches the medium.
+ */
+static int krffs_backend_write(krffs_mount_t *mount, uint64_t at, const void *buffer, uint32_t size)
+{
+    int rc = krffs_backend_store(mount, at, buffer, size);
+
+    krffs_names_moved();
+    return rc;
+}
+
+/** Whether a write of `size` bytes at `field` of a header leaves what every
+ * lookup finds: one inside the mode, the owner and the times, or of the
+ * length. */
+static int krffs_field_unlooked(uint32_t field, uint32_t size)
+{
+    return (field >= KRFFS_FIELD_MODE && size <= KRFFS_FIELD_SIZE - field) ||
+           (field == KRFFS_FIELD_DATA_SIZE && size <= KRFFS_FIELD_PARENT - field);
+}
+
+/** Write `size` bytes of `value` at `field` of the node at `offset` through
+ * the backend, moving the lookup cache's count unless the field leaves what
+ * lookups find (`krffs_field_unlooked`). */
+static int krffs_backend_field(krffs_mount_t *mount, uint64_t offset, uint32_t field,
+                               const void *value, uint32_t size)
+{
+    if (krffs_field_unlooked(field, size)) {
+        return krffs_backend_store(mount, offset + field, value, size);
+    }
+    return krffs_backend_write(mount, offset + field, value, size);
 }
 
 /** `krffs_write_fits` in the mount's grain, the rule `krffs_put` keeps. */
@@ -350,7 +420,7 @@ static int krffs_put(krffs_mount_t *mount, uint64_t offset, uint32_t field, cons
              (int)at);
         return -1;
     }
-    return krffs_backend_write(mount, at, value, size);
+    return krffs_backend_field(mount, offset, field, value, size);
 }
 
 /** `krffs_put` of a 64-bit `value`. */
@@ -369,7 +439,7 @@ static int krffs_put_u64(krffs_mount_t *mount, uint64_t offset, uint32_t field, 
  */
 static int krffs_put_new_u64(krffs_mount_t *mount, uint64_t offset, uint32_t field, uint64_t value)
 {
-    return krffs_backend_write(mount, offset + field, &value, (uint32_t)sizeof(value));
+    return krffs_backend_field(mount, offset, field, &value, (uint32_t)sizeof(value));
 }
 
 /**
@@ -384,7 +454,7 @@ static int krffs_put_new_u64(krffs_mount_t *mount, uint64_t offset, uint32_t fie
 static int krffs_put_new(krffs_mount_t *mount, uint64_t offset, uint32_t field, const void *value,
                          uint32_t size)
 {
-    return krffs_backend_write(mount, offset + field, value, size);
+    return krffs_backend_field(mount, offset, field, value, size);
 }
 
 /** `krffs_put` of a 32-bit `value`. */
@@ -418,7 +488,7 @@ static int krffs_data_read(krffs_mount_t *mount, uint64_t offset, uint64_t at, v
 static int krffs_data_write(krffs_mount_t *mount, uint64_t offset, uint64_t at, const void *buffer,
                             uint32_t size)
 {
-    return krffs_backend_write(mount, offset + sizeof(krffs_node_t) + at, buffer, size);
+    return krffs_backend_store(mount, offset + sizeof(krffs_node_t) + at, buffer, size);
 }
 
 /** Call `krffs_throttle` on the boot root once `*since` has passed
@@ -839,27 +909,55 @@ int krffs_hidden(krffs_mount_t *mount, uint64_t offset)
 }
 
 /**
- * Find the child named comp[0..len) directly inside directory `dir_id`; its
- * offset, or KRFFS_NO_NODE when there is none or a read fails, which sets
- * `*err`, when not NULL, to -EIO; it is 0 otherwise. A `len` of 0 matches
- * an orphan, whose name is empty.
+ * The lookup cache's entry for comp[0..len) in directory `dir_id`, by a
+ * hash of both, or NULL for a lookup the cache does not keep: one on a
+ * mount other than the boot root's, of an orphan's empty name or of a name
+ * longer than KRFFS_NAMES_LEN.
  */
-static uint64_t krffs_find_child_err(krffs_mount_t *mount, uint64_t dir_id, const char *comp,
-                                     uint32_t len, int *err)
+static struct krffs_name_entry *krffs_names_slot(const krffs_mount_t *mount, uint64_t dir_id,
+                                                 const char *comp, uint32_t len)
+{
+    uint32_t h = (uint32_t)dir_id ^ (uint32_t)(dir_id >> 32) ^ 5381u;
+    uint32_t i;
+
+    if (mount != &krffs_root_mount || len == 0 || len > KRFFS_NAMES_LEN) {
+        return NULL;
+    }
+    for (i = 0; i < len; i++) {
+        h = (h * 33u) ^ (uint8_t)comp[i];
+    }
+    return &krffs_names[(h * 2654435761u) >> (32u - KRFFS_NAMES_LOG)];
+}
+
+/** Whether the lookup cache's entry `e` is the answer for comp[0..len) in
+ * directory `dir_id`, made since the ring last changed. */
+static int krffs_names_hit(const struct krffs_name_entry *e, uint64_t dir_id, const char *comp,
+                           uint32_t len)
+{
+    uint32_t i;
+
+    if (e->gen != krffs_names_gen || e->dir != dir_id || e->len != len) {
+        return 0;
+    }
+    for (i = 0; i < len && e->name[i] == comp[i]; i++) {
+    }
+    return i == len;
+}
+
+/** `krffs_find_child_err` by a walk of the whole ring, with `*err` set as
+ * it says. */
+static uint64_t krffs_find_child_walk(krffs_mount_t *mount, uint64_t dir_id, const char *comp,
+                                      uint32_t len, int *err)
 {
     uint64_t offset = 0;
     uint64_t steps = 0;
     uint64_t bound = krffs_max_steps(mount);
     krffs_brief_t brief;
 
-    if (err) {
-        *err = 0;
-    }
+    *err = 0;
     do {
         if (krffs_brief(mount, offset, &brief) != 0) {
-            if (err) {
-                *err = -EIO;
-            }
+            *err = -EIO;
             return KRFFS_NO_NODE;
         }
         if (brief.type == KRFFS_RESERVED_NODE && brief.parent_id == dir_id &&
@@ -869,7 +967,7 @@ static uint64_t krffs_find_child_err(krffs_mount_t *mount, uint64_t dir_id, cons
             if (is > 0) {
                 return offset;
             }
-            if (is < 0 && err) {
+            if (is < 0) {
                 *err = -EIO;
                 return KRFFS_NO_NODE;
             }
@@ -878,6 +976,46 @@ static uint64_t krffs_find_child_err(krffs_mount_t *mount, uint64_t dir_id, cons
     } while (offset != 0 && ++steps < bound);
 
     return KRFFS_NO_NODE;
+}
+
+/**
+ * Find the child named comp[0..len) directly inside directory `dir_id`; its
+ * offset, or KRFFS_NO_NODE when there is none or a read fails, which sets
+ * `*err` to -EIO; it is 0 otherwise. A `len` of 0 matches an orphan, whose
+ * name is empty.
+ *
+ * On the boot root the answer comes from the lookup cache when it holds one
+ * made since the ring last changed (`krffs_names_slot`), and a node it
+ * names is read again to be sure it is that child; otherwise the walk of
+ * the ring answers and fills the entry, unless the ring changed meanwhile.
+ */
+static uint64_t krffs_find_child_err(krffs_mount_t *mount, uint64_t dir_id, const char *comp,
+                                     uint32_t len, int *err)
+{
+    struct krffs_name_entry *slot = krffs_names_slot(mount, dir_id, comp, len);
+    uint64_t gen = krffs_names_gen;
+    uint64_t offset;
+    krffs_brief_t brief;
+
+    if (slot && krffs_names_hit(slot, dir_id, comp, len)) {
+        offset = slot->offset;
+        if (offset == KRFFS_NO_NODE ||
+            (krffs_brief(mount, offset, &brief) == 0 && brief.type == KRFFS_RESERVED_NODE &&
+             brief.parent_id == dir_id && !krffs_hidden(mount, offset) &&
+             krffs_name_is(mount, offset, comp, len) > 0)) {
+            *err = 0;
+            return offset;
+        }
+    }
+    offset = krffs_find_child_walk(mount, dir_id, comp, len, err);
+    if (slot && *err == 0 && gen == krffs_names_gen) {
+        slot->gen = gen;
+        slot->dir = dir_id;
+        slot->offset = offset;
+        slot->len = (uint8_t)len;
+        k_memcpy(slot->name, comp, len);
+    }
+    return offset;
 }
 
 /**
@@ -4613,7 +4751,7 @@ static int krffs_node_store(krffs_node_t *node, uint32_t field, const void *valu
     if (offset == KRFFS_NO_NODE) {
         return -1;
     }
-    return krffs_backend_write(&krffs_root_mount, offset + field, value, size);
+    return krffs_backend_field(&krffs_root_mount, offset, field, value, size);
 }
 
 int krffs_node_set_mode(krffs_node_t *node, uint16_t mode)
@@ -5048,6 +5186,7 @@ static void krffs_unmount_root(void)
     if (krffs_root_mount.sector) {
         krffs_halt(&krffs_root_mount);
     }
+    krffs_names_moved();
     krffs_fs = NULL;
     krffs_root_flush = NULL;
     krffs_root_mount.backend = NULL;
@@ -5070,6 +5209,7 @@ static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain, int 
         return -1;
     }
 
+    krffs_names_moved();
     krffs_root_mount.backend = backend ? backend : &krffs_memory_backend;
     krffs_root_mount.ctx = base;
     krffs_root_mount.size = size;
