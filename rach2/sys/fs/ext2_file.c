@@ -5,16 +5,15 @@
 
 #include "ext2_internal.h"
 
-/** The `open` of `vfs_ops`: a new handle holding the node once more, with
- * a directory cursor not yet validated; `flags` is not read. Returns
- * -ENOMEM when the handle cannot be allocated, -EACCES for a device node,
- * since devices are opened in `/dev`, or -EIO for a fenced node
+/** The `open` of `vfs_ops`: hold the node once more and return its handle.
+ * A directory gets a handle of its own with its cursor yet to be read.
+ * Returns -ENOMEM when that handle cannot be allocated, -EACCES for a
+ * device node, since devices are opened in `/dev`, or -EIO for a fenced node
  * (`n->fenced`), as Linux's bad inode refuses an open (fs/bad_inode.c:20);
  * the fence is only ever set, so it is read without the lock. */
 int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 {
     struct ext2_node *n = node;
-    struct ext2_handle *h;
     uint32_t type = n->mode & S_IFMT_;
 
     (void)mnt;
@@ -25,29 +24,36 @@ int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
     if (n->fenced) {
         return -EIO;
     }
-    h = kzalloc(sizeof(*h));
-    if (!h) {
-        return -ENOMEM;
+    if (type == S_IFDIR_) {
+        struct ext2_dir_handle *h = kzalloc(sizeof(*h));
+
+        if (!h) {
+            return -ENOMEM;
+        }
+        h->file.node = n;
+        h->cursor = ~0u;
+        *handle = &h->file;
+    } else {
+        *handle = &n->file_handle;
     }
-    h->node = n;
-    h->cursor = ~0u;
     ext2_node_ref(n, 1);
-    *handle = h;
     return 0;
 }
 
-/** The `release` of `vfs_ops`, at a description's last close: the batch
- * drained, a failure kept for the next `fsync`, and the hold `ext2_open`
- * took put. The drain, of a batch that is not empty or of a device that
- * went, which records the failure, runs under the batch and buffer locks;
- * a final put takes the big lock for the node table. */
+/** The `release` of `vfs_ops`, at a description's last close: drain a
+ * batch holding its node, record an error if the device went away, and
+ * drop the hold `ext2_open` took. A final put takes the big lock for the
+ * node table. */
 void ext2_release(struct vfs_mount *mnt, void *handle)
 {
     struct ext2_handle *h = handle;
+    struct ext2_node *node = h->node;
 
-    (void)ext2_writeback_drain(ext2_em_of(mnt));
-    ext2_put(mnt, h->node);
-    kfree(h);
+    ext2_writeback_close(ext2_em_of(mnt), node);
+    if (h != &node->file_handle) {
+        kfree(h);
+    }
+    ext2_put(mnt, node);
 }
 
 /* The most times a read or a write brings the pages of a user buffer in

@@ -469,6 +469,7 @@ static const struct vfs_ops pstore_vops = {
     0,                       /* data_at */
     0,                       /* check_acl */
     0,                       /* walk_attrs */
+    0,                       /* unlink_absent */
 };
 
 /**

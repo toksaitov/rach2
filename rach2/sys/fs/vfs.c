@@ -4649,6 +4649,9 @@ int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name, int miss
     if (guard_node(mnt, dir) || (!missing && guard_entry(mnt, dir, name))) {
         return -EPERM; /* may_delete's rule */
     }
+    if (missing && mnt->type->ops->unlink_absent) {
+        return mnt->type->ops->unlink_absent(mount_base(mnt));
+    }
     watched = !missing && inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
               watched_node(mnt, dir, &parent) == 0;
     vfs_name_change_begin();
@@ -5501,6 +5504,7 @@ static const struct vfs_ops krffs_ops = {
     kfs_phase,   0,              /* data_at */
     0,                           /* check_acl */
     0,                           /* walk_attrs */
+    0,                           /* unlink_absent */
 };
 
 /* The mount of the KRFFS root, which `kfs_halted` turns read-only. */
@@ -6487,6 +6491,7 @@ static const struct vfs_ops devfs_vops = {
     0, /* data_at */
     0, /* check_acl */
     0, /* walk_attrs */
+    0, /* unlink_absent */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -6542,6 +6547,7 @@ static const struct vfs_ops procfs_vops = {
     0, /* data_at */
     0, /* check_acl */
     0, /* walk_attrs */
+    0, /* unlink_absent */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -6597,6 +6603,7 @@ static const struct vfs_ops sysfs_vops = {
     0, /* data_at */
     0, /* check_acl */
     0, /* walk_attrs */
+    0, /* unlink_absent */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the

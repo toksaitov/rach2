@@ -190,6 +190,7 @@ struct ext2_node *ext2_node_make(struct ext2_mount *em)
 
     (void)em;
     if (n) {
+        n->file_handle.node = n;
         n->refs = 1;
         n->state = N_LOADING;
         n->dirty_meta = 1;
@@ -4099,6 +4100,22 @@ static int admit_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     return rc;
 }
 
+/** Answer unlink for a name already found absent with the directory
+ * locked. Keep the write admission and strict batch drain of ext2_unlink.
+ * The directory remains locked and no new write is charged. */
+static int admit_unlink_absent(struct vfs_mount *mnt)
+{
+    struct ext2_mount *em = ext2_em_of(mnt);
+    int gave = names_begin(em);
+    int rc = ext2_assert_writable(mnt, em);
+
+    if (gave) {
+        bkl_enter();
+    }
+    em_finish(em);
+    return rc == 0 ? -ENOENT : rc;
+}
+
 /** The `mkdir` of `vfs_ops`: `ext2_mkdir`, admitted, without the big lock
  * (`names_begin`). */
 static int admit_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
@@ -4549,6 +4566,7 @@ static const struct vfs_ops ext2_ops = {
     admit_data_at,
     ext2_check_acl,
     ext2_walk_attrs,
+    admit_unlink_absent,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops,        0, 0, 1, 1, 1,

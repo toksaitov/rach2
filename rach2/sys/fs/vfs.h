@@ -460,6 +460,10 @@ struct vfs_ops {
     /* Read the mode and owner IDs of a held node for a path walk without
      * the big lock. Fill only mode, uid and gid. NULL uses getattr. */
     void (*walk_attrs)(void *node, struct vfs_stat *st);
+    /* Answer unlink of a name already found absent under the directory's
+     * node lock. May check whether changes are admitted, but cannot change
+     * the directory. NULL uses unlink. */
+    int (*unlink_absent)(struct vfs_mount *mnt);
 };
 
 /* renameat2(2)'s flags, Linux's values. */

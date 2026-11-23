@@ -3720,6 +3720,7 @@ static const struct vfs_ops vfat_ops = {
     0,                /* data_at */
     0,                /* check_acl */
     0,                /* walk_attrs */
+    0,                /* unlink_absent */
 };
 
 const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops,        0, 0, 0, 0, 0,
