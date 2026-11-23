@@ -3116,8 +3116,9 @@ int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 }
 
 /** Free the file an unlink takes the name of, as the root does. */
-int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
+int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name, int missing)
 {
+    (void)missing;
     if (mnt == &fl_mount) {
         check(fl_holds(dir), "an unlink holds its parent's lock");
         return fl_remove(dir, name, 0);
