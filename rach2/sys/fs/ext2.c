@@ -1801,6 +1801,16 @@ int ext2_read_data(struct ext2_mount *em, const struct ext2_node *n, uint64_t of
 
 /* ---- attributes ---- */
 
+/** Read the held inode's type, permissions and owner IDs for a path walk. */
+static void ext2_walk_attrs(void *node, struct vfs_stat *st)
+{
+    const struct ext2_node *n = node;
+
+    st->mode = n->mode;
+    st->uid = n->uid;
+    st->gid = n->gid;
+}
+
 /**
  * The `getattr` of `vfs_ops`: the inode's fields as the node has them, with
  * `i_blocks`, the generation and the flags lsattr sees, copied with no lock:
@@ -1818,9 +1828,7 @@ static int ext2_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 
     (void)mnt;
     k_memset(st, 0, sizeof(*st));
-    st->mode = n->mode;
-    st->uid = n->uid;
-    st->gid = n->gid;
+    ext2_walk_attrs(n, st);
     st->nlink = n->nlink;
     st->size = node_size(n);
     st->ino = n->ino;
@@ -4540,6 +4548,7 @@ static const struct vfs_ops ext2_ops = {
     0, /* phase */
     admit_data_at,
     ext2_check_acl,
+    ext2_walk_attrs,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops,        0, 0, 1, 1, 1,

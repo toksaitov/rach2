@@ -1372,8 +1372,12 @@ int fd_close_claim(fd_table_t *table, int fd, fd_entry_t **claimed)
     } else {
         (void)arch_atomic_xchg(&e->flags, e->flags | FD_FLAG_CLOSING);
         if (fd_held_elsewhere(table, fd)) {
+            fd_hold(table, fd);
             rc = 0;
         } else {
+            if (current_proc && current_proc->fd_gone) {
+                gone_shadow(table, fd);
+            }
             e->flags |= FD_FLAG_RELEASING;
             rc = 1;
         }
@@ -2084,29 +2088,32 @@ void fd_set_flags(fd_table_t *table, fd_entry_t *e, uint32_t clear, uint32_t set
     fd_table_unlock(table, flags);
 }
 
-int fd_in_table(const fd_table_t *table, const fd_entry_t *e)
+int fd_in_table(fd_table_t *table, const fd_entry_t *e)
 {
     const struct fd_spare *sp;
     uintptr_t x = (uintptr_t)e;
-    int k;
+    uint32_t flags;
+    int k, found = 0;
 
     if (!table) {
         return 0;
     }
-    for (sp = table->spares; sp; sp = sp->next) {
+    flags = fd_table_lock(table);
+    for (sp = table->spares; sp && !found; sp = sp->next) {
         if (&sp->entry == e) {
-            return 1;
+            found = 1;
         }
     }
-    for (k = 0; k < FD_CHUNKS && table->chunks[k]; k++) {
+    for (k = 0; !found && k < FD_CHUNKS && table->chunks[k]; k++) {
         uintptr_t a = (uintptr_t)table->chunks[k];
 
         if (x >= a && x < a + sizeof(fd_entry_t) * (size_t)chunk_size(k) &&
             (x - a) % sizeof(fd_entry_t) == 0) {
-            return 1;
+            found = 1;
         }
     }
-    return 0;
+    fd_table_unlock(table, flags);
+    return found;
 }
 
 int fd_is_valid(fd_table_t *table, int fd)
