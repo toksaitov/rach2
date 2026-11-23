@@ -6,7 +6,8 @@ Logs in as root on the serial console, writes BARECALL to /tmp through
 base64, and runs it on itself with ARG, or runs the shell command
 BARECALL_CMD from the environment instead, until the console shows
 BARECALL_DONE, "barecall: openclose" unless given; BARECALL_QEMU adds QEMU
-arguments, and BARECALL_ACCEL and BARECALL_CPU replace the accelerator,
+arguments, BARECALL_RACH2_APPEND is the kernel's command line, and
+BARECALL_ACCEL and BARECALL_CPU replace the accelerator,
 multi-threaded TCG, and the processor model, max. The console goes to LOG, and the guest is powered off once
 barecall's last line has come. Each wait for the console has a limit, and
 a wait that passes it ends the run with an error.
@@ -38,7 +39,9 @@ def main():
         "-initrd", image, "-display", "none", "-vga", "none",
         "-monitor", "none", "-no-reboot", "-nic", "none",
         "-chardev", "socket,id=s0,path=%s,server=on,wait=on" % path,
-        "-serial", "chardev:s0"] + os.environ.get("BARECALL_QEMU", "").split())
+        "-serial", "chardev:s0"] + os.environ.get("BARECALL_QEMU", "").split()
+        + (["-append", os.environ["BARECALL_RACH2_APPEND"]]
+           if os.environ.get("BARECALL_RACH2_APPEND") else []))
     out = open(log, "wb")
     try:
         for _ in range(100):

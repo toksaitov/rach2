@@ -11,7 +11,10 @@
 # times /mnt/f; every boot uses multi-threaded TCG, -cpu max, four
 # processors and 3 GiB, or the accelerator and processor model that
 # BARECALL_ACCEL and BARECALL_CPU name, such as kvm and host; Linux's
-# command line takes BARECALL_LINUX_APPEND too, such as mitigations=off. Each boot's console is OUT/linux-N.log or
+# command line takes BARECALL_LINUX_APPEND too, such as mitigations=off, and
+# Rach2's BARECALL_RACH2_APPEND, such as rach2.cycleaccount. BARECALL_ARGS
+# follows the file in barecall's arguments on both, such as `8000 9 all
+# trace`; Rach2's boots mount debugfs first. Each boot's console is OUT/linux-N.log or
 # OUT/rach2-KERNEL-N.log, KERNEL the first 8 digits of its SHA-256, and the
 # medians are printed at the end.
 set -eu
@@ -48,7 +51,8 @@ boot_linux()
     timeout 900 qemu-system-x86_64 -accel "${BARECALL_ACCEL:-tcg,thread=multi}" \
         -cpu "${BARECALL_CPU:-max}" -smp 4 \
         -m 3G -machine q35 -kernel "$linux" -initrd "$out/initrd.gz" \
-        -append "console=ttyS0 loglevel=7 ${BARECALL_LINUX_APPEND:-}" -display none -vga none \
+        -append "console=ttyS0 loglevel=7 ${BARECALL_LINUX_APPEND:-} -- /mnt/f ${BARECALL_ARGS:-}" \
+        -display none -vga none \
         -monitor none -no-reboot -nic none $disk -serial "file:$1"
     grep -q 'barecall: openclose' "$1"
 }
@@ -73,7 +77,7 @@ boot_rach2()
 boot_rach2_once()
 {
     BARECALL_QEMU=$disk \
-        BARECALL_CMD="mkdir -p /mnt && mount -t ext2 -o noatime /dev/disk0 /mnt && $quiet && /tmp/barecall /mnt/f" \
+        BARECALL_CMD="mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null; mkdir -p /mnt && mount -t ext2 -o noatime /dev/disk0 /mnt && $quiet && /tmp/barecall /mnt/f ${BARECALL_ARGS:-}" \
         python3 -I "$step/serial.py" "$1" "$image" "$out/barecall" \
         "$tree/krffs/rach2_demo_password" "$2"
     grep -q 'barecall: openclose' "$2"
