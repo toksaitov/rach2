@@ -272,6 +272,8 @@ static struct vd_res *find_res(struct vd *d, uint32_t id, struct vgs_obj **o)
     return x ? &d->res[x - d->obj] : 0;
 }
 
+static void release(struct vd *d, struct vd_pending *p);
+
 /** Return whether context id is live in the current epoch. */
 static int ctx_live(struct vd *d, uint32_t id)
 {
@@ -680,10 +682,17 @@ static int cmd_ctx_create(struct vd *d, const struct vd_hdr *h, const uint8_t *b
     return err;
 }
 
-/** CTX_DESTROY, which drops a stream the context was sending in parts. */
+/**
+ * CTX_DESTROY, which drops a stream the context was sending in parts and
+ * answers each fenced command still held on the context's rings: the
+ * renderer frees the context's fences with it without retiring them, and
+ * can make none for a command whose fence it refused once the context is
+ * gone.
+ */
 static int cmd_ctx_destroy(struct vd *d, const struct vd_hdr *h)
 {
     struct vgs_obj *o = vgs_table_find(&d->t, VGS_OBJ_CONTEXT, h->ctx_id);
+    uint32_t i;
 
     if (o == 0) {
         return VD_RESP_ERR_CONTEXT_ID;
@@ -693,6 +702,13 @@ static int cmd_ctx_destroy(struct vd *d, const struct vd_hdr *h)
     }
     d->ops->ctx_destroy(d->cookie, h->ctx_id);
     vgs_table_del(&d->t, o);
+    for (i = 0; i < VD_PENDING && d->npend != 0; i++) {
+        struct vd_pending *p = &d->pend[i];
+
+        if (p->used && p->per_ctx && p->ctx == h->ctx_id) {
+            release(d, p);
+        }
+    }
     return 0;
 }
 
@@ -1267,8 +1283,8 @@ static int fence_after(const struct vd_pending *p, uint64_t a, uint64_t b)
  * newer held command's fence covers the work before it and retires it
  * with its own (vd_fence_retired), so only the newest asks; asking for an
  * older fence after a newer one would break the order of the timeline's
- * fences, which the renderer may report as one. A context ring's command
- * whose context is gone waits as its other held commands do.
+ * fences, which the renderer may report as one. CTX_DESTROY answers a
+ * context's held commands, so none of a dead context is left to ask.
  */
 static void fence_retry(struct vd *d)
 {
@@ -1278,7 +1294,7 @@ static void fence_retry(struct vd *d)
         struct vd_pending *p = &d->pend[i];
         int newest = 1;
 
-        if (!p->used || !p->unfenced || (p->per_ctx && !ctx_live(d, p->ctx))) {
+        if (!p->used || !p->unfenced) {
             continue;
         }
         for (j = 0; j < VD_PENDING && newest; j++) {
@@ -1354,6 +1370,18 @@ static void answer(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_ch
     complete(d, qi, head, put_response(d, c, d->resp, len));
 }
 
+/** Answer a held command with the response it keeps and free its slot. */
+static void release(struct vd *d, struct vd_pending *p)
+{
+    complete(d, p->queue, p->head, put_response(d, &p->chain, p->resp, p->rlen));
+    if (p->unfenced) {
+        p->unfenced = 0;
+        d->nunfenced--;
+    }
+    p->used = 0;
+    d->npend--;
+}
+
 /**
  * Complete every fenced command on a timeline whose fence is id or older:
  * the global one, whose ids the renderer keeps in 32 bits, or a context's
@@ -1378,13 +1406,7 @@ void vd_fence_retired(struct vd *d, uint32_t ctx, int per_ctx, uint32_t ring, ui
         if (!done) {
             continue;
         }
-        complete(d, p->queue, p->head, put_response(d, &p->chain, p->resp, p->rlen));
-        if (p->unfenced) {
-            p->unfenced = 0;
-            d->nunfenced--;
-        }
-        p->used = 0;
-        d->npend--;
+        release(d, p);
     }
 }
 
