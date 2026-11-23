@@ -988,9 +988,10 @@ void vgpu_reap(struct virtio_gpu_device *vg);
 /** Drop a reference a command held until its answer, from the command's
  * completion; the last goes to the worker, which frees the object. */
 void vgpu_obj_put_answered(struct drm_gem_object *obj);
-/** Free the objects the worker has been given (`vgpu_obj_put_answered`);
- * process context, may sleep. */
-void vgpu_frees_run(struct virtio_gpu_device *vg);
+/** Free the objects the worker has been given (`vgpu_obj_put_answered`),
+ * stopping once `until` passes, or with `killable` at SIGKILL, while the
+ * device has no room; process context, may sleep. */
+void vgpu_frees_run(struct virtio_gpu_device *vg, int64_t until, int killable);
 /** Notify the device of the commands queued on its control queue without a
  * notify (`vgpu_cmd_queue`), if any; process context. */
 void vgpu_kick(struct virtio_gpu_device *vg);
