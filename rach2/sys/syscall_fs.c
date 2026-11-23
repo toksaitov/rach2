@@ -3138,13 +3138,20 @@ static int path_starts(const char *s, const char *prefix)
  * The length of the first part of the absolute path `path` that names a
  * link the walk follows to its object, /proc/PID/fd/N, cwd or root, or
  * /dev/fd/N, with more of the path after it, and in `vp` the link; 0 when
- * the path has none. Only a path under /proc or /dev can.
+ * the path has none. Under /dev, only a descriptor alias or a name in
+ * the descriptor directory can be such a link.
  */
 static uint32_t path_object_link(char *path, struct vpath *vp)
 {
     uint32_t at = 1;
+    int dev = path_starts(path + 1, "dev/");
 
-    if (!path_starts(path + 1, "proc/") && !path_starts(path + 1, "dev/")) {
+    if (dev) {
+        at = sizeof("/dev/") - 1u;
+        while (path[at] == '/') {
+            at++;
+        }
+    } else if (!path_starts(path + 1, "proc/")) {
         return 0;
     }
     for (;;) {
@@ -3166,6 +3173,9 @@ static uint32_t path_object_link(char *path, struct vpath *vp)
         if (vp->kind == VNODE_PROC_FD_LINK || vp->kind == VNODE_PROC_CWD ||
             vp->kind == VNODE_PROC_ROOT) {
             return at;
+        }
+        if (dev && vp->kind != VNODE_PROC_FD_DIR) {
+            return 0;
         }
         at = next;
     }
