@@ -681,6 +681,7 @@ const struct vfs_ops debugfs_vops = {
     0, /* phase */
     0, /* data_at */
     0, /* check_acl */
+    0, /* walk_attrs */
 };
 
 struct dfs_options {

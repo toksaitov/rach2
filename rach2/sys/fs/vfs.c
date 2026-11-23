@@ -457,6 +457,19 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
 
 /* The permission the resolver checks. */
 
+/** Read only the mode and owner IDs the walk uses, or return getattr's
+ * error. The caller holds the node. */
+static int walk_attrs(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
+{
+    const struct vfs_ops *ops = mnt->type->ops;
+
+    if (ops->walk_attrs) {
+        ops->walk_attrs(node, st);
+        return 0;
+    }
+    return ops->getattr(mount_base(mnt), node, st);
+}
+
 /**
  * Whether the caller may search the directory `node` of `mnt`: 0, -EACCES,
  * -ENOTDIR for a node that is not a directory, or the error of `getattr`.
@@ -490,7 +503,7 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real, uint32_t 
     if (!mnt->type->ops->getattr) {
         return 0;
     }
-    rc = mnt->type->ops->getattr(mount_base(mnt), node, &st);
+    rc = walk_attrs(mnt, node, &st);
     if (rc != 0) {
         return rc;
     }
@@ -557,7 +570,7 @@ static int may_follow_link(struct vfs_mount *mnt, void *dir, const struct vfs_st
     if (lst->uid == uid) {
         return 0;
     }
-    rc = mnt->type->ops->getattr(mount_base(mnt), dir, &dst);
+    rc = walk_attrs(mnt, dir, &dst);
     if (rc != 0) {
         return rc;
     }
@@ -2259,7 +2272,7 @@ static int cached_found(const struct vfs_ref *cur, void *found, const char *leaf
     int record = rec->entry && !*rest;
 
     if (cur->mnt->type->ops->readlink || record) {
-        if (cur->mnt->type->ops->getattr(mount_base(cur->mnt), found, &st) != 0) {
+        if (walk_attrs(cur->mnt, found, &st) != 0) {
             cached_put(cur->mnt, found);
             return WALK_FULL;
         }
@@ -5474,6 +5487,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* uncache */
     kfs_phase,   0,              /* data_at */
     0,                           /* check_acl */
+    0,                           /* walk_attrs */
 };
 
 /* The mount of the KRFFS root, which `kfs_halted` turns read-only. */
@@ -6459,6 +6473,7 @@ static const struct vfs_ops devfs_vops = {
     0, /* phase */
     0, /* data_at */
     0, /* check_acl */
+    0, /* walk_attrs */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -6513,6 +6528,7 @@ static const struct vfs_ops procfs_vops = {
     0, /* phase */
     0, /* data_at */
     0, /* check_acl */
+    0, /* walk_attrs */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -6567,6 +6583,7 @@ static const struct vfs_ops sysfs_vops = {
     0, /* phase */
     0, /* data_at */
     0, /* check_acl */
+    0, /* walk_attrs */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the

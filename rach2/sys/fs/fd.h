@@ -642,7 +642,8 @@ int fd_held_elsewhere(fd_table_t *table, int fd);
 /**
  * Begin the close of descriptor `fd` of `table` under its lock: -EBADF when
  * it is not open; 0 when a call of another sharer holds it, with the entry
- * marked closing, which the last call to hold it releases as it ends
+ * marked closing and held for this call if it owns or shares the table,
+ * so it can drop the file's locks before the last holder releases it
  * (`fd_holds_claim`); 1 when the caller is to release it now, with the
  * entry marked closing and releasing. `*e` gets the entry claimed, for 0
  * and 1.
@@ -804,9 +805,9 @@ int fd_is_valid(fd_table_t *table, int fd);
  * Whether `e` is one of `table`'s entries, a slot's own or a spare, and not
  * a copy of one that a file mapping or a message in flight keeps: a close
  * of a descriptor of the table drops the table's record locks, and the
- * release of such a copy does not.
+ * release of such a copy does not. Takes the table's lock.
  */
-int fd_in_table(const fd_table_t *table, const fd_entry_t *e);
+int fd_in_table(fd_table_t *table, const fd_entry_t *e);
 
 /** Repoint the `node` of every entry of `table` that names `from` at `to`,
  * after a growing write moved a KRFFS node (`vfs_repoint`). */

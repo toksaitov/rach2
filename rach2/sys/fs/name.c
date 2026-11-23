@@ -9,6 +9,7 @@
 
 struct vfs_name {
     struct vfs_name *next;
+    struct vfs_name *prev;
     struct vfs_ref parent;
     uint32_t refs;
     int deleted;
@@ -45,6 +46,7 @@ static int name_new(const struct vfs_ref *parent, const char *leaf, int checked,
                     int deleted, struct vfs_name **out)
 {
     struct vfs_name *name = kzalloc(sizeof(*name));
+    size_t len = 0;
     uint32_t flags;
     int moved;
 
@@ -57,12 +59,18 @@ static int name_new(const struct vfs_ref *parent, const char *leaf, int checked,
     vfs_desc_open(parent->mnt);
     name->refs = 1;
     name->deleted = deleted;
-    k_strncpy(name->leaf, leaf, sizeof(name->leaf));
-    name->leaf[sizeof(name->leaf) - 1] = '\0';
+    while (len < sizeof(name->leaf) - 1 && leaf[len]) {
+        len++;
+    }
+    k_memcpy(name->leaf, leaf, len);
     flags = spin_lock_irqsave(&names_lock);
     moved = checked && !vfs_seq_still(seq);
     if (!moved) {
+        name->prev = NULL;
         name->next = names;
+        if (names) {
+            names->prev = name;
+        }
         names = name;
     }
     spin_unlock_irqrestore(&names_lock, flags);
@@ -133,7 +141,6 @@ struct vfs_name *vfs_name_ref(struct vfs_name *name)
  */
 void vfs_name_put(struct vfs_name *name)
 {
-    struct vfs_name **link = &names;
     uint32_t flags;
 
     if (!name) {
@@ -144,11 +151,13 @@ void vfs_name_put(struct vfs_name *name)
         spin_unlock_irqrestore(&names_lock, flags);
         return;
     }
-    while (*link && *link != name) {
-        link = &(*link)->next;
+    if (name->prev) {
+        name->prev->next = name->next;
+    } else {
+        names = name->next;
     }
-    if (*link) {
-        *link = name->next;
+    if (name->next) {
+        name->next->prev = name->prev;
     }
     spin_unlock_irqrestore(&names_lock, flags);
     vfs_desc_close(name->parent.mnt, name->parent.node, NULL);
