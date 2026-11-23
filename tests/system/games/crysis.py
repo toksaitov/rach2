@@ -29,7 +29,9 @@ home, as the native case runs them, in which the home is read-only.
 `flyby` runs Linux's island flyby, `-devmode +map island +exec benchmark_gpu`,
 and ends the game after LOOPS of its four loops; each loop's rate is judged
 against GATE frames a second (24 unless CRYSIS_GATE says), beside Linux's,
-but on the 32-bit game, which need only complete its loops. With
+but on the 32-bit game, which need only complete its loops. Each loop's
+frame figures are of its 2000 frames in the HUD's dump counted from the one
+after the load's last frame, which `load:` reports apart (loop_windows). With
 CRYSIS_LOAD_TRACE=N it samples every thread from the HUD's Nth frame across
 the long frame that ends the level's load, into STATE/NAME-load (LoadTrace).
 `hud` loads a copy of SAVE, a checkpoint before the suit's reboot on the
@@ -452,6 +454,34 @@ def finished():
         r"Run \d+ Finished\.\s+Play Time: ([\d.]+)s, Average FPS: ([\d.]+)", text)]
 
 
+# The frames of one loop of the flyby, as the game's benchmark log counts them.
+LOOP_FRAMES = 2000
+# The frames before the load mark among which the load's last frame is
+# sought: more than a 0.5 s poll lets pass after it at 60 frames a second.
+LOAD_SPAN = 60
+
+
+def loop_windows(dump, mark, loops):
+    """Return the index of the load's last frame in DUMP, the HUD's frame
+    times, and LOOPS windows (start, end) of LOOP_FRAMES frames each, loop 0
+    from the frame after it. MARK is the dump's frame count when Game.log's
+    `loading time` line was first seen, which in each of seven runs read was
+    one more than the index of the load's last frame: the longest of the
+    LOAD_SPAN frames up to the mark, of about 1.5 s on Rach2. That frame is left out of every
+    loop and reported apart, so that a loop's figures do not depend on when
+    a poll saw the loop's end. tools/lenovo/debian-ref/crysis-frames.py cuts
+    Linux's dump by this rule. Returns (None, []) for a dump that ends
+    before the mark."""
+    if mark is None or not dump or mark > len(dump):
+        return None, []
+    first = max(mark - LOAD_SPAN, 0)
+    last = max(range(first, mark), key=lambda i: dump[i]) if mark > first else None
+    if last is None:
+        return None, []
+    start = last + 1
+    return last, [(start + i * LOOP_FRAMES, start + (i + 1) * LOOP_FRAMES) for i in range(loops)]
+
+
 def frame_stats(values):
     """Return the median, the 99th percentile and the worst of VALUES, in ms,
     and how many pass 50 and 100 ms."""
@@ -527,6 +557,7 @@ class LoadTrace:
     def __init__(self, game, where, first):
         self.game, self.where, self.first = game, where, first
         self.done = False
+        self.mark = None  # the load mark, if it came in the trace (loop_windows)
 
     def step(self):
         """Run the trace once the HUD holds FIRST frames; return whether it
@@ -555,6 +586,8 @@ class LoadTrace:
         end = time.monotonic() + 30
         while time.monotonic() < end:
             times = self.times()
+            if self.mark is None and self.game.loaded() is not None:
+                self.mark = len(times)
             if long_at is None:
                 long_at = next((i for i in range(self.first, len(times)) if times[i] >= 1000), None)
             if long_at is not None and len(times) > long_at + 10:
@@ -622,10 +655,21 @@ def flyby(route, name, loops):
     counts = profile_dir(name)
     game = Game(out, route, ["+map", "island", "+exec", "benchmark_gpu"])
     trace = LoadTrace(game, state_dir(name + "-load"), int(LOAD_TRACE)) if LOAD_TRACE else None
-    ends = []
+    ends, mark = [], []
     profiling = False
+
+    def loaded():
+        """Record the load mark at the first sight of the level loaded, by
+        the load's trace while it runs, and hold the wait for the trace."""
+        traced = trace is None or trace.step()
+        if not mark and trace is not None and trace.mark is not None:
+            mark.append(trace.mark)
+        elif not mark and game.loaded() is not None:
+            mark.append(game.frames())
+        return bool(mark) and traced
+
     try:
-        game.wait(lambda: (trace is None or trace.step()) and game.loaded() is not None, "load")
+        game.wait(loaded, "load")
         say("loaded in %s s" % game.loaded())
         if counts:
             profiling = True
@@ -657,12 +701,12 @@ def flyby(route, name, loops):
     linux = LINUX.get(route, ())
     # The plan asks the 32-bit game only to complete its loop.
     gate = 0 if route == "32" else GATE
-    previous = None
+    last, windows = loop_windows(dump, mark[0] if mark else None, len(runs))
+    if last is not None:
+        say("load: last frame %d of %.1f ms, load mark at frame %d; loop 0 from frame %d, "
+            "%d frames a loop" % (last, dump[last], mark[0], last + 1, LOOP_FRAMES))
     for i, (fps, play) in enumerate(runs):
-        end = ends[i] if i < len(ends) else len(dump)
-        start = max(end - 2000, 0) if previous is None else previous
-        previous = end
-        segment = dump[start:end]
+        segment = dump[windows[i][0]:windows[i][1]] if windows else []
         beside = (" linux %.2f" % linux[i]) if i < len(linux) else ""
         check("loop%d" % i, fps >= gate, "%.2f fps (gate %.0f)%s, play %.2f s%s" % (
             fps, gate, beside, play, (", " + frame_stats(segment)) if segment else ""))
