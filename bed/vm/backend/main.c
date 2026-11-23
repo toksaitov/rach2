@@ -351,12 +351,15 @@ static void options(int argc, char **argv, struct opts *o)
 static void make_offer(struct vd_offer *f, const struct src *s, const struct opts *o, struct vr *r,
                        int edid)
 {
-    static const struct vgs_limits lim = {VD_OBJS - 64,  64,       0,   1024,
-                                          VGS_CHAIN_MAX, 1u << 20, 256, 0};
+    /* max_backing and max_cmd are the region's, set below. */
+    static const struct vgs_limits lim = {VD_OBJS - 64, 64, 0, 1024, VGS_CHAIN_MAX, 0, 256, 0};
 
     memset(f, 0, sizeof(*f));
     f->limits = lim;
     f->limits.max_backing = s->size;
+    /* A chain carries any bytes the heap holds, as a submission of any size
+       goes whole in one command; the region bounds the heap. */
+    f->limits.max_cmd = s->size < 0x80000000u ? (uint32_t)s->size : 0x80000000u;
     f->features = (1ULL << VD_F_VIRGL) | (1ULL << VD_F_BLOB) | (1ULL << VD_F_CONTEXT_INIT);
     if (edid) {
         f->features |= 1ULL << VD_F_EDID;

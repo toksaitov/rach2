@@ -223,9 +223,10 @@ struct vd {
     uint32_t scanout[VD_SCANOUTS]; /* each scanout's resource, or 0 */
     struct vd_pending pend[VD_PENDING];
     uint32_t npend;
-    int kick;      /* used entries published since the last notify */
-    uint8_t *cmd;  /* offer.limits.max_cmd bytes: a chain's readable part */
-    uint32_t room; /* the writable bytes of the chain being served */
+    int kick;         /* used entries published since the last notify */
+    uint8_t *cmd;     /* a chain's readable part, cmd_cap bytes, grown to a chain's */
+    uint32_t cmd_cap; /* at most offer.limits.max_cmd */
+    uint32_t room;    /* the writable bytes of the chain being served */
     uint8_t resp[VD_RESP_MAX];
     const struct vd_ops *ops;
     void *cookie;

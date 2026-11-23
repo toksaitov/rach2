@@ -205,6 +205,9 @@ static void offer(struct vd *d, const struct vgs_driver *drv)
     notify(d, VGS_VEC_CONTROL, 0);
 }
 
+/* The command buffer's first size; a longer chain grows it (cmd_grow). */
+#define VD_CMD_FIRST (1u << 20)
+
 /**
  * Prepare a device for the region at base: its tables, its command buffer
  * and its offer, fixed for every epoch. Returns 0, or -1 when the offer's
@@ -219,7 +222,8 @@ int vd_init(struct vd *d, volatile void *base, uint64_t size, const struct vd_of
         off->num_scanouts > VD_SCANOUTS) {
         return -1;
     }
-    d->cmd = malloc(off->limits.max_cmd);
+    d->cmd_cap = off->limits.max_cmd < VD_CMD_FIRST ? off->limits.max_cmd : VD_CMD_FIRST;
+    d->cmd = malloc(d->cmd_cap);
     if (d->cmd == 0) {
         return -1;
     }
@@ -1282,6 +1286,23 @@ static struct vd_profile_row *profile_row(struct vd *d)
 }
 
 /**
+ * Grow the command buffer to hold a chain's `need` readable bytes, which
+ * vgs_chain_read has held to the offer's max_cmd. Returns 0, or -1 when
+ * the VM has no memory for it, which leaves the buffer as it was.
+ */
+static int cmd_grow(struct vd *d, uint32_t need)
+{
+    uint8_t *p = realloc(d->cmd, need);
+
+    if (p == 0) {
+        return -1;
+    }
+    d->cmd = p;
+    d->cmd_cap = need;
+    return 0;
+}
+
+/**
  * Serve one queue's available chains. Returns VGS_OK, or the transport
  * fault that puts the device in NEEDS_RESET.
  */
@@ -1298,10 +1319,11 @@ static int serve(struct vd *d, uint32_t qi)
         return err;
     }
     while (d->last[qi] != idx) {
-        uint32_t head = vgs_avail_head(d->base, q, d->last[qi]), i, off = 0, type, len;
+        uint32_t head = vgs_avail_head(d->base, q, d->last[qi]), i, off = 0, type, len, want;
         struct vgs_chain c;
         struct vd_profile_row *row = NULL;
         uint64_t start = 0, copied = 0, executed = 0;
+        int short_of_memory;
 
         if ((err = vgs_chain_read(d->base, &d->l, q, &d->me.limits, head, &c)) != VGS_OK) {
             return err;
@@ -1309,9 +1331,13 @@ static int serve(struct vd *d, uint32_t qi)
         if (d->profile) {
             start = vd_profile_now();
         }
-        for (i = 0; i < c.nread; i++) {
-            region_get(d, c.seg[i].addr, d->cmd + off, c.seg[i].len);
-            off += c.seg[i].len;
+        /* With no room for the whole chain, its header alone is read. */
+        short_of_memory = c.rbytes > d->cmd_cap && cmd_grow(d, c.rbytes) != 0;
+        want = short_of_memory ? sizeof(struct vd_hdr) : c.rbytes;
+        for (i = 0; i < c.nread && off < want; i++) {
+            len = c.seg[i].len < want - off ? c.seg[i].len : want - off;
+            region_get(d, c.seg[i].addr, d->cmd + off, len);
+            off += len;
         }
         d->room = c.wbytes;
         d->last[qi]++;
@@ -1329,6 +1355,14 @@ static int serve(struct vd *d, uint32_t qi)
             memcpy(d->resp, &e, sizeof(e));
             complete(d, qi, head, put_response(d, &c, d->resp, sizeof(struct vd_hdr)));
             d->n.errors++;
+            continue;
+        }
+        if (short_of_memory) {
+            memcpy(&type, d->cmd, sizeof(type));
+            fprintf(stderr, "backend: command 0x%x: refused: %u bytes: no memory for its copy\n",
+                    (unsigned)type, (unsigned)c.rbytes);
+            memset(d->resp, 0, sizeof(struct vd_hdr));
+            answer(d, qi, head, &c, VD_RESP_ERR_OUT_OF_MEMORY, sizeof(struct vd_hdr));
             continue;
         }
         if (d->profile) {
