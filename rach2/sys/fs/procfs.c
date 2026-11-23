@@ -5506,6 +5506,9 @@ uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
 {
     uint32_t major, minor;
 
+    if (m->source_dev) {
+        return m->source_dev;
+    }
     if (i == 0 && m->type == &vfs_krffs_type) {
         return 0;
     }

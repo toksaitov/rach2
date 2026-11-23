@@ -6799,6 +6799,18 @@ void vfs_init(void)
     install_permanent();
 }
 
+/** Install `dev` and record its number once, as Linux's superblock keeps
+ * `s_dev`. A mount with no named block device keeps a zero in `source_dev`. */
+static void mount_device(struct vfs_mount *m, block_device_t *dev)
+{
+    uint32_t major, minor;
+
+    m->dev = dev;
+    if (dev && devfs_numbers(m->source, &major, &minor)) {
+        m->source_dev = (minor & 0xFFu) | major << 8 | (minor & ~0xFFu) << 12;
+    }
+}
+
 int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const char *source,
                   int claim)
 {
@@ -6816,13 +6828,13 @@ int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const c
     k_memset(m, 0, sizeof(*m));
     vfs_mount_view_new(m);
     m->type = type;
-    m->dev = dev;
     m->state = VFS_MOUNTING;
     mount_lock_init(m);
     m->claim = claim;
     k_strncpy(m->covered_path, "/", sizeof(m->covered_path));
     k_strncpy(m->source, source, sizeof(m->source));
     m->source[sizeof(m->source) - 1] = '\0';
+    mount_device(m, dev);
     rc = type->mount(m, dev, 0, 0);
     if (rc != 0) {
         k_memset(m, 0, sizeof(*m));
@@ -6866,13 +6878,13 @@ int vfs_root_over_image(const struct vfs_type *type, struct block_device *dev, c
     k_memset(m, 0, sizeof(*m));
     vfs_mount_view_new(m);
     m->type = type;
-    m->dev = dev;
     m->state = VFS_MOUNTING;
     mount_lock_init(m);
     m->claim = -1;
     k_strncpy(m->covered_path, "/", sizeof(m->covered_path));
     k_strncpy(m->source, source, sizeof(m->source));
     m->source[sizeof(m->source) - 1] = '\0';
+    mount_device(m, dev);
     rc = type->mount(m, dev, 0, 0);
     if (rc != 0) {
         mount_release(m);
@@ -7456,8 +7468,8 @@ again:
         vfs_ref_release(&tref);
         return -ENOMEM;
     }
-    m->dev = dev;
     m->claim = claim;
+    mount_device(m, dev);
     vfs_node_unlock(&tref);
     vfs_leave(tref.mnt);
 

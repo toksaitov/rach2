@@ -1171,6 +1171,18 @@ uint32_t filecache_epoch(struct vfs_mount *mnt, void *node)
     return 0;
 }
 
+/** The model supplies no ready page for a small buffered read. */
+int filecache_read_hit(struct open_file *ofd, char __user *buf, uint32_t count, uint64_t offset,
+                       int32_t *got)
+{
+    (void)ofd;
+    (void)buf;
+    (void)count;
+    (void)offset;
+    (void)got;
+    return 0;
+}
+
 /** Keep no file, so that read(2) goes to the file system, but in the race
  * row with `race_cache`: then read the file a page at a time, each from
  * the disk (`vfs_read`), and before each page after the first end the read
