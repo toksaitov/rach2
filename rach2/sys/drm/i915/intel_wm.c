@@ -487,31 +487,43 @@ static void wm_cancel_locked(struct intel_crtc *c)
     }
 }
 
-void intel_wm_commit(struct intel_crtc *c, struct drm_atomic_state *state, int modeset)
+int32_t intel_wm_check_intermediate(struct intel_crtc *c, struct intel_pipe_wm *wm)
 {
-    struct intel_pipe_wm optimal, wm;
-    uint32_t flags;
+    uint32_t flags = spin_lock_irqsave(&c->i915->drm.event_lock);
+    int32_t err = intel_wm_intermediate(&c->wm_active, wm);
 
-    if (intel_wm_compute(c, state, &c->cfg, &optimal) != 0) {
-        /* The check refused this; keep what the hardware has. */
-        return;
+    spin_unlock_irqrestore(&c->i915->drm.event_lock, flags);
+    return err;
+}
+
+int intel_wm_update(struct intel_crtc *c, const struct intel_pipe_wm *optimal, int modeset)
+{
+    struct intel_pipe_wm wm = *optimal;
+
+    /* A prior update may still need its intermediate watermarks. */
+    if (!modeset && intel_wm_intermediate(&c->wm_active, &wm) != 0) {
+        return 0;
     }
-    wm = optimal;
-    flags = spin_lock_irqsave(&c->i915->drm.event_lock);
     wm_cancel_locked(c);
-    /* Watermarks safe for the planes before and after the vblank, Linux's
-     * intermediate; a mode set takes its own at once. */
-    if (!modeset && optimal.pipe_enabled && intel_wm_intermediate(&c->wm_optimal, &wm) != 0) {
-        wm = optimal;
-    }
-    c->wm_optimal = optimal;
+    c->wm_optimal = *optimal;
     c->wm_active = wm;
     program(c->i915);
-    if (!same_wm(&wm, &optimal) && drm_crtc_vblank_get(&c->base) == 0) {
+    if (!same_wm(&wm, optimal) && drm_crtc_vblank_get(&c->base) == 0) {
         c->wm_pending = 1;
-        c->wm_frame = intel_get_vblank_counter(&c->base);
     }
-    spin_unlock_irqrestore(&c->i915->drm.event_lock, flags);
+    return c->wm_pending;
+}
+
+void intel_wm_modeset(struct intel_crtc *c, struct drm_atomic_state *state)
+{
+    struct intel_pipe_wm optimal;
+    uint32_t flags;
+
+    if (intel_wm_compute(c, state, &c->cfg, &optimal) == 0) {
+        flags = spin_lock_irqsave(&c->i915->drm.event_lock);
+        (void)intel_wm_update(c, &optimal, 1);
+        spin_unlock_irqrestore(&c->i915->drm.event_lock, flags);
+    }
 }
 
 void intel_wm_sanitize(struct drm_i915_private *i915)
@@ -550,7 +562,7 @@ void intel_wm_cancel(struct intel_crtc *c)
 
 void intel_wm_vblank(struct intel_crtc *c)
 {
-    if (!c->wm_pending || intel_get_vblank_counter(&c->base) == c->wm_frame) {
+    if (!c->wm_pending || (int32_t)(c->base.vblank.last - c->wm_frame) <= 0) {
         return;
     }
     c->wm_pending = 0;

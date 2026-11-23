@@ -1356,7 +1356,7 @@ static void commit_enables(struct drm_atomic_state *state)
         if (cs->crtc->funcs && cs->crtc->funcs->atomic_enable) {
             cs->crtc->funcs->atomic_enable(cs->crtc, state);
         }
-        if (drm_crtc_has_vblank(cs->crtc)) {
+        if (!state->dev->mode_config.commit_crtc_planes && drm_crtc_has_vblank(cs->crtc)) {
             drm_crtc_vblank_on(cs->crtc);
         }
     }

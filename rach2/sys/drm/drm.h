@@ -1464,8 +1464,9 @@ struct drm_mode_config {
     void (*fb_destroy)(struct drm_framebuffer *fb);
     void (*commit_fence_wait)(struct drm_device *dev, struct dma_fence *fence);
     uint32_t commit_fence_timeout_ms;
-    /* Program all planes and arm the event of one CRTC in the same
-     * update. A driver using this hook has planes fixed to their CRTCs. */
+    /* Program one CRTC's planes and arm its event in the same update.
+     * On a modeset, turn vblanks on before programming those planes.
+     * A driver using this hook has planes fixed to their CRTCs. */
     void (*commit_crtc_planes)(struct drm_crtc *crtc, struct drm_atomic_state *state);
 };
 
@@ -1973,9 +1974,9 @@ int drm_dev_work_cancel(struct drm_work *work);
  * turns the interrupt on; once the last has let go for
  * DRM_VBLANK_OFFDELAY_MS, the next vblank turns it off, as Linux's
  * drm_vblank_offdelay does. The core's commit turns a CRTC's vblanks off
- * before its `atomic_disable` returns and on after its `atomic_enable`, and
- * arms each commit's event for the vblank after the commit has programmed
- * the CRTC; a driver with its own `atomic_commit` does both itself.
+ * after `atomic_disable` and on after `atomic_enable`, and arms each event
+ * for the vblank after it programs the CRTC. A driver with
+ * `commit_crtc_planes` turns vblanks on and arms the event in that hook.
  */
 #define DRM_VBLANK_OFFDELAY_MS 5000
 

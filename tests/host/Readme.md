@@ -96,6 +96,8 @@ The wireless station and ath9k fixtures, and `procfs_hosttest.c` and `unix_hostt
 
 `i915_display_hosttest --vblank-crossing` runs the two vblank crossing rows alone. It forces the model's vblank between the surface write and event arming, then starts a separate flip inside the evasion window. Each event must belong to the vblank that latched its surface.
 
+`i915_display_hosttest --commit-crossings` runs four further display timing rows alone. It arms a flip while an older vblank interrupt is between counting and delivery, takes the guard vblank during a sprite disable, latches a modeset's first surface before its event is armed, and takes a vblank during a fastset's buffer preparation. The rows check the event counts, the sprite's watermarks and the pipe's source, fitter and surface.
+
 ### The compile
 
 Each test is one compile and one program:

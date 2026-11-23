@@ -1018,7 +1018,7 @@ static int32_t intel_crtc_check(struct drm_crtc *crtc, struct drm_atomic_state *
     if ((err = intel_wm_compute(c, state, &cfg, &wm)) != 0) {
         return err;
     }
-    return modeset || !cfg.active ? 0 : intel_wm_intermediate(&c->wm_optimal, &wm);
+    return modeset || !cfg.active ? 0 : intel_wm_check_intermediate(c, &wm);
 }
 
 int32_t intel_cpu_transcoder_mode_valid(const struct drm_mode_modeinfo *m)
@@ -1278,7 +1278,7 @@ static void crtc_enable(struct intel_crtc *c, struct drm_atomic_state *state)
     plane_off(c, INTEL_PLANE_PRIMARY);
     i915_write(hw, WM_LINETIME(c->pipe),
                cfg->linetime | cfg->ips_linetime << HSW_IPS_LINETIME_SHIFT);
-    intel_wm_commit(c, state, 1);
+    intel_wm_modeset(c, state);
     intel_ddi_enable(i915, c->pipe, cfg);
     if (err == -EAGAIN && connector) {
         link_retry(connector);
@@ -1363,7 +1363,7 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
     intel_fifo_underrun_reporting(c, 1);
     /* A pipe that stays off gives its share of the FIFO back. */
     if (!state->crtcs_new[crtc->index]->active) {
-        intel_wm_commit(c, state, 1);
+        intel_wm_modeset(c, state);
     }
     flags = spin_lock_irqsave(&i915->drm.event_lock);
     intel_crtc_send_event(c);
@@ -1391,119 +1391,148 @@ static int pipe_config_changed(struct intel_crtc *c, struct drm_atomic_state *st
     return 0;
 }
 
-/** Update an eDP pipe's source and panel fitter without stopping its
- * unchanged link and timings, Linux's intel_pipe_fastset. The check has
- * established that its transcoder input and power domains stay the same.
- * The writes wait for the vertical blank, so that PIPESRC and the fitter
- * latch in the frame the planes' writes that follow latch in, as Linux's
- * commit_pipe_pre_planes writes them inside the planes' evasion; a plane
- * a frame apart from its pipe's source size underruns the pipe's FIFO. */
-static void crtc_fastset(struct intel_crtc *c, struct drm_atomic_state *state)
+/** Prepare `cfg` for an eDP fastset, keeping the running pipe's PLL
+ * and power well. Returns 1 when the source or fitter will change. */
+static int crtc_fastset_config(struct intel_crtc *c, struct drm_atomic_state *state,
+                               struct intel_crtc_config *cfg)
 {
-    struct intel_crtc_config cfg;
-    int32_t err = compute_config(c, state->crtcs_new[c->base.index], state, &cfg);
+    int32_t err;
 
+    if (!pipe_config_changed(c, state)) {
+        return 0;
+    }
+    err = compute_config(c, state->crtcs_new[c->base.index], state, cfg);
     if (err != 0) {
         klog(KLOG_ERR, "i915", "display: pipe %c fastset: error %d", 'A' + c->pipe, (int)err);
-        return;
+        return 0;
     }
-    cfg.pll = c->cfg.pll;
-    cfg.pll_hw = c->cfg.pll_hw;
-    cfg.well = c->cfg.well;
-    intel_pipe_update_start(c);
-    i915_write(&c->i915->hw, PIPESRC(c->pipe), (cfg.src_w - 1u) << 16 | (cfg.src_h - 1u));
-    if (cfg.pfit) {
-        ilk_pfit_enable(c->i915, c->pipe, &cfg);
+    cfg->pll = c->cfg.pll;
+    cfg->pll_hw = c->cfg.pll_hw;
+    cfg->well = c->cfg.well;
+    return 1;
+}
+
+/** Program the source and fitter inside the planes' vblank evasion window,
+ * as Linux's commit_pipe_pre_planes does. Does not sleep. */
+static void crtc_fastset(struct intel_crtc *c, const struct intel_crtc_config *cfg)
+{
+    i915_write(&c->i915->hw, PIPESRC(c->pipe), (cfg->src_w - 1u) << 16 | (cfg->src_h - 1u));
+    if (cfg->pfit) {
+        ilk_pfit_enable(c->i915, c->pipe, cfg);
     } else if (c->cfg.pfit) {
         ilk_pfit_disable(c->i915, c->pipe, &c->cfg);
     }
     i915_write(&c->i915->hw, WM_LINETIME(c->pipe),
-               cfg.linetime | cfg.ips_linetime << HSW_IPS_LINETIME_SHIFT);
-    c->cfg = cfg;
+               cfg->linetime | cfg->ips_linetime << HSW_IPS_LINETIME_SHIFT);
+    c->cfg = *cfg;
 }
 
-/** Prepare the pipe before programming its planes. May sleep. */
-static void intel_crtc_begin(struct intel_crtc *c, struct drm_atomic_state *state)
+/* The state prepared before entering the pipe's vblank evasion window. */
+struct intel_pipe_update {
+    struct drm_plane *planes[INTEL_NUM_PLANES];
+    struct intel_plane_surface surfaces[INTEL_NUM_PLANES];
+    struct intel_crtc_config cfg;
+    struct intel_pipe_wm optimal;
+    int sync, fastset, update_wm;
+};
+
+/** Prepare the pipe and its surfaces. A modeset starts its vblank count
+ * here, so the planes' first vblank can deliver its event. May sleep. */
+static void prepare_pipe_update(struct intel_crtc *c, struct drm_atomic_state *state,
+                                struct intel_pipe_update *update)
 {
     struct drm_crtc_state *cs = state->crtcs_new[c->base.index];
+    int modeset = drm_atomic_crtc_needs_modeset(cs);
+    int i;
 
-    if (cs && drm_atomic_crtc_needs_modeset(cs) && cs->active) {
+    update->planes[INTEL_PLANE_PRIMARY] = &c->primary;
+    update->planes[INTEL_PLANE_SPRITE] = &c->sprite;
+    update->planes[INTEL_PLANE_CURSOR] = &c->cursor;
+    k_memset(update->surfaces, 0, sizeof(update->surfaces));
+    update->fastset = update->update_wm = 0;
+    if (modeset && cs->active) {
         crtc_enable(c, state);
-    } else if (cs && !drm_atomic_crtc_needs_modeset(cs)) {
-        if (cs->active && pipe_config_changed(c, state)) {
-            crtc_fastset(c, state);
-        }
-        /* Linux's color commit of a fastset, before the planes, which
-         * take its enables; the tables are written before the modes that
-         * use them latch at the vblank, where Linux loads tables already
-         * in use after it. */
-        if (cs->color_mgmt_changed && cs->active) {
-            intel_color_commit(c);
-        }
-        intel_wm_commit(c, state, 0);
     }
     intel_crtc_rpm_sync(c);
+    update->sync = cs->active && c->cfg.active && !cs->async_flip;
+    if (update->sync && !modeset) {
+        update->fastset = crtc_fastset_config(c, state, &update->cfg);
+        update->update_wm = intel_wm_compute(c, state, update->fastset ? &update->cfg : &c->cfg,
+                                             &update->optimal) == 0;
+        if (cs->color_mgmt_changed) {
+            intel_color_commit(c);
+        }
+    }
+    for (i = 0; cs->active && i < INTEL_NUM_PLANES; i++) {
+        struct drm_plane_state *ps = state->planes_new[update->planes[i]->index];
+
+        if (ps) {
+            intel_plane_prepare(ps, &update->surfaces[i]);
+        }
+    }
+    if (modeset && update->sync) {
+        drm_crtc_vblank_on(&c->base);
+    }
 }
 
-/** Program one pipe's planes and arm its event without letting its
- * vblank handler run between the writes and arming. A modeset leaves its
- * event to the core once it enables vblanks. */
+/** Program the pipe and planes and arm the event inside vblank evasion.
+ * May sleep while preparing the update. */
 static void intel_commit_crtc_planes(struct drm_crtc *crtc, struct drm_atomic_state *state)
 {
     struct intel_crtc *c = to_intel_crtc(crtc);
     struct drm_crtc_state *cs = state->crtcs_new[crtc->index];
-    struct drm_plane *planes[3];
-    static void (*const update[])(struct drm_plane *, struct drm_atomic_state *,
-                                  const struct intel_plane_surface *) = {
-        intel_primary_update, intel_sprite_update, intel_cursor_update};
-    struct intel_plane_surface surfaces[3] = {{0, 0, 0, 0}};
     struct spinlock *lock = &c->i915->drm.event_lock;
-    int modeset = drm_atomic_crtc_needs_modeset(cs);
-    int sync = !modeset && cs->active && !cs->async_flip;
-    int hold, i;
-    uint32_t flags, frame = 0;
+    struct intel_pipe_update update;
+    static void (*const write_plane[])(struct drm_plane *, struct drm_atomic_state *,
+                                       const struct intel_plane_surface *) = {
+        intel_primary_update, intel_sprite_update, intel_cursor_update};
+    int finish_wm = 0, hold, i;
+    uint32_t flags, frame = 0, first = 0, last = 0;
 
-    planes[0] = &c->primary;
-    planes[1] = &c->sprite;
-    planes[2] = &c->cursor;
-    intel_crtc_begin(c, state);
-    for (i = 0; cs->active && i < 3; i++) {
-        struct drm_plane_state *ps = state->planes_new[planes[i]->index];
-
-        if (ps) {
-            intel_plane_prepare(ps, &surfaces[i]);
-        }
+    prepare_pipe_update(c, state, &update);
+    hold = update.sync && cs->event && drm_crtc_vblank_get(crtc) == 0;
+    flags = update.sync ? intel_pipe_update_lock(c) : spin_lock_irqsave(lock);
+    if (update.fastset) {
+        first = intel_get_vblank_counter(crtc);
+        crtc_fastset(c, &update.cfg);
     }
-    hold = sync && cs->event && drm_crtc_vblank_get(crtc) == 0;
-    flags = sync ? intel_pipe_update_lock(c) : spin_lock_irqsave(lock);
-    if (sync) {
+    if (update.update_wm) {
+        finish_wm = intel_wm_update(c, &update.optimal, 0);
+    }
+    if (update.sync && cs->event) {
         frame = intel_get_vblank_counter(crtc);
     }
     if (cs->async_flip) {
         intel_crtc_arm_event(c, cs, 0);
     }
-    for (i = 0; i < 3; i++) {
-        uint32_t idx = planes[i]->index;
+    for (i = 0; i < INTEL_NUM_PLANES; i++) {
+        uint32_t idx = update.planes[i]->index;
         struct drm_plane_state *ps = state->planes_new[idx];
 
         if (ps && (ps->crtc || state->planes_old[idx]->crtc)) {
-            update[i](planes[i], state, &surfaces[i]);
+            write_plane[i](update.planes[i], state, &update.surfaces[i]);
         }
     }
-    if (!modeset && !cs->async_flip) {
+    if (finish_wm || update.fastset) {
+        last = intel_get_vblank_counter(crtc);
+        if (finish_wm) {
+            c->wm_frame = last;
+        }
+    }
+    if (!cs->async_flip) {
         intel_crtc_arm_event(c, cs, frame);
     }
     spin_unlock_irqrestore(lock, flags);
     if (hold) {
         drm_crtc_vblank_put(crtc);
     }
-    if (modeset) {
-        return;
+    if (update.fastset && last != first) {
+        klog(KLOG_WARN, "i915", "display: pipe %c update: crossed %u vblanks", 'A' + c->pipe,
+             (unsigned)(last - first));
     }
-    intel_pipe_update_end(c);
     /* Linux's intel_update_crtc: a pipe the firmware lit reports its
      * underruns from its first fastset. */
-    if (cs && cs->active && c->inherited) {
+    if (cs->active && c->inherited) {
         c->inherited = 0;
         intel_fifo_underrun_reporting(c, 1);
     }
@@ -1600,7 +1629,7 @@ static int32_t check_fastsets(struct drm_i915_private *i915, struct drm_atomic_s
         }
         err = intel_wm_compute(c, state, &cfg, &wm);
         if (err == 0) {
-            err = intel_wm_intermediate(&c->wm_optimal, &wm);
+            err = intel_wm_check_intermediate(c, &wm);
         }
         if (err != 0) {
             return err;
