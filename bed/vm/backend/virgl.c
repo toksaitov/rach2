@@ -17,6 +17,9 @@
 #include <sys/ioctl.h>
 #include <poll.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/sysmacros.h>
 #include <sys/uio.h>
 
 #include <virglrenderer.h>
@@ -317,7 +320,7 @@ static int resp(int err)
     return VD_RESP_ERR_UNSPEC;
 }
 
-static int mem_room(uint64_t size, int create);
+static int mem_room(uint64_t size);
 
 /* Gallium's targets of a 3D texture, whose depth halves at each level, and
  * of a cube map, which has six faces. */
@@ -339,9 +342,8 @@ static int mem_room(uint64_t size, int create);
  * for a cube, and its samples, and rounded up to a 4 KiB page. A bound, not
  * the driver's size: it judges only this create, since once the renderer
  * has the resource the VM's counts and i915's hold its storage
- * (`gpu_unbacked`), and the bound itself until the next scan (`mem_room`),
- * and an error of one create lies within the eighth of the VM that
- * `mem_room` keeps.
+ * (`gpu_unbacked`), and an error of one create lies within the eighth of
+ * the VM that `mem_room` keeps.
  */
 static uint64_t create_bytes(const struct vd_create *a)
 {
@@ -391,7 +393,7 @@ static int op_create(void *c, const struct vd_create *a)
     uint64_t bytes = create_bytes(a);
 
     (void)c;
-    if (!mem_room(bytes, 1)) {
+    if (!mem_room(bytes)) {
         fprintf(stderr,
                 "backend: create: resource %u: refused: %llu bytes: no room in the VM's counts\n",
                 (unsigned)a->id, (unsigned long long)bytes);
@@ -832,9 +834,22 @@ struct gpu_scan {
     uint64_t sum;     /* bytes of the objects counted */
     char (*seen)[80]; /* "drm-pdev drm-client-id" of each client counted */
     size_t nseen, cap;
+    struct {
+        long pid;
+        int fd;
+    } read[32];      /* the first descriptors whose fdinfo was read */
+    size_t nread;    /* entries of read; past 32 a file is not matched */
     int failed;      /* the errno that stopped the scan, or 0 */
     char where[512]; /* the file or directory the scan failed on */
 };
+
+/* The character devices' majors of DRM's card and render nodes and of its
+ * accel nodes, the only files whose fdinfo gives Linux's drm-usage stats. */
+#define DRM_MAJOR   226u
+#define ACCEL_MAJOR 261u
+
+/* kcmp's type that compares two descriptors' open files (linux/kcmp.h). */
+#define VR_KCMP_FILE 0
 
 /** Stop scan s on errno err at path, the first failure kept. */
 static void scan_fail(struct gpu_scan *s, const char *path, int err)
@@ -972,23 +987,50 @@ static FILE *cgroup_procs(struct gpu_scan *s, char *path, size_t size)
 }
 
 /**
- * Add to s what each descriptor in fdinfo directory `base` holds
- * (`unbacked_of`). A directory whose process ended before or while it was
- * read adds what was read; any other failure to read it fails s.
+ * Whether descriptor fd of process pid names an open file whose fdinfo
+ * scan s has read, as kcmp's KCMP_FILE compares them: a dup or an inherited
+ * copy of it, which gives the same drm-usage stats. 0 when kcmp cannot
+ * tell, for want of the call or of access, which reads the file again and
+ * leaves it to the client's ID (`unbacked_of`).
  */
-static void scan_fdinfo(struct gpu_scan *s, const char *base)
+static int scan_has(const struct gpu_scan *s, long pid, int fd)
 {
-    char path[512];
-    struct dirent *e;
-    DIR *dir = opendir(base);
+    size_t i;
 
-    if (dir == 0) {
+    for (i = 0; i < s->nread; i++) {
+        if (syscall(SYS_kcmp, (pid_t)pid, (pid_t)s->read[i].pid, VR_KCMP_FILE, (unsigned long)fd,
+                    (unsigned long)s->read[i].fd) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Add to s what each DRM descriptor of process pid holds (`unbacked_of`),
+ * reading the fdinfo of each open file once. A descriptor is one when the
+ * file its /proc/PID/fd link names is a character device of DRM's or
+ * accel's major; a stat of the link costs a lookup, where a read of every
+ * descriptor's fdinfo cost an open, a seq_file and a close each. A
+ * descriptor or process that ended before or while it was read adds what
+ * was read; any other failure to read the directory or stat a link fails s.
+ */
+static void scan_fds(struct gpu_scan *s, long pid)
+{
+    char base[64], path[128];
+    struct dirent *e;
+    struct stat st;
+    unsigned int major_of;
+    DIR *dir;
+
+    snprintf(base, sizeof(base), "/proc/%ld/fd", pid);
+    if ((dir = opendir(base)) == 0) {
         if (errno != ENOENT && errno != ESRCH) {
             scan_fail(s, base, errno);
         }
         return;
     }
-    for (;;) {
+    while (s->failed == 0) {
         errno = 0;
         if ((e = readdir(dir)) == 0) {
             if (errno != 0 && errno != ENOENT && errno != ESRCH) {
@@ -996,9 +1038,27 @@ static void scan_fdinfo(struct gpu_scan *s, const char *base)
             }
             break;
         }
-        if (e->d_name[0] != '.') {
-            snprintf(path, sizeof(path), "%s/%s", base, e->d_name);
-            unbacked_of(path, s);
+        if (e->d_name[0] == '.') {
+            continue;
+        }
+        if (fstatat(dirfd(dir), e->d_name, &st, 0) != 0) {
+            if (errno != ENOENT && errno != ESRCH) {
+                snprintf(path, sizeof(path), "%s/%s", base, e->d_name);
+                scan_fail(s, path, errno);
+            }
+            continue;
+        }
+        major_of = major(st.st_rdev);
+        if (!S_ISCHR(st.st_mode) || (major_of != DRM_MAJOR && major_of != ACCEL_MAJOR) ||
+            scan_has(s, pid, atoi(e->d_name))) {
+            continue;
+        }
+        snprintf(path, sizeof(path), "/proc/%ld/fdinfo/%s", pid, e->d_name);
+        unbacked_of(path, s);
+        if (s->nread < sizeof(s->read) / sizeof(s->read[0])) {
+            s->read[s->nread].pid = pid;
+            s->read[s->nread].fd = atoi(e->d_name);
+            s->nread++;
         }
     }
     closedir(dir);
@@ -1007,10 +1067,10 @@ static void scan_fdinfo(struct gpu_scan *s, const char *base)
 /**
  * Read into s->sum the bytes of the VM's memory that the renderer's GPU
  * objects will take and the VM's counts do not hold yet (`unbacked_of`),
- * over every descriptor of every process of the backend's cgroup, the
- * service's (`cgroup_procs`), which holds virglrenderer's render server
- * and its workers too; of this process alone where the kernel has no
- * cgroup v2 to name. 0 with no GPU: llvmpipe fills a texture's memory at
+ * over every DRM descriptor (`scan_fds`) of every process of the backend's
+ * cgroup, the service's (`cgroup_procs`), which holds virglrenderer's
+ * render server and its workers too; of this process alone where the
+ * kernel has no cgroup v2 to name. 0 with no GPU: llvmpipe fills a texture's memory at
  * its create. A process that ends during the scan adds nothing. Returns 0,
  * or -1 with s->failed and s->where when a file or directory of the scan
  * cannot be opened or read for any other cause, ENOMEM or EMFILE among
@@ -1018,14 +1078,14 @@ static void scan_fdinfo(struct gpu_scan *s, const char *base)
  */
 static int gpu_unbacked(struct gpu_scan *s)
 {
-    char path[512], base[64];
+    char path[512];
     FILE *procs;
     long pid;
 
     memset(s, 0, sizeof(*s));
     procs = cgroup_procs(s, path, sizeof(path));
     if (procs == 0 && s->failed == 0) {
-        scan_fdinfo(s, "/proc/self/fdinfo");
+        scan_fds(s, (long)getpid());
     }
     while (procs && s->failed == 0) {
         if (fscanf(procs, "%ld", &pid) != 1) {
@@ -1034,8 +1094,7 @@ static int gpu_unbacked(struct gpu_scan *s)
             }
             break;
         }
-        snprintf(base, sizeof(base), "/proc/%ld/fdinfo", pid);
-        scan_fdinfo(s, base);
+        scan_fds(s, pid);
     }
     if (procs) {
         fclose(procs);
@@ -1045,60 +1104,42 @@ static int gpu_unbacked(struct gpu_scan *s)
     return s->failed ? -1 : 0;
 }
 
-/* How long a scan of the GPU objects (`gpu_unbacked`) stands for the
- * judgments after it (`mem_room`), in nanoseconds. A scan reads the fdinfo
- * of every descriptor of every process of the backend's cgroup, which took
- * 2.0 to 2.5 ms of the serving thread for each create and backing on the
- * Lenovo under Crysis. */
-#define VR_SCAN_NS 250000000ull
-
-/* The last scan and the bounds of the creates admitted since, which it
- * does not hold; the serving thread's alone. */
-static struct {
-    uint64_t at;  /* the monotonic time of the scan, in ns; 0 for none */
-    uint64_t sum; /* its bytes, and the creates' bounds since */
-} last_scan;
-
-/** Return the monotonic clock in nanoseconds. */
-static uint64_t mono_ns(void)
-{
-    struct timespec t;
-
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
-}
-
-/** Scan the GPU objects into last_scan; 0, or -1 after the scan's line. */
-static int scan_now(void)
-{
-    struct gpu_scan scan;
-
-    if (gpu_unbacked(&scan) != 0) {
-        last_scan.at = 0;
-        fprintf(stderr, "backend: counts: %s: %s\n", scan.where, strerror(scan.failed));
-        return -1;
-    }
-    last_scan.at = mono_ns();
-    last_scan.sum = scan.sum;
-    return 0;
-}
-
 /**
- * Whether MemAvailable holds `size` bytes more, `unbacked` bytes and an
- * eighth of the VM's memory besides, as `mem_room` judges it: 1 when the VM
- * has no /proc/meminfo or it lacks either count; 0 when it cannot be opened
- * for want of memory or its read fails, as seq_file's does when it cannot
- * allocate its buffer. MemAvailable reads 0, not less, when the free pages
- * are down to the watermarks, which is no room.
+ * Whether the VM has room for `size` bytes more, of a backing or of a
+ * resource's storage: its available memory, as /proc/meminfo counts it,
+ * holds them, the bytes the renderer's GPU objects will yet take
+ * (`gpu_unbacked`), and an eighth of the VM's memory besides, so that a
+ * guest that asks for more than the VM has is refused, as a Linux guest's
+ * allocation fails when its RAM runs out, before the pin's reclaim, or
+ * i915's at an object's first use, stalls the VM and every answer with it
+ * or wakes its OOM killer. Creates (`op_create`) and backings (`back_new`)
+ * are judged so against one account: a create's GPU object counts here
+ * from its creation until it has its pages, and in MemAvailable after. The
+ * objects are read before MemAvailable, so that one made resident between
+ * the two readings is counted twice, which refuses early, and never not at
+ * all. Each judgment reads them afresh, since the renderer makes GPU
+ * objects by other paths too, at submissions, blob creates and in Venus's
+ * workers, which only a new reading counts. main has the C library give
+ * back at once what llvmpipe frees. 0,
+ * with `backend: counts: PATH: ERROR`, when the objects cannot be read; 1
+ * when the VM has no /proc/meminfo or it lacks either count; 0 when it
+ * cannot be opened for want of memory or its read fails, as seq_file's
+ * does when it cannot allocate its buffer. MemAvailable reads 0, not less,
+ * when the free pages are down to the watermarks, which is no room.
  */
-static int meminfo_room(uint64_t size, uint64_t unbacked)
+static int mem_room(uint64_t size)
 {
     unsigned long long total = 0, avail = 0, kib;
     int has_total = 0, has_avail = 0, failed;
+    struct gpu_scan scan;
     uint64_t need;
     char line[128];
     FILE *f;
 
+    if (gpu_unbacked(&scan) != 0) {
+        fprintf(stderr, "backend: counts: %s: %s\n", scan.where, strerror(scan.failed));
+        return 0;
+    }
     if ((f = fopen("/proc/meminfo", "r")) == 0) {
         return errno != ENOMEM && errno != ENFILE && errno != EMFILE;
     }
@@ -1119,58 +1160,8 @@ static int meminfo_room(uint64_t size, uint64_t unbacked)
     if (!has_total || !has_avail) {
         return 1;
     }
-    need = total / 8u + unbacked;
+    need = total / 8u + scan.sum;
     return need <= avail && size <= avail - need;
-}
-
-/**
- * Whether the VM has room for `size` bytes more, of a backing or of a
- * resource's storage: its available memory, as /proc/meminfo counts it,
- * holds them, the bytes the renderer's GPU objects will yet take
- * (`gpu_unbacked`), and an eighth of the VM's memory besides, so that a
- * guest that asks for more than the VM has is refused, as a Linux guest's
- * allocation fails when its RAM runs out, before the pin's reclaim, or
- * i915's at an object's first use, stalls the VM and every answer with it
- * or wakes its OOM killer (`meminfo_room`). Creates (`op_create`, with
- * `create` 1) and backings (`back_new`) are judged so against one account:
- * a create's GPU object counts here from its creation until it has its
- * pages, and in MemAvailable after. The objects are read before
- * MemAvailable, so that one made resident between the two readings is
- * counted twice, which refuses early, and never not at all.
- *
- * A scan stands for VR_SCAN_NS, the bound of each create admitted since
- * added to it, so that a create and its backing, which come together, and
- * a run of creates take one scan; an object made resident since is counted
- * twice, and one freed is still counted, which refuse early. What the scan
- * leaves out is the objects the renderer made since for itself, not for a
- * create, and has not used: the eighth of the VM that the room keeps
- * covers what a renderer makes in that time. A judgment that refuses on a
- * standing scan is made again on a new one, so that a scan's age refuses
- * nothing. main has the C library give back at once what llvmpipe frees.
- * 0, with `backend: counts: PATH: ERROR`, when the objects cannot be read.
- * Serving thread only.
- */
-static int mem_room(uint64_t size, int create)
-{
-    int fresh = 0, room;
-
-    if (last_scan.at == 0 || mono_ns() - last_scan.at >= VR_SCAN_NS) {
-        if (scan_now() != 0) {
-            return 0;
-        }
-        fresh = 1;
-    }
-    room = meminfo_room(size, last_scan.sum);
-    if (!room && !fresh) {
-        if (scan_now() != 0) {
-            return 0;
-        }
-        room = meminfo_room(size, last_scan.sum);
-    }
-    if (room && create) {
-        last_scan.sum += size;
-    }
-    return room;
 }
 
 volatile sig_atomic_t vr_hold;
@@ -1227,7 +1218,7 @@ static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
         err = ENOSPC;
         step = "no pin";
     }
-    if (err == 0 && !mem_room(q->size, 0)) {
+    if (err == 0 && !mem_room(q->size)) {
         err = ENOMEM;
         step = "no room in the VM's counts";
     }
