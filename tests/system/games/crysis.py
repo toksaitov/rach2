@@ -624,9 +624,11 @@ def stop_after(child, seconds):
     of /proc/PID waits on that process's memory map for as long as another
     thread holds it, a wait no signal ends until task 5758 makes it
     killable; till then the kill takes effect only as that read returns.
-    The script never waits on a killed child, which holds none of its pipes
-    (start_child), so its exit does not wait on one; a keeper that waits
-    for every descendant, bedkeep or etude's owner, still waits for it."""
+    The script never waits on the two children it stops here, the load
+    trace's sampler and its copy of the counts, which hold none of its
+    pipes (start_child), so its exit does not wait on either; a keeper that
+    waits for every descendant, bedkeep or etude's owner, still waits for
+    one. Game.end does wait on the game it kills."""
     try:
         return child.wait(seconds)
     except subprocess.TimeoutExpired:

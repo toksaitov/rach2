@@ -455,8 +455,9 @@ static uint32_t format_block(uint32_t format, uint32_t *bw, uint32_t *bh)
  * 64 and a linear surface's pitch 64 bytes. */
 #define TILE_ROW_BYTES 512u
 #define TILE_ROWS      32u
-/* The rows gen7 adds to an array layer's pitch past h0 and h1: 12 * valign
- * for a valign of 4, and 3 rows each for rounding h0 and h1 up to it. */
+/* The rows the spaced bound adds to an array layer's pitch past h0 and h1:
+ * 12 * valign for a valign of 4, and 3 rows each for rounding h0 and h1 up
+ * to it. Gen7's stencil takes a valign of 8; the factor of two covers it. */
 #define LAYER_ROWS     54u
 
 /**
@@ -470,15 +471,15 @@ static uint32_t format_block(uint32_t format, uint32_t *bw, uint32_t *bh)
  * for more than one layer, is level 0's rounded row bytes by LAYER_ROWS
  * past the block rows of levels 0 and 1 for each layer, and a tile's rows
  * more: gen7's hardware spaces an array's layers h0 + h1 + 12 * valign
- * rows apart, h1 counted even with one level, valign at most 4 rows, and
- * each height rounded up to valign. The total is rounded up to a 4 KiB
- * page. i915's isl places a miptree's levels in one surface, level 1 under
- * level 0 and the rest beside level 1, so that the surface is no wider than
- * the levels together and no taller than levels 0 and 1, and adds the
- * separate stencil, HiZ, MCS and CCS surfaces, each well below the main
- * one; Mesa's cache gives a buffer an object at most a quarter larger than
- * its width. The factor of two covers both. UINT64_MAX for a size past any
- * GPU's limits or VR_BYTES_MAX.
+ * rows apart, h1 counted even with one level and each height rounded up to
+ * valign, which the bound takes as 4 rows. The total is rounded up to a
+ * 4 KiB page. i915's isl places a miptree's levels in one surface, level 1
+ * under level 0 and the rest beside level 1, and adds the separate
+ * stencil, HiZ, MCS and CCS surfaces, each well below the main one; Mesa's
+ * cache gives a buffer an object at most a quarter larger than its width.
+ * The factor of two covers these, stencil's valign of 8 rows, and a chain
+ * of short levels whose column beside level 1 runs past h0 + h1.
+ * UINT64_MAX for a size past any GPU's limits or VR_BYTES_MAX.
  */
 static uint64_t create_bytes(const struct vd_create *a)
 {
