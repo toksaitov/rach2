@@ -1770,6 +1770,32 @@ static int panic_record(const char *s, size_t n)
 }
 
 /**
+ * Returns 1 when the `n` bytes at `s`, a critical record, are of the
+ * subsystem `sub` and their text begins with one of the `count` texts
+ * `tails`.
+ */
+static int record_begins(const char *s, size_t n, const char *sub, const char *const *tails,
+                         size_t count)
+{
+    const char *close = memchr(s, ']', n);
+    size_t i, left, len = strlen(sub);
+
+    if (close == NULL || (size_t)(s + n - close) < len + 4 || memcmp(close, "] ", 2) != 0 ||
+        memcmp(close + 2, sub, len) != 0 || memcmp(close + 2 + len, ": ", 2) != 0) {
+        return 0;
+    }
+    close += len + 4;
+    left = (size_t)(s + n - close);
+    for (i = 0; i < count; i++) {
+        len = strlen(tails[i]);
+        if (left >= len && memcmp(close, tails[i], len) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
  * Returns 1 when the `n` bytes at `s`, a critical record, are a line of a
  * panic's call trace or report: `panic: Call Trace:`, a return address of
  * the trace, `panic:  0x...`, or `panic: report: ...`. The kernel prints
@@ -1779,20 +1805,22 @@ static int panic_record(const char *s, size_t n)
 static int report_record(const char *s, size_t n)
 {
     static const char *const tails[] = {"report: ", "Call Trace:", " 0x"};
-    const char *close = memchr(s, ']', n);
-    size_t i, left, len;
 
-    if (close == NULL || (size_t)(s + n - close) < 9 || memcmp(close, "] panic: ", 9) != 0) {
-        return 0;
-    }
-    left = (size_t)(s + n - close) - 9;
-    for (i = 0; i < sizeof tails / sizeof tails[0]; i++) {
-        len = strlen(tails[i]);
-        if (left >= len && memcmp(close + 9, tails[i], len) == 0) {
-            return 1;
-        }
-    }
-    return 0;
+    return record_begins(s, n, "panic", tails, sizeof tails / sizeof tails[0]);
+}
+
+/**
+ * Returns 1 when the `n` bytes at `s`, a critical record, are a line of an
+ * exception's call trace, `isr: Call Trace:` or `isr:  0x...`, which the
+ * x86-64 double fault of a thread whose kernel stack ran out prints before
+ * it panics (rach2/sys/arch/x86/isr.c), since the panic's own trace walks
+ * the interrupt stack.
+ */
+static int exception_trace(const char *s, size_t n)
+{
+    static const char *const tails[] = {"Call Trace:", " 0x"};
+
+    return record_begins(s, n, "isr", tails, sizeof tails / sizeof tails[0]);
 }
 
 /**
@@ -1910,8 +1938,10 @@ static int fault_outcome(const struct judging *j, const char *state, char *out, 
  * `panics` set, so is a record of the subsystem `panic`. On the console of
  * a boot that a machine record gives the end of its machine's fault, a line
  * with one of the fault's records is passed by as well, and when that end is
- * `panic`, so is every record of the subsystem `panic`. A line of a panic's
- * report is always passed by. Returns 1 when there is one, and 0 when not.
+ * `panic`, so is every record of the subsystem `panic`. Where either passes
+ * a `panic` record, so is a line of an exception's call trace. A line of a
+ * panic's report is always passed by. Returns 1 when there is one, and 0
+ * when not.
  */
 static int console_fault(const struct judging *j, int panics, char *out, size_t size)
 {
@@ -1932,7 +1962,8 @@ static int console_fault(const struct judging *j, int panics, char *out, size_t 
             }
             for (end = i; end < len && c[end] != '\r' && c[end] != '\n'; end++) {
             }
-            if ((panicked && panic_record(c + i, end - i)) || report_record(c + i, end - i)) {
+            if ((panicked && (panic_record(c + i, end - i) || exception_trace(c + i, end - i))) ||
+                report_record(c + i, end - i)) {
                 continue;
             }
             if (allowed != NULL && line_has(c + i, end - i, allowed)) {
