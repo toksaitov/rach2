@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from contextlib import ExitStack, nullcontext
 
 HERE = Path(__file__).resolve().parent
@@ -47,8 +48,42 @@ def client_command(user, args):
                                "graphics", *args])
 
 
+def browser_gpu(profile):
+    """Find the GPU process belonging to this picture's private profile."""
+    option = b"--user-data-dir=" + os.fsencode(profile)
+    for cmdline in Path("/proc").glob("[0-9]*/cmdline"):
+        try:
+            args = cmdline.read_bytes()
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+        if b"--type=gpu-process" in args and option in args:
+            return cmdline.parent
+    raise RuntimeError("Chromium's GPU process is missing")
+
+
+def file_tracer(process, output, log):
+    """Attach to the GPU's main thread before the page starts, or reap the failed tracer."""
+    tracer = subprocess.Popen(["strace", "-ttt", "-T", "-y", "-s", "512",
+                               "-e", "trace=%file,close,read,pread64,lseek,fstat",
+                               "-o", output, "-p", process.name],
+                              stdout=log, stderr=log, start_new_session=True)
+    expected = "TracerPid:\t%d" % tracer.pid
+    deadline = time.monotonic() + 5
+    attached = False
+    try:
+        while tracer.poll() is None and time.monotonic() < deadline:
+            if expected in (process / "status").read_text().splitlines():
+                attached = True
+                return tracer
+            time.sleep(0.05)
+        raise RuntimeError("strace did not attach to Chromium's GPU process")
+    finally:
+        if not attached:
+            stop(tracer)
+
+
 def collect(case, work, settle, weston, account, env, joined=False, kernel=True,
-            cache_root=None):
+            cache_root=None, files=False):
     """Record the picture, with the kernel from just before readback until it answers.
 
     JOINED adds Weston's timeline and drm-backend streams, and on Rach2 the
@@ -56,6 +91,7 @@ def collect(case, work, settle, weston, account, env, joined=False, kernel=True,
     no kernel trace is written; the browser's trace handshake still runs.
     CACHE_ROOT puts this picture's fresh Mesa cache outside the browser's
     work directory without moving its profile or Weston's cache.
+    FILES records the GPU thread's file calls and changes their timing.
     """
     case.mkdir()
     out = case / "out"
@@ -73,6 +109,8 @@ def collect(case, work, settle, weston, account, env, joined=False, kernel=True,
         traces.append((DRM_TRACE, "drm.bin"))
     started = []
     begun = stopped = False
+    tracer = None
+    calls = case / "gpu-files.strace"
     with streams, (case / "measure.log").open("w", buffering=1) as log:
         browser = subprocess.Popen(command, env=env, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=log, text=True,
@@ -82,6 +120,8 @@ def collect(case, work, settle, weston, account, env, joined=False, kernel=True,
                 print(line, end="", flush=True)
                 log.write(line)
                 if line == "webgpu: trace start\n" and not begun:
+                    if files:
+                        tracer = file_tracer(browser_gpu(work / "profile"), calls, log)
                     for path, name in traces:
                         path.write_text("start\n")
                         started.append((path, name))
@@ -91,12 +131,17 @@ def collect(case, work, settle, weston, account, env, joined=False, kernel=True,
                 elif line == "webgpu: trace stop\n" and begun and not stopped:
                     for path, _ in reversed(started):
                         path.write_text("stop\n")
+                    stop(tracer)
+                    tracer = None
                     stopped = True
                     browser.stdin.write("stop\n")
                     browser.stdin.flush()
             if browser.wait() != 0 or not stopped:
                 raise RuntimeError("browser measurement failed; read " + str(case / "measure.log"))
+            if files and (not calls.is_file() or calls.stat().st_size == 0):
+                raise RuntimeError("strace did not record GPU file calls")
         finally:
+            stop(tracer)
             stop(browser)
             browser.stdin.close()
             browser.stdout.close()
@@ -150,7 +195,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("user")
     parser.add_argument("output")
-    parser.add_argument("--profiled", action="store_true", help="trace Chromium, Weston and DRM")
+    trace = parser.add_mutually_exclusive_group()
+    trace.add_argument("--profiled", action="store_true", help="trace Chromium, Weston and DRM")
+    trace.add_argument("--file-trace", action="store_true",
+                       help="draw one picture with Chromium and GPU file calls traced")
     parser.add_argument("--bare", type=int, default=0, metavar="N",
                         help="first draw N pictures without probes")
     parser.add_argument("--all", action="store_true",
@@ -201,6 +249,11 @@ def main():
             bare_pictures(out, work, pid, account, env, args.bare, cache_root)
             if args.profiled:
                 profiled_pictures(out, work, pid, account, env, not args.linux, args.all, cache_root)
+            elif args.file_trace:
+                print("webgpu: measure GPU file calls", flush=True)
+                collect(out / "files", work / "files", 0, pid, account,
+                        dict(env, RACH2_BROWSER_TRACE="1"), kernel=not args.linux,
+                        cache_root=cache_root, files=True)
             elif not args.bare:
                 for name, delay in (("immediate", 0), ("settled", 5)):
                     print("webgpu: measure " + name, flush=True)
