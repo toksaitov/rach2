@@ -620,10 +620,13 @@ def last_line(path):
 
 def stop_after(child, seconds):
     """Wait SECONDS for CHILD, a Popen, and return its exit status, or kill
-    it with SIGKILL and return None. A read of /proc/PID waits on that
-    process's memory map, a wait no signal ends, for as long as another
-    thread holds it; the kill ends the child's work as that read returns,
-    and the child, never reaped here, holds no exit of the script's."""
+    it with SIGKILL and return None, without waiting for it to end. A read
+    of /proc/PID waits on that process's memory map for as long as another
+    thread holds it, a wait no signal ends until task 5758 makes it
+    killable; till then the kill takes effect only as that read returns.
+    The script never waits on a killed child, which holds none of its pipes
+    (start_child), so its exit does not wait on one; a keeper that waits
+    for every descendant, bedkeep or etude's owner, still waits for it."""
     try:
         return child.wait(seconds)
     except subprocess.TimeoutExpired:
