@@ -1239,7 +1239,6 @@ long sys_epoll_pwait2(struct isr_params *params)
         /* struct __kernel_timespec: 64-bit seconds and nanoseconds. */
         uint32_t ts[4];
         int64_t sec;
-        uint64_t ms;
 
         if (copy_from_user(ts, (const void __user *)SC_ARG(params, 3), sizeof(ts)) != 0) {
             return -EFAULT;
@@ -1248,14 +1247,7 @@ long sys_epoll_pwait2(struct isr_params *params)
         if (sec < 0 || ts[3] != 0 || ts[2] >= 1000000000u) {
             return -EINVAL;
         }
-        ms = 0x7FFFFFFFu;
-        if (sec < 0x7FFFFFFF / 1000) {
-            ms = (uint64_t)sec * 1000u + (ts[2] + 999999u) / 1000000u;
-        }
-        if (ms > 0x7FFFFFFFu) {
-            ms = 0x7FFFFFFFu;
-        }
-        poll_ms_deadline((int)ms, &d);
+        poll_ts_deadline(sec, ts[2], &d);
     }
     rc = poll_mask_set(SC_ARG(params, 4), USER_LEN32(SC_ARG(params, 5)));
     if (rc != 0) {

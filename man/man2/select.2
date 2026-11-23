@@ -101,15 +101,15 @@ it is in seconds and nanoseconds.
 A null pointer waits indefinitely; a zero interval performs one scan
 without waiting.
 With no selected descriptors, a finite interval acts as a sleep.
-A timeout ends at the first 4 ms timer tick at or after its end, measured from
-where in the tick in progress the call is, so a timeout never expires
-before the time asked, up to the limits below, and at most a tick after
-it.
-As in
-.Xr poll 2 ,
-the wait also lasts until
+A timeout ends once
 .Dv CLOCK_MONOTONIC
-has advanced by the timeout after a lost tick.
+has advanced by it, up to the limits below, at most the thread's timer
+slack after it, as Linux's high-resolution timer ends it:
+50 microseconds by default, or a thousandth of the timeout when that is
+more, as
+.Xr poll 2
+describes, which also gives the 4 ms tick a timeout ends at where no
+interrupt between ticks can be armed.
 .Pp
 As on Linux, the raw calls write the time left back to a nonzero
 .Fa timeout

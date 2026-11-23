@@ -41,6 +41,18 @@
  * 1003, where it has passed; a `ppoll` of a tick and a half does the same.
  * Without a lost tick, a timeout has passed at its deadline tick, and a
  * `ppoll` of 2^40 seconds, which the tick cuts, ends at its tick alone.
+ *
+ * A wait that sleeps arms the thread's timer for its end and its slack, as
+ * Linux's hrtimer, and ends when it fires: the model's sleep runs the clock
+ * to the time armed, or to the deadline tick where none is, as the timer's
+ * pass would. A `poll` and an epoll wait of 1 ms, begun a tenth into tick
+ * 1000, end 1.05 ms later, where by the tick they ended 3.6 ms later. The
+ * slack is Linux's select_estimate_accuracy: the thread's 50 us at a short
+ * timeout, a thousandth of a 10 s one, a two-hundredth at a positive nice,
+ * at most 100 ms, at least a larger timer slack, and none under SCHED_FIFO.
+ * A zero timeout neither sleeps nor arms the timer, a wait without one
+ * never arms it, and a signal or a ready descriptor ends a timed wait at
+ * once, its timer cleared. The `hrtimer` argument runs these rows alone.
  */
 #include "isr.h"
 struct isr_params;
@@ -280,11 +292,57 @@ void spin_unlock(struct spinlock *lock)
     lock->locked = 0;
 }
 
-/** No signal is pending in the enrollment row. */
+/* Nonzero while a row has a signal pending for the waiter. */
+static int signal_now;
+
+/** Whether the row has a signal pending; none in the enrollment row. */
 int signal_pending(void)
 {
+    return signal_now;
+}
+
+/* The times `proc_wait_set` armed and how often it was called with one. */
+static int64_t armed_ns;
+static int arms, disarms;
+
+/** Set the waiter's timed wait as process.c does, recording each arming
+ * and each end of a timed wait; no pass races it in the model. */
+int64_t proc_wait_set(uint64_t tick, int64_t ns, uint32_t steps, int fresh)
+{
+    (void)steps;
+    (void)fresh;
+    current_proc->wakeup_tick = tick;
+    current_proc->wakeup_ns = ns;
+    if (ns != 0) {
+        armed_ns = ns;
+        arms++;
+    } else {
+        disarms++;
+    }
     return 0;
 }
+
+/** `rtc_monotonic` as nanoseconds since boot. */
+int64_t rtc_monotonic_ns(void)
+{
+    int64_t sec, ns;
+
+    rtc_monotonic(&sec, &ns);
+    return sec * 1000000000LL + ns;
+}
+
+/** Set the model's clock to `ns` since boot, the tick count with it. */
+static void clock_at(int64_t ns)
+{
+    kernel_ticks = (uint64_t)(ns / TICK_NS);
+    phase_now_ns = (uint32_t)(ns % TICK_NS);
+}
+
+/* Nonzero while a row's sleep runs the clock to the waiter's timer; the
+ * sleeps it made; and, when not 0, what it does at its first sleep: 1
+ * posts a signal, 2 makes the watched descriptor ready. */
+static int timed_row, timed_sleeps, timed_event;
+static int timed_ready;
 
 /** Make `p` ready if it is blocked, as wait_queue.c does: 1 when it was. */
 int wq_ready_deferred(process_t *p, uint64_t *cpus)
@@ -314,10 +372,28 @@ void wq_poll_add(wait_queue_t *wq, struct wq_waiter *w)
     }
 }
 
-/** Supply input after recording a sleep whose enrollment was lost. */
+/** Supply input after recording a sleep whose enrollment was lost. In a
+ * timed row, run the clock to the time the waiter's timer is armed for, or
+ * to its deadline tick where none is, as the timer's pass wakes it, or
+ * deliver the row's event at once. */
 void schedule(void)
 {
     invalid_sleeps += current_proc->state == PROC_BLOCKED && watched.head == NULL;
+    if (timed_row && current_proc->state == PROC_BLOCKED) {
+        timed_sleeps++;
+        if (timed_event == 1) {
+            current_proc->sig_woken = 1;
+            signal_now = 1;
+        } else if (timed_event == 2) {
+            timed_ready = 1;
+        } else if (current_proc->wakeup_ns != 0) {
+            clock_at(current_proc->wakeup_ns);
+        } else if (current_proc->wakeup_tick != 0) {
+            clock_at((int64_t)current_proc->wakeup_tick * TICK_NS);
+        }
+        timed_event = 0;
+        current_proc->wakeup_tick = 0;
+    }
     current_proc->state = PROC_READY;
 }
 
@@ -353,6 +429,149 @@ static int enrollment_scan(void *ctx, struct wait_queue **wqs)
     return ++scans >= 3;
 }
 
+/** Nothing ready until a row's event makes the watched descriptor so. */
+static int timed_scan(void *ctx, struct wait_queue **wqs)
+{
+    (void)ctx;
+    wqs[0] = &watched;
+    return timed_ready;
+}
+
+/** Whether the watched queue's one record says ready, for
+ * `poll_wait_queue`. */
+static int timed_queue_ready(void *ctx)
+{
+    (void)ctx;
+    return timed_ready;
+}
+
+/** Begin a timed row a tenth into tick 1000, with the waiter running at
+ * the default slack and policy and nothing armed. */
+static void timed_begin(void)
+{
+    current_proc = &waiter;
+    waiter.state = PROC_RUNNING;
+    waiter.wakeup_tick = 0;
+    waiter.wakeup_ns = 0;
+    waiter.sig_woken = 0;
+    waiter.timer_slack_ns = PROC_TIMER_SLACK_NS;
+    waiter.nice = 0;
+    waiter.sched_policy = 0;
+    watched.head = NULL;
+    signal_now = 0;
+    timed_row = 1;
+    timed_sleeps = timed_event = timed_ready = 0;
+    arms = disarms = 0;
+    armed_ns = 0;
+    mono_held_ns = 0;
+    pending_now = 0;
+    kernel_ticks = 1000;
+    phase_now_ns = TICKS_NS(1) / 10;
+}
+
+/** The slack of a wait with `left` nanoseconds to go, at nice `nice` with
+ * the policy `policy` and the timer slack `slack`. */
+static uint64_t slack_of(int64_t left, int nice, int policy, uint64_t slack)
+{
+    current_proc = &waiter;
+    waiter.nice = nice;
+    waiter.sched_policy = (uint8_t)policy;
+    waiter.timer_slack_ns = slack;
+    return poll_slack(left);
+}
+
+/** The rows of the timer a timed wait arms, and of its slack. */
+static void hrtimer(void)
+{
+    struct poll_deadline d;
+    struct poll_timespec ts;
+    int64_t begun;
+    int rc;
+
+    CHECK(slack_of(1000000, 0, 0, PROC_TIMER_SLACK_NS) == 50000,
+          "a wait of 1 ms takes the thread's slack of 50 us");
+    CHECK(slack_of(10000000000LL, 0, 0, PROC_TIMER_SLACK_NS) == 10000000,
+          "a wait of 10 s takes a thousandth, 10 ms");
+    CHECK(slack_of(10000000000LL, 1, 0, PROC_TIMER_SLACK_NS) == 50000000,
+          "and a two-hundredth, 50 ms, at nice 1");
+    CHECK(slack_of(1000000000000LL, 0, 0, PROC_TIMER_SLACK_NS) == 100000000,
+          "a wait of 1000 s takes at most 100 ms");
+    CHECK(slack_of(1000000, 0, 0, 1000000) == 1000000,
+          "a timer slack of 1 ms is more than a 1 ms wait's thousandth, and is taken");
+    CHECK(slack_of(-5, 0, 0, PROC_TIMER_SLACK_NS) == 50000,
+          "a wait whose end has passed takes the timer slack");
+    CHECK(slack_of(10000000000LL, 0, SCHED_FIFO, PROC_TIMER_SLACK_NS) == 0 &&
+              slack_of(10000000000LL, 0, SCHED_DEADLINE, PROC_TIMER_SLACK_NS) == 0,
+          "a real-time or deadline thread takes none");
+
+    timed_begin();
+    begun = rtc_monotonic_ns();
+    poll_ms_deadline(1, &d);
+    rc = poll_wait(timed_scan, NULL, 1, &d, "hrtimer");
+    CHECK(rc == 0 && timed_sleeps == 1, "a poll of 1 ms ends at its timeout after one sleep");
+    CHECK(arms == 1 && armed_ns == begun + 1000000 + 50000,
+          "its timer is armed for its end and the slack of 50 us");
+    CHECK(rtc_monotonic_ns() - begun == 1050000,
+          "and it ends 1.05 ms after it began, not at the next tick, 3.6 ms after");
+    CHECK(disarms == 1 && waiter.wakeup_ns == 0 && waiter.wakeup_tick == 0 && !watched.head,
+          "it ends with its timer cleared and no record filed");
+
+    timed_begin();
+    begun = rtc_monotonic_ns();
+    poll_ms_deadline(1, &d);
+    rc = poll_wait_queue(&watched, timed_queue_ready, NULL, &d, "ep_poll");
+    CHECK(rc == 0 && timed_sleeps == 1 && rtc_monotonic_ns() - begun == 1050000,
+          "an epoll wait of 1 ms ends 1.05 ms after it began");
+    CHECK(disarms == 1 && waiter.wakeup_ns == 0 && !watched.head,
+          "with its timer cleared and its record off the queue");
+
+    timed_begin();
+    begun = rtc_monotonic_ns();
+    ts.tv_sec = 0;
+    ts.tv_nsec = 2500000;
+    ts_deadline(&ts, &d);
+    rc = poll_wait(timed_scan, NULL, 1, &d, "hrtimer");
+    CHECK(rc == 0 && rtc_monotonic_ns() - begun == 2550000,
+          "a ppoll of 2.5 ms ends 2.55 ms after it began");
+
+    timed_begin();
+    poll_ms_deadline(0, &d);
+    rc = poll_wait(timed_scan, NULL, 1, &d, "hrtimer");
+    CHECK(rc == 0 && timed_sleeps == 0 && arms == 0,
+          "a zero timeout ends at once, without a sleep or a timer");
+
+    timed_begin();
+    d.set = 0;
+    timed_event = 2;
+    rc = poll_wait(timed_scan, NULL, 1, &d, "hrtimer");
+    CHECK(rc == 1 && arms == 0 && disarms == 0 && kernel_ticks == 1000,
+          "a wait without a timeout arms no timer and ends at the descriptor's readiness");
+
+    timed_begin();
+    poll_ms_deadline(1000, &d);
+    timed_event = 2;
+    rc = poll_wait(timed_scan, NULL, 1, &d, "hrtimer");
+    CHECK(rc == 1 && arms == 1 && disarms == 1 && kernel_ticks == 1000,
+          "a ready descriptor ends a timed wait at once, its timer cleared");
+
+    timed_begin();
+    poll_ms_deadline(1000, &d);
+    timed_event = 1;
+    rc = poll_wait(timed_scan, NULL, 1, &d, "hrtimer");
+    CHECK(rc == -EINTR && disarms == 1 && waiter.wakeup_ns == 0 && kernel_ticks == 1000,
+          "a signal ends a timed wait at once, its timer cleared");
+
+    timed_begin();
+    poll_ms_deadline(1000, &d);
+    timed_event = 1;
+    rc = poll_wait_queue(&watched, timed_queue_ready, NULL, &d, "ep_poll");
+    CHECK(rc == -EINTR && disarms == 1 && kernel_ticks == 1000, "and a timed epoll wait as well");
+    timed_row = 0;
+    signal_now = 0;
+    waiter.sig_woken = 0;
+    phase_now_ns = 0;
+}
+
 /** An unrelated filing wake cannot leave the next input without a waiter. */
 static void enrollment(void)
 {
@@ -374,6 +593,7 @@ static void enrollment(void)
         CHECK(!watched.head, "the completed wait withdraws its queue records");
         CHECK(waiter.state == PROC_RUNNING && !waiter.wakeup_tick,
               "the completed wait is running with no timer wake");
+        CHECK(!waiter.wakeup_ns, "a wait without a timeout arms no timer");
     }
 }
 
@@ -389,7 +609,13 @@ int main(int argc, char **argv)
         printf("poll-enrollment-test: %d failures\n", failures);
         return failures != 0;
     }
+    if (argc == 2 && strcmp(argv[1], "hrtimer") == 0) {
+        hrtimer();
+        printf("poll-hrtimer-test: %d failures\n", failures);
+        return failures != 0;
+    }
     enrollment();
+    hrtimer();
     kernel_ticks = 1000;
     CHECK(ms_tick(TICKS_MS(3), &has) == 1003 && has == 1,
           "a poll of three ticks from tick 1000 ends at 1003");

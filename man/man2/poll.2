@@ -147,15 +147,26 @@ For
 is a number of milliseconds.
 A negative value waits indefinitely; zero performs one scan without waiting.
 A positive timeout
-ends at the first 4 ms timer tick at or after its end, measured from
-where in the tick in progress the call is, so the timeout never expires
-before the time asked and at most a tick after it.
-The wait also lasts until
+ends once
 .Dv CLOCK_MONOTONIC ,
-read at the call, has advanced by the timeout: a tick the timer lost
-while the processor could not take it leaves the tick count behind that
-clock, which keeps its last reading, and the wait then lasts until the
-count catches up.
+read at the call, has advanced by it: the timer interrupt between ticks
+wakes the thread at its end, at most the thread's slack after it, as
+Linux's high-resolution timer does.
+The slack is Linux's: the thread's timer slack, 50 microseconds unless
+.Dv PR_SET_TIMERSLACK
+of
+.Xr prctl 2
+changed it, or a thousandth of the timeout when that is more, a
+two-hundredth at a positive nice value, up to 100 ms; a thread under a
+real-time or deadline policy has none.
+A timeout of 1 ms thus ends within 1.05 ms.
+Where no interrupt between ticks can be armed, as while the local APIC
+timer is not the tick, a timeout ends at the first 4 ms timer tick at
+or after its end, measured from where in the tick in progress the call
+is, and never before the time asked: a tick the timer lost while the
+processor could not take it leaves the tick count behind the clock,
+which keeps its last reading, and the wait then lasts until the count
+catches up.
 With no entries, a finite timeout acts as a sleep.
 .Pp
 .Fn ppoll
@@ -163,7 +174,7 @@ takes a relative timeout in seconds and nanoseconds.
 A null timeout waits indefinitely; a zero timeout performs one scan.
 Seconds must be nonnegative and nanoseconds must be in the range
 0 through 999999999.
-The timeout ends at a tick, as for
+The timeout ends as for
 .Fn poll ,
 and is not written back.
 The kernel limits the seconds field to 2^40, about 34800 years, and keeps

@@ -96,8 +96,8 @@ long sys_epoll_pwait(struct isr_params *params);
  * epoll_pwait2(2) is epoll_pwait with the address of a struct
  * __kernel_timespec, 64-bit seconds and nanoseconds, in place of the
  * milliseconds, and no timeout for a null address. Negative seconds, or
- * nanoseconds outside 0 to 999999999, are -EINVAL; a timeout past
- * 2147483647 milliseconds, about 24.8 days, is cut to it.
+ * nanoseconds outside 0 to 999999999, are -EINVAL. The timeout is kept to
+ * the nanosecond, as Linux keeps it.
  */
 long sys_epoll_pwait2(struct isr_params *params);
 
