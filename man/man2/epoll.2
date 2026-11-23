@@ -119,14 +119,13 @@ does.
 .Fn epoll_pwait2 ,
 number 441 on both, takes its timeout as a
 .Vt struct timespec
-of 64-bit seconds and nanoseconds; negative seconds are
-.Er EINVAL ,
-and a timeout longer than 2147483647 milliseconds, about 24.8 days, is
-shortened to that.
-A timeout ends at the first 4 ms tick at or after its end, and not
-before
+of 64-bit seconds and nanoseconds, kept to the nanosecond; negative
+seconds are
+.Er EINVAL .
+A timeout ends once
 .Dv CLOCK_MONOTONIC
-has advanced by it, as
+has advanced by it, at most the thread's timer slack after it, 50
+microseconds by default, as Linux's high-resolution timer ends it and as
 .Xr poll 2
 describes.
 .Pp

@@ -215,6 +215,14 @@ void poll_ms_deadline(int timeout_ms, struct poll_deadline *d)
     d->nsec = 0;
 }
 
+/** As `poll_ms_deadline`, for epoll_pwait2's timespec. */
+void poll_ts_deadline(int64_t sec, uint32_t nsec, struct poll_deadline *d)
+{
+    (void)sec;
+    (void)nsec;
+    poll_ms_deadline(0, d);
+}
+
 /** No row's wait has a signal mask: 0. */
 int32_t poll_mask_set(uintptr_t umask, uint32_t size)
 {

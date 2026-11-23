@@ -55,10 +55,14 @@ short poll_fd_held(struct fd_entry *e, short events, struct wait_queue **wq);
  * each object in `wqs` and returns the count of those ready. */
 typedef int (*poll_scan_fn)(void *ctx, struct wait_queue **wqs);
 
-/* When a wait ends: at the tick `tick`, once time since boot has reached
- * `sec` and `nsec`, the reading at the call and the timeout. A lost tick
- * leaves the tick count behind that clock, and the wait then lasts until the
- * count catches up (`deadline_passed` in poll.c). */
+/* When a wait ends: once time since boot has reached `sec` and `nsec`, the
+ * reading at the call and the timeout. The thread's timer wakes it then, by
+ * the interrupt between ticks, at the latest the thread's slack later
+ * (`poll_arm` in poll.c), as Linux's hrtimer ends the wait; or at the tick
+ * `tick`, the first at or after that time, where no interrupt between ticks
+ * is armed. A lost tick leaves the tick count behind that clock, and a wait
+ * ended by its tick then lasts until the count catches up
+ * (`deadline_passed`). */
 struct poll_deadline {
     int set; /* nonzero for a finite timeout; 0 waits without one */
     uint64_t tick;
@@ -93,6 +97,12 @@ int poll_wait_queue(struct wait_queue *wq, int (*ready)(void *ctx), void *ctx,
  * tick at or after its end, and its end by time since boot. A negative
  * timeout has none. */
 void poll_ms_deadline(int timeout_ms, struct poll_deadline *d);
+
+/** In `d`, the deadline of a timeout of `sec` seconds and `nsec`
+ * nanoseconds, neither negative and `nsec` under a second, as
+ * `poll_ms_deadline` gives one: epoll_pwait2's, which Linux keeps to the
+ * nanosecond. */
+void poll_ts_deadline(int64_t sec, uint32_t nsec, struct poll_deadline *d);
 
 /** Install the signal mask a wait runs under, from the user set `umask` of
  * `size` bytes, or nothing for a `umask` of 0. Returns 0, -EINVAL for a size

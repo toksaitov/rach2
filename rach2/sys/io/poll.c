@@ -7,7 +7,9 @@
  * (`wq_poll_add`), scans once more, and sleeps unless a wake came since the
  * scan began; the records stay on their queues until the wait ends, and
  * every wake brings one new scan, as Linux's `do_poll` (fs/select.c:
- * 884-968). A descriptor answers through its poll operation (pipes,
+ * 884-968). A timeout ends the wait at its time, by the interrupt between
+ * ticks, within the thread's slack, as Linux's hrtimer does, and not at the
+ * tick after it. A descriptor answers through its poll operation (pipes,
  * terminals, devices, /proc files, the anonymous descriptors) or, for the
  * console and sockets, through a check of its type here. select translates
  * its fd_sets to an array of pollfd and back (poll_select.c) around the
@@ -287,10 +289,86 @@ static int poll_signal_pending(void)
     return pending;
 }
 
-/** Whether the wait whose deadline is `d` is over at this tick. */
+/** Whether time since boot, as `clock_gettime` reads it, has reached the
+ * end of `d`. */
+static int end_reached(const struct poll_deadline *d)
+{
+    int64_t sec, nsec;
+
+    rtc_monotonic(&sec, &nsec);
+    return sec > d->sec || (sec == d->sec && nsec >= d->nsec);
+}
+
+/** Whether the wait whose deadline is `d` is over: the clock has reached
+ * its end, which the timer `poll_arm` sets wakes the thread for, or its tick
+ * has come and passed (`deadline_passed`). */
 static int poll_expired(struct poll_deadline *d)
 {
-    return d->set && deadline_reached(d->tick) && deadline_passed(d);
+    return d->set && (end_reached(d) || (deadline_reached(d->tick) && deadline_passed(d)));
+}
+
+/* The longest slack a wait's timer takes: Linux's MAX_SLACK, 100 ms
+ * (fs/select.c). */
+#define POLL_SLACK_MAX_NS 100000000u
+
+/* The seconds past which an end takes no timer: one that far off, as a
+ * sleep's (`sleep_ns` in syscall.c), ends at its tick, centuries away. */
+#define POLL_TIMER_MAX_SEC 9223372036ll
+
+/* The latest time, in nanoseconds since boot, a timer is armed for. */
+#define POLL_NS_MAX ((int64_t)(((uint64_t)1 << 63) - 1u))
+
+/**
+ * How far past its end the timer of a wait with `left` nanoseconds to go
+ * may wake the thread, as Linux's select_estimate_accuracy gives poll,
+ * select and epoll_wait (fs/select.c:66-98): none under a real-time or
+ * deadline policy; otherwise a thousandth of the time left, a two-hundredth
+ * at a positive nice, at most 100 ms and at least the thread's timer slack
+ * (`timer_slack_ns`), 50 us by default. A wait of up to 50 ms thus ends
+ * within 50 us of its time.
+ */
+static uint64_t poll_slack(int64_t left)
+{
+    uint8_t policy = current_proc->sched_policy;
+    uint64_t div = current_proc->nice > 0 ? 200u : 1000u;
+    uint64_t slack = 0;
+
+    if (policy == SCHED_FIFO || policy == SCHED_RR || policy == SCHED_DEADLINE) {
+        return 0;
+    }
+    if (left >= (int64_t)(POLL_SLACK_MAX_NS * div)) {
+        slack = POLL_SLACK_MAX_NS;
+    } else if (left > 0) {
+        slack = tick_div64((uint64_t)left, div, NULL);
+    }
+    return slack < current_proc->timer_slack_ns ? current_proc->timer_slack_ns : slack;
+}
+
+/**
+ * Arm the current thread's timer for the end of `d`, its slack later
+ * (`poll_slack`), and return 1; or return 0 for a deadline without a time
+ * the timer can hold, which its tick alone ends. The interrupt between
+ * ticks then wakes the sleeping thread at that time (`wakeup_ns`,
+ * `proc_wake_due`), as the hrtimer of Linux's poll_schedule_timeout and
+ * ep_poll wakes theirs at the latest expiry of its range
+ * (`schedule_hrtimeout_range`). The slack is counted from the time left
+ * now, as Linux counts it once a wait. Each sleep sets its tick
+ * (`poll_sleep`), which a signal's wake clears and the timer needs; the
+ * caller ends the timed wait with `proc_wait_set(0, 0, 0, 0)`.
+ */
+static int poll_arm(const struct poll_deadline *d)
+{
+    int64_t end, at;
+    uint64_t slack;
+
+    if (!d->set || d->sec < 0 || d->sec >= POLL_TIMER_MAX_SEC || (d->sec == 0 && d->nsec == 0)) {
+        return 0;
+    }
+    end = d->sec * 1000000000ll + d->nsec;
+    slack = poll_slack(end - rtc_monotonic_ns());
+    at = slack > (uint64_t)(POLL_NS_MAX - end) ? POLL_NS_MAX : end + (int64_t)slack;
+    proc_wait_set(0, at, 0, 1);
+    return 1;
 }
 
 /**
@@ -304,11 +382,14 @@ static int poll_expired(struct poll_deadline *d)
  * it blocked and makes it ready (`sig_wake`), so `schedule` keeps it
  * running or returns. The caller scans again and judges the signal. A finite
  * timeout sets the timer wake, `wakeup_tick`, which `proc_wake_sleepers`
- * acts on at the deadline: with another process runnable, schedule() does
- * not return here on its own. A computed tick of 0 is stored as 1, since 0
- * means not sleeping. A thread still blocked when schedule() returns,
- * which nothing woke and nothing else could run, idles until the next
- * interrupt, still on every queue so a waker can find it.
+ * acts on at the deadline tick, and with it the time `poll_arm` set, which
+ * the interrupt between ticks acts on: with another process runnable,
+ * schedule() does not return here on its own. A computed tick of 0 is
+ * stored as 1, since 0 means not sleeping. A thread still blocked when
+ * schedule() returns, which nothing woke and nothing else could run, idles
+ * until the next interrupt, still on every queue so a waker can find it.
+ * The timer wake is cleared on the way out, so that a wait inside the next
+ * scan, which would take it as its own deadline, does not.
  */
 static void poll_sleep(struct poll_deadline *d, const char *wchan)
 {
@@ -328,6 +409,7 @@ static void poll_sleep(struct poll_deadline *d, const char *wchan)
         irq_restore(flags);
     }
     current_proc->state = PROC_RUNNING;
+    current_proc->wakeup_tick = 0;
 }
 
 /**
@@ -341,15 +423,16 @@ static void poll_sleep(struct poll_deadline *d, const char *wchan)
  * nothing ready is followed by a sleep (`poll_sleep`), and each wake by
  * one scan. A scan that names other queues than the records are on, as a
  * descriptor another thread replaced would, moves the records to them and
- * scans again. On return the thread is on no queue and its timer wake is
- * cleared.
+ * scans again. The thread's timer is armed for the deadline before its
+ * first sleep (`poll_arm`), so a wait that never sleeps takes no lock for
+ * it. On return the thread is on no queue and its timer wake is cleared.
  */
 int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan)
 {
     struct wait_queue **wqs, **again;
     struct wq_waiter *recs;
     uint32_t m = n ? n : 1;
-    int rc, filed = 0;
+    int rc, filed = 0, armed = 0;
     uint32_t i;
 
     wqs = kzalloc(sizeof(*wqs) * 2u * m);
@@ -394,12 +477,18 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d,
             filed = 1;
             continue;
         }
+        if (!armed) {
+            armed = poll_arm(d) ? 1 : -1;
+        }
         poll_sleep(d, wchan);
     }
     if (filed) {
         poll_unfile(wqs, recs, n);
     }
     current_proc->wakeup_tick = 0;
+    if (armed > 0) {
+        proc_wait_set(0, 0, 0, 0);
+    }
     current_proc->state = PROC_RUNNING;
     kfree(wqs);
     kfree(recs);
@@ -410,7 +499,7 @@ int poll_wait_queue(struct wait_queue *wq, int (*ready)(void *ctx), void *ctx,
                     struct poll_deadline *d, const char *wchan)
 {
     struct wq_waiter rec;
-    int rc;
+    int rc, armed = 0;
 
     poll_rec_init(&rec, WQ_EXCLUSIVE);
     {
@@ -433,6 +522,9 @@ int poll_wait_queue(struct wait_queue *wq, int (*ready)(void *ctx), void *ctx,
             rc = 0;
             break;
         }
+        if (!armed) {
+            armed = poll_arm(d) ? 1 : -1;
+        }
         poll_sleep(d, wchan);
         poll_woken_clear();
     }
@@ -443,6 +535,9 @@ int poll_wait_queue(struct wait_queue *wq, int (*ready)(void *ctx), void *ctx,
         irq_restore(flags);
     }
     current_proc->wakeup_tick = 0;
+    if (armed > 0) {
+        proc_wait_set(0, 0, 0, 0);
+    }
     current_proc->state = PROC_RUNNING;
     return rc;
 }
@@ -475,10 +570,10 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, struct poll_deadlin
  * tick (`tick_deadline`), so that without a lost tick the clock has reached
  * the end by the deadline tick. An end past the largest second stops
  * there, as Linux's does. */
-static void deadline_end(struct poll_deadline *d, long sec, long nsec)
+static void deadline_end(struct poll_deadline *d, int64_t sec, long nsec)
 {
     rtc_monotonic(&d->sec, &d->nsec);
-    if ((int64_t)sec > DEADLINE_SEC_MAX - 1 - d->sec) {
+    if (sec > DEADLINE_SEC_MAX - 1 - d->sec) {
         d->sec = DEADLINE_SEC_MAX;
         d->nsec = 0;
         return;
@@ -561,12 +656,18 @@ static int ts_valid(const struct poll_timespec *ts)
  */
 static void ts_deadline(const struct poll_timespec *ts, struct poll_deadline *d)
 {
-    d->set = ts != NULL;
-    if (!d->set) {
+    if (!ts) {
+        d->set = 0;
         return;
     }
-    deadline_end(d, ts->tv_sec, ts->tv_nsec);
-    d->tick = tick_deadline(tick_span(ts->tv_sec, 0), ((uint32_t)ts->tv_nsec + 999u) / 1000u);
+    poll_ts_deadline(ts->tv_sec, (uint32_t)ts->tv_nsec, d);
+}
+
+void poll_ts_deadline(int64_t sec, uint32_t nsec, struct poll_deadline *d)
+{
+    d->set = 1;
+    deadline_end(d, sec, (long)nsec);
+    d->tick = tick_deadline(tick_span(sec, 0), (nsec + 999u) / 1000u);
 }
 
 /** Normalize `tv` to seconds and microseconds, as Linux's select does,
