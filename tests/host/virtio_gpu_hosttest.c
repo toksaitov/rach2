@@ -1134,7 +1134,15 @@ static struct {
     uint32_t dma_short; /* allocations of more than a page to refuse next,
                            as a transport whose free frames are scattered */
     uint32_t dma_runs;  /* allocations of more than a page given */
-    pte_t window_cache; /* the last window's cache bits */
+    /* The transport gives frames the kernel does not map
+     * (`virtio_dma_frames`), as virtio-pci of i686; a row sets it before
+     * the bind. Frames here are host memory at their own address, which
+     * `kmap_cpu` gives back. */
+    int frames;
+    uint32_t frames_live; /* runs of frames given and not yet given back */
+    uint32_t kmaps;       /* `kmap_cpu` calls */
+    int kmapped;          /* a `kmap_cpu` mapping is held */
+    pte_t window_cache;   /* the last window's cache bits */
 } gpu;
 
 /* Host-visible memory: shared memory region 1 at 14 TiB, as QEMU places
@@ -1777,6 +1785,65 @@ void virtio_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
     (void)d;
     (void)bytes;
     kfree(p);
+}
+
+int virtio_dma_frames(struct virtio_dev *d, uint32_t pages, uint64_t *addr)
+{
+    uint8_t *p;
+
+    (void)d;
+    if (!gpu.frames) {
+        return -ENODEV;
+    }
+    CHECK(pages > 0, "frames are asked for a page or more");
+    if (pages > 1 && gpu.dma_short > 0) {
+        gpu.dma_short--;
+        return -ENOMEM;
+    }
+    if (pages > 1) {
+        gpu.dma_runs++;
+    }
+    if (pages * PAGE_SIZE > gpu.dma_most) {
+        gpu.dma_most = pages * PAGE_SIZE;
+    }
+    /* Not zeroed, as alloc_frames gives them: what the driver leaves
+     * unwritten reads as this byte. */
+    p = (uint8_t *)kmalloc((size_t)pages * PAGE_SIZE);
+    if (!p) {
+        return -ENOMEM;
+    }
+    k_memset(p, 0xa5, (size_t)pages * PAGE_SIZE);
+    *addr = (uint64_t)(uintptr_t)p;
+    gpu.frames_live++;
+    return 0;
+}
+
+void virtio_dma_frames_free(struct virtio_dev *d, uint64_t addr, uint32_t pages)
+{
+    (void)d;
+    CHECK(gpu.frames && pages > 0 && gpu.frames_live > 0, "frames given back were given");
+    gpu.frames_live--;
+    kfree((void *)(uintptr_t)addr);
+}
+
+/** The processor's own mapping of the frame at `phys`, host memory at that
+ * address here; one at a time, as on i686. */
+void *kmap_cpu(uintptr_t phys, uint32_t *flags)
+{
+    CHECK(!gpu.kmapped, "a processor maps one frame at a time");
+    gpu.kmapped = 1;
+    gpu.kmaps++;
+    *flags = 0;
+    return (void *)phys;
+}
+
+/** End what `kmap_cpu` mapped. */
+void kunmap_cpu(void *va, uint32_t flags)
+{
+    (void)va;
+    (void)flags;
+    CHECK(gpu.kmapped, "a mapping ended was made");
+    gpu.kmapped = 0;
 }
 
 /** The probe records the driver for a GPU bound later through /sys, which

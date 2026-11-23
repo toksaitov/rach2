@@ -1727,7 +1727,7 @@
         },
         {
           "assertion_id": "vgpupayload",
-          "checks": "tests/host/vgpupayload_hosttest.c sends payloads of 1 MiB less the header, 1 MiB and 4 MiB through EXECBUFFER and CREATE_BLOB on virtio-pci's and the shared region's chain bounds, each whole in one SUBMIT_3D, 255 MiB to virtio-pci in runs past a megabyte, 300 pages in shorter runs where long ones fail, and 65 MiB in parts to a shared region's device that joins them, sent after the in-fence's wait with their copies counted, and refuses what a transport cannot carry with ENOMEM under ASan and UBSan and exits 0",
+          "checks": "tests/host/vgpupayload_hosttest.c sends payloads of 1 MiB less the header, 1 MiB and 4 MiB through EXECBUFFER and CREATE_BLOB on virtio-pci's and the shared region's chain bounds, each whole in one SUBMIT_3D, 255 MiB to virtio-pci in runs of 64 pages, 1500 pages in shorter runs where long ones fail, 1022 scattered pages a page each, the payloads in frames filled through kmap_cpu on i686's transport, and 65 MiB in parts to a shared region's device that joins them, sent after the in-fence's wait with their copies counted, and refuses what a transport cannot carry with ENOMEM under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -1777,12 +1777,12 @@
         },
         {
           "assertion_id": "virtio_pci_shm",
-          "checks": "tests/host/virtio_pci_shm_hosttest.c reads virtio-pci's shared memory capabilities from a model of five functions, gives 255 MiB of DMA memory as one zeroed run given back whole, shows each function bound with its virtio device and one bind uevent, takes a non-GPU function, leaves a refused function and a failed bus registration unbound, unmapped, with their command word and no number, runs no reset that does not finish with bus mastering on, and has a child whose reset does not finish free its buffers only with bus mastering off, under ASan and UBSan and exits 0",
+          "checks": "tests/host/virtio_pci_shm_hosttest.c reads virtio-pci's shared memory capabilities from a model of five functions, gives 255 MiB of DMA memory as one zeroed run given back whole and 255 MiB of i686's frames as one run given back a frame at a time, shows each function bound with its virtio device and one bind uevent, takes a non-GPU function, leaves a refused function and a failed bus registration unbound, unmapped, with their command word and no number, runs no reset that does not finish with bus mastering on, and has a child whose reset does not finish free its buffers only with bus mastering off, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
           "assertion_id": "virtqueue",
-          "checks": "tests/host/virtqueue_hosttest.c runs the virtio core against a model device, which fails any free made while a device whose reset has not ended may reach memory, with a queue kept from interrupting and a reap's batch, under ASan and UBSan and exits 0",
+          "checks": "tests/host/virtqueue_hosttest.c runs the virtio core against a model device, which fails any free made while a device whose reset has not ended may reach memory, with indirect tables of 1024 descriptors in runs of pages, with a queue kept from interrupting and a reap's batch, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {

@@ -9,7 +9,9 @@
  *
  * The transport's DMA memory past a page comes as one run of consecutive
  * frames of any length, 255 MiB in its row, from the heap
- * (`kalloc_contig`), zeroed, and is given back whole.
+ * (`kalloc_contig`), zeroed, and is given back whole; its frames of any
+ * memory (`dma_frames`), as i686 has them, come as one run from
+ * `alloc_frames`, and each frame is given back.
  *
  * The first function is QEMU 10.2.1's virtio-vga-gl with hostmem=4G: its
  * common, ISR, device and notification capabilities in BAR 2, and the
@@ -505,6 +507,34 @@ void kfree_pages(void *p, uint32_t count)
     __builtin_free(p);
 }
 
+/* The frames of i686's `dma_frames`: the run given, its pages, and the
+ * frames of it given back one at a time. */
+static uint8_t *frames_run;
+static uint32_t frames_given, frames_back;
+
+/** A run of `count` frames, memory of the host's at its own address. */
+uintptr_t alloc_frames(uint32_t count)
+{
+    CHECK(frames_run == 0, "dma: one run of frames is out at a time here");
+    frames_run = (uint8_t *)__builtin_malloc((size_t)count * PAGE_SIZE);
+    frames_given = frames_run ? count : 0;
+    frames_back = 0;
+    return (uintptr_t)frames_run;
+}
+
+/** Give back a frame of the run, which goes once all of it is back. */
+void free_frame(uintptr_t phys)
+{
+    CHECK(frames_run != 0 && phys >= (uintptr_t)frames_run &&
+              phys < (uintptr_t)frames_run + (uintptr_t)frames_given * PAGE_SIZE &&
+              (phys - (uintptr_t)frames_run) % PAGE_SIZE == 0,
+          "dma: a frame given back is a page of the run");
+    if (++frames_back == frames_given) {
+        __builtin_free(frames_run);
+        frames_run = 0;
+    }
+}
+
 /** Allocate from a small vector pool to force shared-vector fallback. */
 int isr_alloc_vector(void)
 {
@@ -908,6 +938,28 @@ static void dma_runs(void)
     CHECK(contig_back == pages && contig_out == 0, "dma: the run is given back whole");
 }
 
+/** i686's frames of any memory for a buffer (`dma_frames`): a run of
+ * consecutive frames from `alloc_frames`, here 255 MiB, the device's
+ * address the first's physical one, each frame given back at the free. */
+static void dma_frames(void)
+{
+    const uint32_t pages = 255u * 256u;
+    struct virtio_dev *d;
+    uint64_t addr = 0;
+
+    CHECK(virtio_pci_find(VIRTIO_ID_GPU, 0, &d) == 0 && d->ops->dma_frames &&
+              d->ops->dma_frames_free,
+          "dma: virtio-pci of i686 gives frames of any memory");
+    if (!d->ops->dma_frames) {
+        return;
+    }
+    CHECK(d->ops->dma_frames(d, pages, &addr) == 0 && frames_given == pages &&
+              addr == (uint64_t)(uintptr_t)frames_run,
+          "dma: 255 MiB of frames is one run at its physical address");
+    d->ops->dma_frames_free(d, addr, pages);
+    CHECK(frames_back == pages && frames_run == 0, "dma: each frame of the run is given back");
+}
+
 /** Capabilities a region cannot be taken from, refused with a record. */
 static void refusals(void)
 {
@@ -1286,6 +1338,7 @@ int main(void)
 {
     qemu_layout();
     dma_runs();
+    dma_frames();
     refusals();
     interrupts();
     probe_refused();

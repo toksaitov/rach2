@@ -12,7 +12,7 @@
  *
  * The rows: payloads of 1 MiB less SUBMIT_3D's header, 1 MiB and 4 MiB,
  * each through both ioctls, on a control queue with virtio-pci's bounds,
- * 256 descriptors a chain and runs of any length, and with the shared
+ * 1024 descriptors a chain and runs of any length, and with the shared
  * region's, 16 descriptors, runs of up to 64 MiB and a chain of up to the
  * 32 MiB region: each reaches the device whole, its bytes the caller's, in
  * one SUBMIT_3D whose chain fits the queue. Past the old bounds, 255 MiB
@@ -23,10 +23,13 @@
  * chain and joins no parts, and a transport that gives no runs, refuse a
  * longer payload with ENOMEM and send nothing; a bad pointer is EFAULT.
  * Where the transport refuses runs of more than a page at first, a payload
- * takes shorter runs; with none, 254 pages go a page each and 300 are
- * ENOMEM. A stream in parts with a buffer listed has its copies counted
- * from the caller's memory, and no part goes while its in-fence is waited
- * for. Each row ends with nothing allocated and the join lock free.
+ * takes shorter runs; with none, 300 and 1022 pages go a page each and
+ * 1023 are ENOMEM. A stream in parts with a buffer listed has its copies
+ * counted from the caller's memory, and no part goes while its in-fence
+ * is waited for. On a transport that gives frames the kernel does not map,
+ * as virtio-pci of i686, the payloads, 255 MiB among them, take frames
+ * filled through `kmap_cpu`, and a stream's copies are counted from them.
+ * Each row ends with nothing allocated and the join lock free.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -167,22 +170,23 @@ static void payload_sizes(const char *row)
     }
 }
 
-/** virtio-pci: 256 descriptors a chain, as QEMU's control queue, and runs
- * of any length; then a transport that gives no runs. */
+/** virtio-pci: 1024 descriptors a chain, QEMU's most, as the driver's
+ * indirect tables give the control queue, and runs of any length; then a
+ * transport that gives no runs. */
 static void row_pci(void)
 {
-    payload_bind(256, 0, VIRTIO_DMA_ANY, 0);
+    payload_bind(VIRTQ_INDIRECT_MAX, 0, VIRTIO_DMA_ANY, 0);
     payload_sizes("a payload reaches a virtio-pci device whole in one command");
     /* The runs the payload asks for; virtio_pci_shm_hosttest.c shows the
      * transport giving such a run. */
     gpu.dma_most = 0;
     payload_whole(0, PCI_BIG, "255 MiB reaches a virtio-pci device whole in one command");
-    CHECK(gpu.dma_most > MIB, "past 254 MiB the runs pass a megabyte");
+    CHECK(gpu.dma_most == 64u * PAGE_SIZE, "255 MiB goes in runs of 64 pages on 1022 descriptors");
     payload_refused(16, PAYLOAD_MAX, -EFAULT, "a bad pointer is EFAULT and sends nothing");
     blob_unbind("the virtio-pci row leaves nothing");
 
-    payload_bind(256, 0, 0, 0);
-    payload_whole(0, 254u * PAGE_SIZE, "a page each fills the chain without runs");
+    payload_bind(VIRTQ_INDIRECT_MAX, 0, 0, 0);
+    payload_whole(0, 1022u * PAGE_SIZE, "a page each fills the chain without runs");
     payload_refused(UPTR(words), PAYLOAD_MAX, -ENOMEM,
                     "without runs a longer payload is ENOMEM and sends nothing");
     blob_unbind("the row without runs leaves nothing");
@@ -191,23 +195,27 @@ static void row_pci(void)
 /** virtio-pci whose free frames are scattered: where the transport has no
  * run as long as the chain's descriptors need, the payload takes shorter
  * ones and sizes the rest on the descriptors left; a page each fills the
- * chain's 254, and past them, with no run of two pages free, the payload
- * is ENOMEM and sends nothing. */
+ * chain's 1022, 300 pages among them, as Linux gives each page of a
+ * submission a descriptor, and past them, with no run of two pages free,
+ * the payload is ENOMEM and sends nothing. */
 static void row_scattered(void)
 {
     int blob;
 
-    payload_bind(256, 0, VIRTIO_DMA_ANY, 0);
+    payload_bind(VIRTQ_INDIRECT_MAX, 0, VIRTIO_DMA_ANY, 0);
     for (blob = 0; blob < 2; blob++) {
         gpu.dma_short = 10;
         gpu.dma_runs = 0;
-        payload_whole(blob, 300u * PAGE_SIZE, "a payload takes shorter runs where long ones fail");
+        payload_whole(blob, 1500u * PAGE_SIZE, "a payload takes shorter runs where long ones fail");
         CHECK(gpu.dma_short == 0 && gpu.dma_runs > 0,
               "the runs refused are passed over and later ones taken");
     }
     gpu.dma_short = 0xffffffffu;
-    payload_whole(0, 254u * PAGE_SIZE, "scattered pages fill the chain a page each");
-    payload_refused(UPTR(words), 300u * PAGE_SIZE, -ENOMEM,
+    for (blob = 0; blob < 2; blob++) {
+        payload_whole(blob, 300u * PAGE_SIZE, "300 scattered pages go a page each");
+        payload_whole(blob, 1022u * PAGE_SIZE, "scattered pages fill the chain a page each");
+    }
+    payload_refused(UPTR(words), 1023u * PAGE_SIZE, -ENOMEM,
                     "past the chain's pages with no run free a payload is ENOMEM, nothing sent");
     gpu.dma_short = 0;
     blob_unbind("the scattered row leaves nothing");
@@ -352,6 +360,58 @@ static void row_joined(void)
     blob_unbind("the joined row leaves nothing");
 }
 
+/** virtio-pci of i686, whose payloads take frames of any memory, which the
+ * kernel fills through `kmap_cpu`, past the kernel heap: the sizes and 255
+ * MiB reach the device whole, scattered frames take shorter runs, a
+ * stream's copies are counted from its frames across a page, a bad
+ * pointer sends nothing, and every frame is given back. */
+static void row_frames(void)
+{
+    struct drm_virtgpu_execbuffer a;
+    uint32_t h;
+    uint64_t before;
+    int32_t rc;
+
+    payload_bind(VIRTQ_INDIRECT_MAX, 0, VIRTIO_DMA_ANY, 0);
+    gpu.frames = 1;
+    payload_sizes("a payload in frames reaches a virtio-pci device whole");
+    CHECK(gpu.kmaps > 0 && gpu.frames_live == 0 && !gpu.kmapped,
+          "the frames are filled through kmap_cpu and given back");
+    gpu.dma_most = 0;
+    payload_whole(0, PCI_BIG, "255 MiB in frames reaches a virtio-pci device whole");
+    CHECK(gpu.dma_most == 64u * PAGE_SIZE, "255 MiB of frames goes in runs of 64 pages");
+    gpu.dma_short = 10;
+    gpu.dma_runs = 0;
+    payload_whole(1, 1500u * PAGE_SIZE,
+                  "a payload in frames takes shorter runs where long ones fail");
+    CHECK(gpu.dma_short == 0 && gpu.dma_runs > 0, "the runs of frames refused are passed over");
+    gpu.dma_short = 0;
+
+    h = copy_res(&file, 1);
+    joined_fill(res_of(&file, h));
+    k_memset(&a, 0, sizeof(a));
+    a.command = UPTR(joined);
+    a.size = JOINED_DWORDS * 4u;
+    a.bo_handles = UPTR(&h);
+    a.num_bo_handles = 1;
+    answer_all();
+    before = virtio_gpu_copied_bytes();
+    three.submitted_size = three.submitted_sum = 0;
+    gpu.kmaps = 0;
+    rc = vgpu_execbuffer_ioctl(dev, &a, &file);
+    answer_all();
+    CHECK(rc == 0 && three.submitted_size == a.size &&
+              three.submitted_sum == fnv1a((const uint8_t *)joined, a.size),
+          "a stream in frames with a buffer listed reaches the device whole");
+    CHECK(virtio_gpu_copied_bytes() - before == 4u * 84u,
+          "its copies are counted from its frames, across a page");
+    CHECK(gpu.kmaps > JOINED_DWORDS * 4u / PAGE_SIZE,
+          "the count reads the frames through kmap_cpu");
+    payload_refused(16, PAYLOAD_MAX, -EFAULT, "a bad pointer in frames is EFAULT, nothing sent");
+    CHECK(gpu.frames_live == 0 && !gpu.kmapped, "every frame is given back");
+    blob_unbind("the row of frames leaves nothing");
+}
+
 /** Run the payload rows against the real driver. */
 int main(void)
 {
@@ -379,6 +439,7 @@ int main(void)
     row_shared();
     row_parts();
     row_joined();
+    row_frames();
     free(joined);
     free(words);
     printf("vgpupayload-test: %s\n", failures ? "FAIL" : "PASS");
