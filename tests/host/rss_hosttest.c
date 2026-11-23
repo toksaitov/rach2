@@ -26,12 +26,17 @@
  * a file in memory, read and written, and of a shared mapping of the file
  * in memory; a copy-on-write break made in place, which moves a file's page
  * to anonymous, and one that copies; a fork, whose child counts what its
- * parent does, and a write in the child; munmap through `regions_unmap`,
+ * parent does, and a write in the child; a zap that another thread makes
+ * of the page a copy-on-write break changes, just after the break gives
+ * back the page-table lock, in place and by a copy, which finds the page
+ * already counted as anonymous; munmap through `regions_unmap`,
  * splitting a region, trimming one at its end and taking a whole one with
  * the piece of another; mremap's move, which keeps the kinds of the pages
  * it moves and takes away the tail it drops, and its failure, which takes
  * the moved pages away by the region they had (`unmap_user_range_as`);
- * MADV_DONTNEED; and the end of the space. With x86-64's entries: a huge
+ * MADV_DONTNEED; the end of the space; and the debug kernel's walk, which
+ * finds an entry outside every region that no count holds and a total that
+ * is not the sum of the kinds. With x86-64's entries: a huge
  * fault, a fork of the huge page and a write that splits it, a collapse,
  * the shrinker of underused pages and the huge zero page, which counts
  * nothing until a write copies one page of it. No count goes below zero.
@@ -56,7 +61,12 @@
 #define PT   (WIN_BASE + 48 * P)   /* a private mapping of the file in memory, 4 pages */
 #define MV   (WIN_BASE + 2 * SPAN) /* where mremap moves PT */
 #define MV2  (WIN_BASE + 2 * SPAN + 64 * P)
+#define OR   (WIN_BASE + SPAN) /* where a row maps a page outside every region */
 #define END  (WIN_BASE + WIN_TABLES * SPAN)
+
+/* What another thread does just after the next give of a page-table lock
+ * (compat/mmap_lock_host.c). */
+extern void (*host_ptl_after)(struct mm *mm);
 
 /* A file on disk, whose pages a fault reads into a frame of its own. */
 static struct vm_file disk;
@@ -169,6 +179,76 @@ static void fork_rows(void)
     unmap_user_range(&mm_b, WIN_BASE, END);
     check(counts(&mm_b, 0, 0, 0), "the child's pages all go");
     vm_free(&mm_b.vm);
+}
+
+/* The page a row's zap takes, and its entry before the change the zap
+ * waits for. */
+static uintptr_t race_va;
+static pte_t race_pte;
+
+/** Zap `race_va` of `mm`, as `paging_zap_where` does under the regions'
+ * lock held to read, once its entry has changed from `race_pte`: until
+ * then, wait for the next give of the page-table lock. */
+static void race_zap(struct mm *mm)
+{
+    if (pte_of(mm->dir, race_va) == race_pte) {
+        host_ptl_after = race_zap;
+        return;
+    }
+    unmap_user_range(mm, race_va, race_va + P);
+}
+
+/** Read `va` of `mm`, then write it with a zap of the page made just after
+ * the copy-on-write break gives back the page-table lock. */
+static int race_write(struct mm *mm, uintptr_t va)
+{
+    touch(mm, va, 0);
+    race_va = va;
+    race_pte = pte_of(mm->dir, va);
+    host_ptl_after = race_zap;
+    return resolve_held(mm, va, 1, LIM) == 1 && host_ptl_after == NULL && pte_of(mm->dir, va) == 0;
+}
+
+/** A copy-on-write break counts its page's move to anonymous before a zap
+ * can take the page, so that the zap takes it from the anonymous count:
+ * with the move counted after, the zap's would take an anonymous page from
+ * a space that counts none. In a space of its own, whose counts start at
+ * none. */
+static void race_rows(void)
+{
+    check(vm_insert_file(&mm_b.vm, PF, PF + 8 * P, RW, VM_FILE, &disk, 0) == 0 &&
+              vm_insert_file(&mm_b.vm, PT, PT + 4 * P, RW, VM_FILE, &tmp.vf, 0) == 0,
+          "a space of a private mapping of each file");
+    check(race_write(&mm_b, PF) && counts(&mm_b, 0, 0, 0) && !model_rss_below,
+          "a zap after a break in place takes the page from the anonymous count");
+    check(race_write(&mm_b, PT) && counts(&mm_b, 0, 0, 0) && !model_rss_below,
+          "a zap after a break by a copy takes the copy from the anonymous count");
+    vm_free(&mm_b.vm);
+}
+
+/** The debug kernel's walk finds an entry outside every region, counted or
+ * not, and a total that is not the sum of the kinds. */
+static void check_rows(void)
+{
+    pte_t *table = mmu_user_table(&dir_a, OR, 1);
+    uintptr_t phys = alloc_user_frame();
+
+    check(counts(&mm_a, 0, 0, 0) && table && phys, "a page for an entry outside every region");
+    table[MMU_INDEX(OR)] = (pte_t)phys | PTE_P | PTE_W | PTE_U;
+    check(paging_rss_check(&mm_a) == -1,
+          "an entry outside every region that no count holds is found");
+    dir_a.rss[MM_RSS_ANON]++;
+    dir_a.resident++;
+    check(paging_rss_check(&mm_a) == -1,
+          "an entry outside every region that a count holds is found");
+    dir_a.rss[MM_RSS_ANON]--;
+    dir_a.resident--;
+    table[MMU_INDEX(OR)] = 0;
+    free_frame(phys);
+    dir_a.resident++;
+    check(paging_rss_check(&mm_a) == -1, "a total that is not the sum of the kinds is found");
+    dir_a.resident--;
+    check(counts(&mm_a, 0, 0, 0), "the walk agrees again");
 }
 
 /** munmap takes each page from the count of the kind its region gave it,
@@ -320,9 +400,11 @@ int main(void)
     fault_rows();
     cow_rows();
     fork_rows();
+    race_rows();
     munmap_rows();
     mremap_rows();
     end_rows();
+    check_rows();
 #if MMU_HUGE
     huge_rows();
 #endif

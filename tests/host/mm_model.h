@@ -102,11 +102,19 @@ pte_t *mmu_user_table(page_dir_t *dir, uintptr_t va, int create)
     return dir->tables[i];
 }
 
-/** `va` when `dir` has its table, else the start of the next table's span. */
+/** `va` when `dir` has its table; else the window's start below it, the
+ * end of user space above it, and the start of the next table's span in
+ * it, so that a walk of all of user space takes few steps. */
 uintptr_t mmu_user_skip(page_dir_t *dir, uintptr_t va)
 {
     if (mmu_user_table(dir, va, 0)) {
         return va;
+    }
+    if (va < WIN_BASE) {
+        return WIN_BASE;
+    }
+    if (va >= WIN_BASE + WIN_TABLES * SPAN) {
+        return va < USER_ADDR_MAX ? USER_ADDR_MAX : va;
     }
     return (va & ~(SPAN - 1)) + SPAN;
 }
@@ -383,6 +391,12 @@ void mm_resident_add(const struct page_dir *dir, const long change[MM_RSS_KINDS]
         d->resident += change[k];
         model_rss_below |= d->rss[k] < 0;
     }
+}
+
+/** The total `mm_resident_add` kept in the directory of `mm`. */
+unsigned long mm_resident(const struct mm *mm)
+{
+    return (unsigned long)mm->dir->resident;
 }
 
 /** The counts `mm_resident_add` kept in the directory of `mm`. */

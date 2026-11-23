@@ -10,7 +10,9 @@
  * for it runs the row's `host_wait` first, as that thread would run while
  * this one sleeps. A row may also have another thread run just before the
  * next take of the page-table lock (`host_ptl_hook`), as one on another
- * processor may come between a fault's look and its lock. A walk from
+ * processor may come between a fault's look and its lock, or just after
+ * the next give of one (`host_ptl_after`), as one may come between a
+ * change made under the lock and what follows it. A walk from
  * outside an address space (`mm_read_begin`) may run a row's
  * `host_read_begin` before it takes the lock and `host_read_end` after it
  * gives it back, where the row keeps the walk's user's count, as mm.c does,
@@ -25,6 +27,9 @@ void (*host_wait)(struct mm *mm);
 /* What another thread does before the next take of a page-table lock, run
  * once, or NULL. */
 void (*host_ptl_hook)(struct mm *mm);
+/* What another thread does just after the next give of a page-table lock,
+ * run once, or NULL. */
+void (*host_ptl_after)(struct mm *mm);
 /* What a walk from outside `mm` does before it takes the lock and after it
  * gives it back, or NULL. */
 void (*host_read_begin)(struct mm *mm);
@@ -165,11 +170,18 @@ uint32_t mm_ptl_lock(struct mm *mm)
     return 0;
 }
 
-/** Give back the page-table lock. */
+/** Give back the page-table lock, then run `host_ptl_after`, which it
+ * clears. */
 void mm_ptl_unlock(struct mm *mm, uint32_t flags)
 {
+    void (*hook)(struct mm *mm) = host_ptl_after;
+
     (void)flags;
     mm->ptl.locked = 0;
+    if (hook) {
+        host_ptl_after = NULL;
+        hook(mm);
+    }
 }
 
 /** Take `mm`'s regions' lock to read for a walk from outside it, after
