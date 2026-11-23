@@ -5165,8 +5165,8 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, struct vfs_name 
 }
 
 /**
- * The checks on an existing node of a mounted type before an open of it with
- * `flags`, from its attributes, in the order open(2) keeps: EEXIST for
+ * Check an open of `ref` with `flags` from its attributes `st`, in the
+ * order open(2) keeps: EEXIST for
  * O_CREAT|O_EXCL; ELOOP for a symbolic link itself, which the walk stops at
  * under O_NOFOLLOW; EISDIR for a directory opened for writing, with O_TRUNC
  * or with O_CREAT, which asks for a file, as on Linux; ENOTDIR for
@@ -5174,61 +5174,61 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, struct vfs_name 
  * read-only file system or for O_TRUNC on a read-only mount; the inode
  * permission the access mode and O_TRUNC ask for; EPERM for an append-only
  * write without O_APPEND or with O_TRUNC; and EBUSY for O_TRUNC of a
- * file that backs a loop device. Returns 0, or a negative errno with the
- * reference released. The truncation is `open_install`'s, through the open
- * handle.
+ * file that backs a loop device. Returns 0 or a negative errno. The caller
+ * holds `ref`. The truncation is `open_install`'s, through the open handle.
  */
-static int open_mounted_node(struct vfs_ref *ref, int flags)
+static int open_mounted_check(const struct vfs_ref *ref, const struct vfs_stat *st, int flags)
 {
-    void *node = ref->node;
     int rc;
-    struct vfs_stat vst;
     unsigned acc = (unsigned)flags & 3u;
     int want = acc == 0 ? CRED_R : (acc == 1 ? CRED_W : (CRED_R | CRED_W));
+    uint32_t type = st->mode & S_IFMT;
 
-    rc = vfs_getattr(ref->mnt, node, &vst);
-    if (rc != 0) {
-        vfs_ref_release(ref);
-        return rc;
-    }
     if ((flags & O_CREAT) && (flags & O_EXCL)) {
-        vfs_ref_release(ref);
         return -EEXIST;
     }
-    if ((vst.mode & 0170000u) == 0120000u) {
-        vfs_ref_release(ref);
+    if (type == 0120000u) {
         return -ELOOP;
     }
-    if ((vst.mode & 0170000u) == 0040000u && (acc != 0 || (flags & (O_TRUNC | O_CREAT)))) {
-        vfs_ref_release(ref);
+    if (type == S_IFDIR && (acc != 0 || (flags & (O_TRUNC | O_CREAT)))) {
         return -EISDIR;
     }
-    if ((vst.mode & 0170000u) != 0040000u && (flags & O_DIRECTORY)) {
-        vfs_ref_release(ref);
+    if (type != S_IFDIR && (flags & O_DIRECTORY)) {
         return -ENOTDIR;
     }
     if (flags & O_TRUNC) {
         if (vfs_mount_rdonly(ref->mnt)) {
-            vfs_ref_release(ref);
             return -EROFS;
         }
         want |= CRED_W;
     }
-    rc = (int)cred_access_attrs(ref, &vst, want, 0);
+    rc = (int)cred_access_attrs(ref, st, want, 0);
     if (rc != 0) {
-        vfs_ref_release(ref);
         return rc;
     }
-    if (vst.flags_known && (vst.flags & VFS_FL_APPEND) &&
+    if (st->flags_known && (st->flags & VFS_FL_APPEND) &&
         ((acc != 0 && !(flags & O_APPEND)) || (flags & O_TRUNC))) {
-        vfs_ref_release(ref);
         return -EPERM;
     }
-    if ((flags & O_TRUNC) && loop_backs(ref->mnt, node)) {
-        vfs_ref_release(ref);
+    if ((flags & O_TRUNC) && loop_backs(ref->mnt, ref->node)) {
         return -EBUSY;
     }
     return 0;
+}
+
+/** Check an existing node for the full open, releasing `ref` on error. */
+static int open_mounted_node(struct vfs_ref *ref, int flags)
+{
+    struct vfs_stat st;
+    int rc = vfs_getattr(ref->mnt, ref->node, &st);
+
+    if (rc == 0) {
+        rc = open_mounted_check(ref, &st, flags);
+    }
+    if (rc != 0) {
+        vfs_ref_release(ref);
+    }
+    return rc;
 }
 
 /**
@@ -6457,16 +6457,14 @@ static void open_done(int fd, const char *name, int flags)
     inotify_desc(ofd, IN_OPEN);
 }
 
-/* The open flags that send an open to the big lock (`open_unlocked`): any
- * access mode but O_RDONLY, the low two bits, every flag that creates,
- * truncates, opens nothing or opens a nameless file (Linux's __O_TMPFILE),
- * and O_DIRECT, which `open_install` checks. */
-#define OPEN_LOCKED_FLAGS (3 | O_CREAT | O_TRUNC | O_PATH | O_TMPFILE_BIT | O_DIRECT)
+/* Opens that truncate, take O_PATH, make an unnamed file or use direct I/O
+ * need the full open (`open_unlocked`). */
+#define OPEN_LOCKED_FLAGS (O_TRUNC | O_PATH | O_TMPFILE_BIT | O_DIRECT)
 
 /**
  * The descriptor of an open that `open_unlocked` checked and holds `ref`
  * and `entry` for, in the slot `fd` it reserved, made as `open_install`
- * makes one for a read-only open of a mounted type: the description takes
+ * makes one for an existing node of a mounted type: the description takes
  * the hold, the record and a reference on the mount, and the entry is
  * published last. What `open_done` does for such an open, the description's
  * watch flags and inotify's report of the open, under the big lock while a
@@ -6480,13 +6478,21 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
                                      const char *name, int flags, const struct vfs_stat *st)
 {
     fd_entry_t *e = fd_slot(current_proc->fds, fd);
-    int rc;
+    unsigned acc = (unsigned)flags & O_ACCMODE;
+    int rc = 0;
 
     e->ofd->name = entry;
     e->ofd->ino = st->ino;
     e->ofd->offset = 0;
-    ofd_record_path(e->ofd, name);
-    rc = vfs_open_node(ref->mnt, ref->node, flags, &e->ofd->fhandle);
+    if (acc != 0) {
+        bkl_enter();
+        rc = fd_ofd_access(e->ofd, ref, 1);
+        bkl_exit();
+    }
+    if (rc == 0) {
+        ofd_record_path(e->ofd, name);
+        rc = vfs_open_node(ref->mnt, ref->node, flags, &e->ofd->fhandle);
+    }
     if (rc != 0) {
         fd_free(current_proc->fds, fd);
         vfs_ref_release(ref);
@@ -6498,12 +6504,12 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
     e->ofd->vnode = ref->node;
     vfs_desc_open(ref->mnt);
     vfs_leave(ref->mnt);
-    fd_ofd_access_drop(e->ofd);
-    e->flags = FD_FLAG_READ | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0);
+    e->flags = fd_open_rights(acc) | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0);
     e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     e->node = NULL;
     e->type = (st->mode & S_IFMT) == S_IFDIR ? FD_TYPE_DIR : FD_TYPE_FILE;
-    e->ofd->watch_flags = OFD_WATCH_OPEN | (e->type == FD_TYPE_DIR ? OFD_WATCH_DIR : 0u);
+    e->ofd->watch_flags = OFD_WATCH_OPEN | ((e->flags & FD_FLAG_WRITE) ? OFD_WATCH_WRITE : 0u) |
+                          (e->type == FD_TYPE_DIR ? OFD_WATCH_DIR : 0u);
     if (inotify_mount_watched(ref->mnt)) {
         bkl_enter();
         open_record_parent(e->ofd, name);
@@ -6515,14 +6521,40 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
 }
 
 /**
- * `open_from_user` for a caller without the big lock: a read-only open that
- * creates and truncates nothing, of a regular file or a directory on a type
- * that sets `reads_unlocked`, whose path the name cache finishes
+ * Check the existing node `ref` for a cached open and return its attributes
+ * in `st`. The full open handles special nodes, writes on other types and
+ * O_CREAT without a recorded entry. Return CALL_LOCKED for those, or the
+ * usual open checks' result. The caller holds `ref` and `entry`.
+ */
+static int open_cached_check(const struct vfs_ref *ref, const struct vfs_name *entry, int flags,
+                             struct vfs_stat *st)
+{
+    const struct vfs_type *type = vfs_mount_base(ref->mnt)->type;
+    unsigned acc = (unsigned)flags & O_ACCMODE;
+    int create = (flags & O_CREAT) != 0;
+
+    if (!type->reads_unlocked || (acc != 0 && !type->writes_unlocked) ||
+        vfs_getattr(ref->mnt, ref->node, st) != 0 ||
+        ((st->mode & S_IFMT) != S_IFREG &&
+         ((st->mode & S_IFMT) != S_IFDIR || acc != 0 || create)) ||
+        (create && !entry)) {
+        return CALL_LOCKED;
+    }
+    return open_mounted_check(ref, st, flags);
+}
+
+/**
+ * `open_from_user` for a caller without the big lock: an open of an
+ * existing regular file or a read-only open of an existing directory on a
+ * type that sets `reads_unlocked`, whose path the name cache finishes
  * (`vfs_resolve_cached`), absolute or relative to the working directory
  * (`path_from_text_unlocked`), as Linux's `path_openat` walks under RCU
  * first and again with references when that fails (fs/namei.c:4055-4057,
  * `do_filp_open`). The checks are those `open_mounted_node` makes for such
- * an open: ENOTDIR for O_DIRECTORY on a file, and read permission. The
+ * an open: ENOTDIR for O_DIRECTORY on a file and the inode permission for
+ * the access mode and append flag. Writes require `writes_unlocked` and
+ * take the big lock for the write reservation. An O_CREAT cache miss or an
+ * O_CREAT in a sticky directory goes through the full open. The
  * descriptor is reserved before the walk, as `do_open` reserves it. The
  * descriptor or a negative errno; or CALL_LOCKED with nothing done, for
  * every other open, which `do_open` makes under the big lock. inotify's
@@ -6536,16 +6568,22 @@ static int32_t open_unlocked(int dirfd, const char *raw, int flags)
     struct vfs_ref ref;
     const char *name;
     char *path;
+    int create = (flags & O_CREAT) != 0;
     int end = 0, fd;
     struct unlocked_path up;
     int32_t rc;
 
-    if (flags & OPEN_LOCKED_FLAGS) {
+    if ((flags & OPEN_LOCKED_FLAGS) || (flags & O_ACCMODE) == O_ACCMODE ||
+        (create && (flags & O_EXCL))) {
         return CALL_LOCKED;
     }
     rc = path_from_text_unlocked(dirfd, raw, &path, &end, &up);
     if (rc != 0) {
         return rc;
+    }
+    if (end && create) {
+        unlocked_path_drop(path, &up);
+        return CALL_LOCKED;
     }
     if (end) {
         flags = (flags | O_DIRECTORY) & ~O_NOFOLLOW;
@@ -6561,22 +6599,16 @@ static int32_t open_unlocked(int dirfd, const char *raw, int flags)
         unlocked_path_drop(path, &up);
         return fd;
     }
-    rc = resolve_unlocked(path, &up, VFS_WALK_LOCK | ((flags & O_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0),
+    rc = resolve_unlocked(path, &up,
+                          VFS_WALK_LOCK | ((flags & O_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) |
+                              (create ? VFS_WALK_CREATE : 0),
                           &ref, &entry);
     if (rc != 0) {
         fd_free(current_proc->fds, fd);
         path_buf_put(path);
-        return rc == VFS_CACHED_MISS ? CALL_LOCKED : rc;
+        return rc == VFS_CACHED_MISS || (create && rc == -ENOENT) ? CALL_LOCKED : rc;
     }
-    if (!vfs_mount_base(ref.mnt)->type->reads_unlocked ||
-        vfs_getattr(ref.mnt, ref.node, &st) != 0 ||
-        ((st.mode & S_IFMT) != S_IFREG && (st.mode & S_IFMT) != S_IFDIR)) {
-        rc = CALL_LOCKED;
-    } else if ((st.mode & S_IFMT) != S_IFDIR && (flags & O_DIRECTORY)) {
-        rc = -ENOTDIR;
-    } else {
-        rc = cred_access_attrs(&ref, &st, CRED_R, 0);
-    }
+    rc = open_cached_check(&ref, entry, flags, &st);
     if (rc != 0) {
         vfs_name_put(entry);
         vfs_ref_release(&ref);
