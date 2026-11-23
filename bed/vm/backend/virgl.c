@@ -496,9 +496,11 @@ static int venus_slot(struct vr *r, uint32_t ctx)
  * to the context vrend last ran finds that context current and skips
  * eglMakeCurrent: its commands would then run in the new GL context, which
  * has none of the vertex arrays it made, so its draw fails with
- * GL_INVALID_OPERATION. QEMU makes context 0 current before every command;
- * once after each create is enough, and spares a context switch, which
- * flushes, for each submission.
+ * GL_INVALID_OPERATION. QEMU makes context 0 current before every command.
+ * Here it is done only after a create, the one call known to leave another
+ * GL context current, which spares each submission a context switch, which
+ * flushes. virglrenderer.h promises nothing about the current GL context
+ * after any other call; a Crysis flyby through the VM showed no other.
  */
 static int op_ctx_create(void *c, uint32_t ctx, uint32_t capset, uint32_t nlen, const char *name)
 {
