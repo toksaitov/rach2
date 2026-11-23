@@ -1131,6 +1131,9 @@ static struct {
     uint16_t max_chain;
     uint32_t max_bytes;
     uint32_t dma_most;  /* the largest DMA allocation since the bind */
+    uint32_t dma_short; /* allocations of more than a page to refuse next,
+                           as a transport whose free frames are scattered */
+    uint32_t dma_runs;  /* allocations of more than a page given */
     pte_t window_cache; /* the last window's cache bits */
 } gpu;
 
@@ -1754,6 +1757,13 @@ void *virtio_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
 
     CHECK(bytes <= (d->dma_max ? d->dma_max : PAGE_SIZE),
           "a DMA allocation is at most a page, or the transport's run");
+    if (bytes > PAGE_SIZE && gpu.dma_short > 0) {
+        gpu.dma_short--;
+        return 0;
+    }
+    if (bytes > PAGE_SIZE) {
+        gpu.dma_runs++;
+    }
     if (bytes > gpu.dma_most) {
         gpu.dma_most = bytes;
     }

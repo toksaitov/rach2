@@ -22,7 +22,11 @@
  * the SUBMIT_3D after them takes their stream. A device that takes 1 MiB a
  * chain and joins no parts, and a transport that gives no runs, refuse a
  * longer payload with ENOMEM and send nothing; a bad pointer is EFAULT.
- * Each row ends with nothing allocated and the join lock free.
+ * Where the transport refuses runs of more than a page at first, a payload
+ * takes shorter runs; with none, 254 pages go a page each and 300 are
+ * ENOMEM. A stream in parts with a buffer listed has its copies counted
+ * from the caller's memory, and no part goes while its in-fence is waited
+ * for. Each row ends with nothing allocated and the join lock free.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -169,6 +173,8 @@ static void row_pci(void)
 {
     payload_bind(256, 0, VIRTIO_DMA_ANY, 0);
     payload_sizes("a payload reaches a virtio-pci device whole in one command");
+    /* The runs the payload asks for; virtio_pci_shm_hosttest.c shows the
+     * transport giving such a run. */
     gpu.dma_most = 0;
     payload_whole(0, PCI_BIG, "255 MiB reaches a virtio-pci device whole in one command");
     CHECK(gpu.dma_most > MIB, "past 254 MiB the runs pass a megabyte");
@@ -180,6 +186,31 @@ static void row_pci(void)
     payload_refused(UPTR(words), PAYLOAD_MAX, -ENOMEM,
                     "without runs a longer payload is ENOMEM and sends nothing");
     blob_unbind("the row without runs leaves nothing");
+}
+
+/** virtio-pci whose free frames are scattered: where the transport has no
+ * run as long as the chain's descriptors need, the payload takes shorter
+ * ones and sizes the rest on the descriptors left; a page each fills the
+ * chain's 254, and past them, with no run of two pages free, the payload
+ * is ENOMEM and sends nothing. */
+static void row_scattered(void)
+{
+    int blob;
+
+    payload_bind(256, 0, VIRTIO_DMA_ANY, 0);
+    for (blob = 0; blob < 2; blob++) {
+        gpu.dma_short = 10;
+        gpu.dma_runs = 0;
+        payload_whole(blob, 300u * PAGE_SIZE, "a payload takes shorter runs where long ones fail");
+        CHECK(gpu.dma_short == 0 && gpu.dma_runs > 0,
+              "the runs refused are passed over and later ones taken");
+    }
+    gpu.dma_short = 0xffffffffu;
+    payload_whole(0, 254u * PAGE_SIZE, "scattered pages fill the chain a page each");
+    payload_refused(UPTR(words), 300u * PAGE_SIZE, -ENOMEM,
+                    "past the chain's pages with no run free a payload is ENOMEM, nothing sent");
+    gpu.dma_short = 0;
+    blob_unbind("the scattered row leaves nothing");
 }
 
 /** The shared region: 16 descriptors a chain, runs of up to 64 MiB and a
@@ -231,6 +262,96 @@ static void row_parts(void)
     blob_unbind("the row of parts on 1 MiB chains leaves nothing");
 }
 
+/* A stream of JOINED_DWORDS dwords, 2 MiB, which goes in parts. */
+#define JOINED_DWORDS (512u * 1024u)
+static uint32_t *joined;
+
+/** Fill the stream with one-dword commands of nothing and the copies of
+ * the resource `res`, a 7 by 3 texel box at 4 bytes a texel each: at the
+ * start, across a page, across the first part's end, 896 KiB, and at the
+ * end. */
+static void joined_fill(uint32_t res)
+{
+    static const uint32_t box[3] = {7, 3, 1};
+    static const uint32_t at[4] = {0, 1020, 229370, JOINED_DWORDS - 14};
+    int i;
+
+    k_memset(joined, 0, JOINED_DWORDS * 4u);
+    for (i = 0; i < 4; i++) {
+        (void)copy_cmd(joined, at[i], VIRGL_CCMD_TRANSFER3D, 13, res, box);
+    }
+}
+
+/* What the foreign fence's wait saw: VGS_CMD_PART logged since `joined_sent`
+ * and the join lock held. */
+static uint32_t joined_sent;
+static int joined_parts_at_wait, joined_locked_at_wait;
+
+/** The submission waits for its foreign fence: note what has gone. */
+static void joined_wait(void)
+{
+    joined_parts_at_wait = log_find(VGS_CMD_PART, joined_sent) != MAX_LOG;
+    joined_locked_at_wait = mutex_held(&vg->join_lock);
+    wait_step = NULL;
+}
+
+/** A stream in parts with buffers listed: its copies are counted from the
+ * caller's memory, and with a foreign in-fence no part goes and the join
+ * lock is free until the fence signals, so that a submission the fence's
+ * producer waits behind may send its own parts. */
+static void row_joined(void)
+{
+    struct drm_virtgpu_execbuffer a;
+    struct dma_fence *foreign;
+    uint32_t h, parts;
+    uint64_t before;
+    int32_t rc;
+
+    payload_bind(16, 32u * MIB, 64u * MIB, 1);
+    h = copy_res(&file, 1);
+    joined_fill(res_of(&file, h));
+    k_memset(&a, 0, sizeof(a));
+    a.command = UPTR(joined);
+    a.size = JOINED_DWORDS * 4u;
+    a.bo_handles = UPTR(&h);
+    a.num_bo_handles = 1;
+    answer_all();
+    before = virtio_gpu_copied_bytes();
+    parts = three.parts;
+    three.submitted_size = three.submitted_sum = 0;
+    rc = vgpu_execbuffer_ioctl(dev, &a, &file);
+    answer_all();
+    CHECK(rc == 0 && three.submitted_size == a.size &&
+              three.submitted_sum == fnv1a((const uint8_t *)joined, a.size),
+          "a stream in parts with a buffer listed reaches the device whole");
+    payload_parts(parts, 1, "a stream with a buffer listed goes in parts, joined");
+    CHECK(virtio_gpu_copied_bytes() - before == 4u * 84u,
+          "its copies are counted, across a page and across a part");
+
+    foreign = kzalloc(sizeof(*foreign));
+    CHECK(foreign != NULL, "a foreign fence");
+    if (!foreign) {
+        return;
+    }
+    dma_fence_init(foreign, &model_fence_ops, dma_fence_context_alloc(1), 1);
+    a.flags = VIRTGPU_EXECBUF_FENCE_FD_IN;
+    a.fence_fd = sync_file_create(foreign, "foreign");
+    step_fence = foreign;
+    joined_sent = gpu.nlog;
+    joined_parts_at_wait = joined_locked_at_wait = -1;
+    wait_step = joined_wait;
+    parts = three.parts;
+    rc = vgpu_execbuffer_ioctl(dev, &a, &file);
+    answer_all();
+    CHECK(rc == 0 && !step_fence && wait_step == NULL, "a stream in parts waits for its in-fence");
+    CHECK(joined_parts_at_wait == 0 && joined_locked_at_wait == 0,
+          "no part goes and the join lock is free while the in-fence is waited for");
+    payload_parts(parts, 1, "after the wait the stream goes in parts, joined");
+    wait_step = NULL;
+    dma_fence_put(foreign);
+    blob_unbind("the joined row leaves nothing");
+}
+
 /** Run the payload rows against the real driver. */
 int main(void)
 {
@@ -247,9 +368,18 @@ int main(void)
     for (i = 0; i < PCI_BIG / 4u; i++) {
         words[i] = i * 2654435761u;
     }
+    joined = (uint32_t *)calloc(JOINED_DWORDS, 4u);
+    if (!joined) {
+        printf("vgpupayload-test: FAIL: no memory for the stream\n");
+        free(words);
+        return 1;
+    }
     row_pci();
+    row_scattered();
     row_shared();
     row_parts();
+    row_joined();
+    free(joined);
     free(words);
     printf("vgpupayload-test: %s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;
