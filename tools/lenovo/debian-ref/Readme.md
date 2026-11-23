@@ -26,7 +26,7 @@ In order, from the repository's root on the Mac:
 | Games | `mac.sh run games record rec`, then `games stk stk-1`, `stk-2`, `games 0ad 0ad-1`, `0ad-2`; `SDLV=x11` runs a game on Xwayland | the replay in `/root/ref80/replays/0ad-mainland/`; `frames.txt` with percentiles for each run |
 | The big lock's reference (80-41) | `mac.sh run locks stk locks-stk`, then `locks 0ad locks-0ad` | `calls.txt` with `@calls`, `@ns`, `@icalls`, `@ins` and `@prof` for the game's pid; `min-after` back at the clock's earlier minimum |
 | Video | `mac.sh run video` | two results, each with no VA-API decoder in Firefox's log |
-| Crysis | `mac.sh run crysis prep`, then `crysis flyby direct direct-1`, `crysis flyby umu umu-1` | the Dummy card in `aplay -l`; four loops each, with FMOD-EX on "Dummy PCM" in `Game.log` and each loop's frame times from `crysis-frames.py` |
+| Crysis | `mac.sh run crysis prep`, then `crysis flyby direct direct-1`, `crysis flyby umu umu-1` | the Dummy card in `aplay -l`; four loops each, with FMOD-EX on "Dummy PCM" in `Game.log` and each loop's frame times from `crysis-frames.py`, which cuts the loops after the load's last frame as `tests/system/games/crysis.py` cuts Rach2's, prints that frame apart and, as `end-cut`, 80-2's cut, the 2000 frames before the count a 0.5 s poll read at loop 0's end |
 | The suit's reboot | `crysis start ROUTE NAME`, 60 s for the main menu, `crysis hud NAME`, `crysis stop` | the dialog's line times, Show's delay after the boot sequence and the save's `hudShow`, with screenshots of the HUD and of `sys_flash_info` |
 | Fetch | `mac.sh fetch` | `build/runs/80-2/out/` |
 | Leave | `mac.sh leave`, `mac.sh wait-rach2`, `mac.sh restore`, `mac.sh unlock` | p1's SHA-256 equal to `p1-before.sha256`; `bootctl status` as before |
