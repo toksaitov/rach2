@@ -405,6 +405,10 @@ static void report(struct vd *d, struct src *s, struct vr *r, struct kms *k)
             (unsigned long long)pc->backed, (unsigned long long)pc->refused,
             (unsigned long long)pc->unpinned, (unsigned long long)pc->held,
             (unsigned long long)pc->charged);
+    fprintf(stderr,
+            "backend: result: account judged %llu, least room %llu bytes, ledger most %llu bytes\n",
+            (unsigned long long)pc->judged, (unsigned long long)pc->least_room,
+            (unsigned long long)pc->ledger_most);
     if (s->dev >= 0 && ioctl(s->dev, VGPUSHM_IOC_COUNTS, &mc) == 0) {
         fprintf(stderr, "backend: result: module irqs %llu+%llu, signals %llu+%llu, rings %llu\n",
                 (unsigned long long)mc.irqs[0], (unsigned long long)mc.irqs[1],

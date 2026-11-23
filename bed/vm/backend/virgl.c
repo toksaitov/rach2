@@ -74,12 +74,14 @@ struct vr_admit {
 
 /* A resource's storage secured at its create (`hold_new`): the module's pin
  * of the dma-buf or shmem file the renderer exported, which holds its pages
- * until the UNREF or the epoch's end, and that file's identity, so that
- * storage already held for another resource is charged once. */
+ * until the UNREF or the epoch's end, that file's identity and the bytes
+ * pinned from its start, so that storage already held for another resource
+ * is charged only past the largest live hold of the same file. */
 struct vr_hold {
     uint32_t id, handle;
     dev_t dev;
     ino_t ino;
+    uint64_t size;
 };
 
 struct vr {
@@ -353,7 +355,7 @@ static int resp(int err)
 static int mem_room(struct vr *r, uint64_t size);
 static int admit_add(struct vr *r, uint32_t id, uint64_t bytes);
 static void admit_drop(struct vr *r, uint32_t id);
-static int hold_new(struct vr *r, uint32_t id, int fd, uint64_t size, const char *what);
+static int hold_new(struct vr *r, uint32_t id, int fd, const char *what);
 static void hold_drop(struct vr *r, uint32_t id);
 
 /* Gallium's targets of a 3D texture, whose depth halves at each level, and
@@ -447,17 +449,19 @@ static uint32_t format_block(uint32_t format, uint32_t *bw, uint32_t *bh)
     return 4;
 }
 
-/* The tiling's granularity that a level's row bytes and rows are rounded up
- * to: a Y tile of 128 bytes by 32 rows, as large as an X tile of 512 bytes
- * by 8 and a W tile of 64 by 64. */
-#define TILE_ROW_BYTES 128u
+/* What a level's row bytes and rows are rounded up to, so that the bound
+ * covers each of i915's tilings: the pitch of an X tile, 512 bytes by 8
+ * rows, and the height of a Y tile, 128 bytes by 32 rows; a W tile is 64 by
+ * 64 and a linear surface's pitch 64 bytes. */
+#define TILE_ROW_BYTES 512u
 #define TILE_ROWS      32u
 
 /**
- * The bytes the account charges a resource whose storage it cannot hold
- * (`charge`): twice a buffer's width; twice the sum over a texture's
- * mipmap chain of each level's blocks (`format_block`), its row bytes and
- * its rows rounded up to a tile (TILE_ROW_BYTES, TILE_ROWS), by its depth,
+ * The bytes the account judges a create at before the renderer makes it,
+ * and charges one whose storage it cannot hold (`charge`): twice a buffer's
+ * width; twice the sum over a texture's mipmap chain of each level's blocks
+ * (`format_block`), its row bytes and its rows rounded up to any tiling's
+ * (TILE_ROW_BYTES, TILE_ROWS), by its depth,
  * which halves at each level of a 3D texture and never falls below 1, its
  * layers, six for a cube, and its samples; rounded up to a 4 KiB page.
  * i915's isl places a miptree's levels in one surface, level 1 under level
@@ -503,26 +507,52 @@ static uint64_t create_bytes(const struct vd_create *a)
 }
 
 /**
- * Charge resource `id`, which the renderer has made, to the account: hold
- * the storage exported as `fd`, `size` bytes of it from its start or the
- * whole file for 0 (`hold_new`); else, for no descriptor (-1) or one that
- * cannot be held, charge `bytes`, its bound, to the ledger (`admit_add`)
- * if the room holds them (`mem_room`). fd is closed. Returns 0, or
- * ERR_OUT_OF_MEMORY with a line naming the refusal, `what` the command;
- * the caller unmakes a refused resource.
+ * Judge `bytes` of a resource not yet made against the room (`mem_room`),
+ * before the renderer allocates any of it: a size past VR_BYTES_MAX, or
+ * one the room does not hold, is refused. Returns 0, or ERR_OUT_OF_MEMORY
+ * with a line naming the resource and `what`, the command.
  */
-static int charge(struct vr *r, uint32_t id, int fd, uint64_t size, uint64_t bytes,
-                  const char *what)
+static int judge(struct vr *r, uint32_t id, uint64_t bytes, const char *what)
 {
-    int err = fd >= 0 ? hold_new(r, id, fd, size, what) : -1;
+    if (bytes > VR_BYTES_MAX) {
+        fprintf(stderr, "backend: %s: resource %u: refused: %llu bytes: past the account's bound\n",
+                what, (unsigned)id, (unsigned long long)bytes);
+        return VD_RESP_ERR_OUT_OF_MEMORY;
+    }
+    if (!mem_room(r, bytes)) {
+        fprintf(stderr,
+                "backend: %s: resource %u: refused: %llu bytes: no room in the VM's counts\n", what,
+                (unsigned)id, (unsigned long long)bytes);
+        return VD_RESP_ERR_OUT_OF_MEMORY;
+    }
+    return 0;
+}
 
+/**
+ * Charge resource `id`, which the renderer has made after `judge` admitted
+ * `bytes`, to the account: hold the whole of the storage exported as `fd`
+ * (`hold_new`); else, for no descriptor (-1) or one that cannot be held,
+ * charge the ledger (`admit_add`) the larger of `bytes` and the exported
+ * file's size, rounded up to a page, judging only what passes `bytes`. fd
+ * is closed. Returns 0, or ERR_OUT_OF_MEMORY with a line naming the
+ * refusal, `what` the command; the caller unmakes a refused resource.
+ */
+static int charge(struct vr *r, uint32_t id, int fd, uint64_t bytes, const char *what)
+{
+    int err = fd >= 0 ? hold_new(r, id, fd, what) : -1;
+    uint64_t judged = bytes;
+    off_t end;
+
+    if (fd >= 0 && err < 0 && (end = lseek(fd, 0, SEEK_END)) > 0 && (uint64_t)end > bytes) {
+        bytes = ((uint64_t)end + 4095u) & ~(uint64_t)4095u;
+    }
     if (fd >= 0) {
         close(fd);
     }
     if (err >= 0) {
         return err;
     }
-    if (!mem_room(r, bytes)) {
+    if (bytes > judged && (bytes > VR_BYTES_MAX || !mem_room(r, bytes - judged))) {
         fprintf(stderr,
                 "backend: %s: resource %u: refused: %llu bytes: no room in the VM's counts\n", what,
                 (unsigned)id, (unsigned long long)bytes);
@@ -537,11 +567,13 @@ static int charge(struct vr *r, uint32_t id, int fd, uint64_t size, uint64_t byt
 }
 
 /**
- * Create a resource without backing; device.c attaches it later. Its
- * storage is held or charged before the answer (`charge`): a resource the
- * renderer allocated through GBM exports as a dma-buf and is held whole,
- * and any other is charged at its bound (`create_bytes`). A create the VM
- * has no room for is unmade and refused with ERR_OUT_OF_MEMORY, as the
+ * Create a resource without backing; device.c attaches it later. Its bound
+ * (`create_bytes`) is judged before the renderer allocates (`judge`), since
+ * llvmpipe allocates and clears a texture's storage in the create, and its
+ * storage is held or charged after it, before the answer (`charge`): a
+ * resource the renderer allocated through GBM exports as a dma-buf and is
+ * held whole, and any other is charged at its bound. A create the VM has no
+ * room for is refused with ERR_OUT_OF_MEMORY, unmade if made, as the
  * backing of one is, since the renderer takes the storage from the VM's
  * memory, which a GPU's driver fills at the storage's first use and does
  * not give back while the resource lives: past the room the VM's OOM
@@ -550,10 +582,14 @@ static int charge(struct vr *r, uint32_t id, int fd, uint64_t size, uint64_t byt
 static int op_create(void *c, const struct vd_create *a)
 {
     struct virgl_renderer_resource_create_args args;
+    uint64_t bytes = create_bytes(a);
     struct vr_export e;
     struct vr *r = c;
     int err;
 
+    if ((err = judge(r, a->id, bytes, "create")) != 0) {
+        return err;
+    }
     args.handle = a->id;
     args.target = a->target;
     args.format = a->format;
@@ -571,7 +607,7 @@ static int op_create(void *c, const struct vd_create *a)
     if (vr_export(r, a->id, &e) != 0) {
         e.fd = -1;
     }
-    if ((err = charge(r, a->id, e.fd, 0, create_bytes(a), "create")) != 0) {
+    if ((err = charge(r, a->id, e.fd, bytes, "create")) != 0) {
         virgl_renderer_resource_unref(a->id);
     }
     return err;
@@ -629,26 +665,25 @@ static int op_transfer(void *c, const struct vd_transfer *t)
 
 /**
  * Create a blob resource: guest memory in the region, or a context's. A
- * blob of a context's memory is held or charged before the answer
- * (`charge`): the storage the renderer exports for it, a dma-buf or a
- * shared-memory file, is held over the blob's size from its start, and a
- * blob whose storage cannot be exported or held, as a GPU's own memory or
- * a Vulkan allocation's opaque descriptor cannot, is charged at its size,
- * rounded up to a page. One the VM has no room for is unmade and refused
- * with ERR_OUT_OF_MEMORY. A size past VR_BYTES_MAX is refused at once.
+ * blob of a context's memory is judged at its size, rounded up to a page,
+ * before the renderer allocates it (`judge`), and held or charged after,
+ * before the answer (`charge`): the storage the renderer exports for it, a
+ * dma-buf or a shared-memory file, is held whole, at the file's own size,
+ * and a blob whose storage cannot be exported or held, as a GPU's own
+ * memory or a Vulkan allocation's opaque descriptor cannot, is charged the
+ * larger of its size and the exported file's. One the VM has no room for
+ * is refused with ERR_OUT_OF_MEMORY, unmade if made.
  */
 static int op_blob(void *c, const struct vd_blob *a, struct iovec *iov, uint32_t n)
 {
     struct virgl_renderer_resource_create_blob_args args;
+    uint64_t bytes = a->size > VR_BYTES_MAX ? a->size : (a->size + 4095u) & ~(uint64_t)4095u;
     struct vr *r = c;
     uint32_t fd_type;
     int err, fd = -1;
 
-    if (a->mem != VIRGL_RENDERER_BLOB_MEM_GUEST && a->size > VR_BYTES_MAX) {
-        fprintf(stderr,
-                "backend: blob: resource %u: refused: %llu bytes: past the account's bound\n",
-                (unsigned)a->id, (unsigned long long)a->size);
-        return VD_RESP_ERR_OUT_OF_MEMORY;
+    if (a->mem != VIRGL_RENDERER_BLOB_MEM_GUEST && (err = judge(r, a->id, bytes, "blob")) != 0) {
+        return err;
     }
     memset(&args, 0, sizeof(args));
     args.res_handle = a->id;
@@ -668,7 +703,7 @@ static int op_blob(void *c, const struct vd_blob *a, struct iovec *iov, uint32_t
     if (virgl_renderer_resource_export_blob(a->id, &fd_type, &fd) != 0) {
         fd = -1;
     }
-    if ((err = charge(r, a->id, fd, a->size, (a->size + 4095u) & ~(uint64_t)4095u, "blob")) != 0) {
+    if ((err = charge(r, a->id, fd, bytes, "blob")) != 0) {
         virgl_renderer_resource_unref(a->id);
     }
     return err;
@@ -1060,6 +1095,9 @@ static int admit_add(struct vr *r, uint32_t id, uint64_t bytes)
     r->admit[i].bytes = bytes;
     r->admitted += bytes;
     r->pc.charged++;
+    if (r->admitted > r->pc.ledger_most) {
+        r->pc.ledger_most = r->admitted;
+    }
     return 0;
 }
 
@@ -1095,46 +1133,43 @@ static void admit_drop(struct vr *r, uint32_t id)
 
 /**
  * Hold the storage of resource id that the renderer exported as fd, a
- * dma-buf or a shmem file: `size` bytes from its start, or the whole file
- * for 0, rounded up to a page, pinned through the module
- * (VGPUSHM_IOC_PIN), which brings in every page it has not and keeps them
- * until `hold_drop`, as i915 keeps a dma-buf's pages while a device maps
- * it. Storage that another hold already pins, the same file, is charged
- * nothing and pinned again; any other is first judged against the room
- * (`mem_room`). Returns 0; ERR_OUT_OF_MEMORY, with a line, when the room
- * or the pin's allocation refuses it; or -1 when it cannot be held at all,
- * with no module, no place left, a size of 0 or past the module's largest
- * pin, or a file the module cannot pin, which the caller charges to the
- * ledger instead (`charge`). `what` names the command in the line.
+ * dma-buf or a shmem file: the whole file, its size from lseek rounded up
+ * to a page, pinned through the module (VGPUSHM_IOC_PIN), which brings in
+ * every page it has not and keeps them until `hold_drop`, as i915 keeps a
+ * dma-buf's pages while a device maps it. Only the bytes past the largest
+ * live hold of the same file, which pins its pages already, are judged
+ * against the room (`mem_room`); the file's pages are held while any hold
+ * of it lives, each over its own length. Returns 0; ERR_OUT_OF_MEMORY,
+ * with a line, when the room or the pin's allocation refuses it; or -1
+ * when it cannot be held at all, with no module, no place left, a size of
+ * 0 or past the module's largest pin, or a file the module cannot pin,
+ * which the caller charges to the ledger instead (`charge`). `what` names
+ * the command in the line.
  */
-static int hold_new(struct vr *r, uint32_t id, int fd, uint64_t size, const char *what)
+static int hold_new(struct vr *r, uint32_t id, int fd, const char *what)
 {
     struct vgpushm_pin pin;
+    uint64_t size, covered = 0;
     struct stat st;
     uint32_t i;
     off_t end;
-    int err, shared = 0;
+    int err;
 
-    if (r->module < 0 || r->nholds == PINS || fstat(fd, &st) != 0) {
+    if (r->module < 0 || r->nholds == PINS || fstat(fd, &st) != 0 ||
+        (end = lseek(fd, 0, SEEK_END)) <= 0 || (uint64_t)end > VGPUSHM_PIN_MAX_SIZE) {
         return -1;
     }
-    if (size == 0) {
-        if ((end = lseek(fd, 0, SEEK_END)) <= 0) {
-            return -1;
-        }
-        size = (uint64_t)end;
-    }
-    if (size > VGPUSHM_PIN_MAX_SIZE) {
-        return -1;
-    }
-    size = (size + 4095u) & ~(uint64_t)4095u;
+    size = ((uint64_t)end + 4095u) & ~(uint64_t)4095u;
     for (i = 0; i < r->nholds; i++) {
-        shared |= r->holds[i].dev == st.st_dev && r->holds[i].ino == st.st_ino;
+        if (r->holds[i].dev == st.st_dev && r->holds[i].ino == st.st_ino &&
+            r->holds[i].size > covered) {
+            covered = r->holds[i].size;
+        }
     }
-    if (!shared && !mem_room(r, size)) {
+    if (size > covered && !mem_room(r, size - covered)) {
         fprintf(stderr,
                 "backend: %s: resource %u: refused: %llu bytes: no room in the VM's counts\n", what,
-                (unsigned)id, (unsigned long long)size);
+                (unsigned)id, (unsigned long long)(size - covered));
         return VD_RESP_ERR_OUT_OF_MEMORY;
     }
     memset(&pin, 0, sizeof(pin));
@@ -1154,6 +1189,7 @@ static int hold_new(struct vr *r, uint32_t id, int fd, uint64_t size, const char
     r->holds[r->nholds].handle = pin.handle;
     r->holds[r->nholds].dev = st.st_dev;
     r->holds[r->nholds].ino = st.st_ino;
+    r->holds[r->nholds].size = size;
     r->nholds++;
     r->pc.held++;
     return 0;
@@ -1197,7 +1233,7 @@ static int mem_room(struct vr *r, uint64_t size)
 {
     unsigned long long kib, total = 0, avail = 0;
     int has_total = 0, has_avail = 0, failed;
-    uint64_t need;
+    uint64_t need, room;
     char line[128];
     FILE *f;
 
@@ -1223,7 +1259,11 @@ static int mem_room(struct vr *r, uint64_t size)
         return 0;
     }
     need = total * 1024u / 8u + r->admitted;
-    return need <= avail * 1024u && size <= avail * 1024u - need;
+    room = need <= avail * 1024u ? avail * 1024u - need : 0;
+    if (r->pc.judged++ == 0 || room < r->pc.least_room) {
+        r->pc.least_room = room;
+    }
+    return size <= room;
 }
 
 volatile sig_atomic_t vr_hold;

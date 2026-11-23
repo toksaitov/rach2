@@ -33,6 +33,9 @@ struct vr_pin_counts {
     uint64_t backed;  /* of the pins made, backings of the VM's memory */
     uint64_t held;    /* resources whose storage a hold pinned */
     uint64_t charged; /* resources charged to the ledger at their bound */
+    /* The account's judgments (`mem_room`), the least room any of them
+     * found, in bytes, and the most the ledger has held at once. */
+    uint64_t judged, least_room, ledger_most;
 };
 
 /* The renderer, after vr_init; ops and cookie go to vd_init. */
