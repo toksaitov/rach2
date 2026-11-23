@@ -1711,6 +1711,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "vgpubackend",
+          "checks": "tests/host/vgpubackend_hosttest.c runs the bed backend's device, bed/vm/backend/device.c, against a driver over a region and checks that a fenced command it has no memory to copy is refused only once the fences before it retire, on the global timeline and a context's ring, that a stream sent in parts reaches the renderer whole in the SUBMIT_3D after them, and that broken streams and parts a driver did not accept are refused under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "vgpublob",
           "checks": "tests/host/vgpublob_hosttest.c runs virtio-gpu's blob, context-init and ring rows over the 3D model under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1722,7 +1727,7 @@
         },
         {
           "assertion_id": "vgpupayload",
-          "checks": "tests/host/vgpupayload_hosttest.c sends payloads of 1 MiB less the header, 1 MiB and 4 MiB through EXECBUFFER and CREATE_BLOB on virtio-pci's and the shared region's chain bounds, each whole in one SUBMIT_3D, and refuses what a transport cannot carry with ENOMEM under ASan and UBSan and exits 0",
+          "checks": "tests/host/vgpupayload_hosttest.c sends payloads of 1 MiB less the header, 1 MiB and 4 MiB through EXECBUFFER and CREATE_BLOB on virtio-pci's and the shared region's chain bounds, each whole in one SUBMIT_3D, 255 MiB to virtio-pci in runs past a megabyte and 65 MiB in parts to a shared region's device that joins them, and refuses what a transport cannot carry with ENOMEM under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {

@@ -1130,6 +1130,7 @@ static struct {
      * for any. A row sets them before the bind. */
     uint16_t max_chain;
     uint32_t max_bytes;
+    uint32_t dma_most;  /* the largest DMA allocation since the bind */
     pte_t window_cache; /* the last window's cache bits */
 } gpu;
 
@@ -1173,16 +1174,20 @@ void mmio_unmap(uintptr_t va, size_t size)
     gpu.windows--;
 }
 
+/* The most bytes of a request the model gathers; the 3D model reads a
+ * longer submission's stream where it lies (`chain_fnv`). */
+#define MODEL_REQ_MAX (16u << 20)
+
 /** The request bytes of a chain, its readable segments gathered, into
- * `buf` of `cap`: their length. */
+ * `buf` of `cap`, the first `cap` of a longer request: their length. */
 static uint32_t gather(const struct virtio_sg *sg, unsigned out, uint8_t *buf, uint32_t cap)
 {
-    uint32_t n = 0, i;
+    uint32_t n = 0, i, here;
 
-    for (i = 0; i < out; i++) {
-        CHECK(n + sg[i].len <= cap, "a request fits the model's buffer");
-        k_memcpy(buf + n, (const void *)(uintptr_t)sg[i].addr, sg[i].len);
-        n += sg[i].len;
+    for (i = 0; i < out && n < cap; i++) {
+        here = sg[i].len < cap - n ? sg[i].len : cap - n;
+        k_memcpy(buf + n, (const void *)(uintptr_t)sg[i].addr, here);
+        n += here;
     }
     return n;
 }
@@ -1532,9 +1537,14 @@ static void run_chain(struct model_queue *q, uint32_t k)
     for (j = 0; j < out; j++) {
         cap += sg[j].len;
     }
+    if (cap > MODEL_REQ_MAX) {
+        cap = MODEL_REQ_MAX;
+    }
     req = (uint8_t *)calloc(1, cap ? cap : 1);
     n = gather(sg, out, req, cap);
 #ifdef VGPU_3D_TEST
+    chain_sg = sg;
+    chain_out = out;
     unsigned in = q->flight[k].in;
     uint32_t i, room = 0, off = 0;
     uint8_t *response;
@@ -1744,6 +1754,9 @@ void *virtio_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
 
     CHECK(bytes <= (d->dma_max ? d->dma_max : PAGE_SIZE),
           "a DMA allocation is at most a page, or the transport's run");
+    if (bytes > gpu.dma_most) {
+        gpu.dma_most = bytes;
+    }
     p = kzalloc(bytes);
     *addr = p ? (uint64_t)(uintptr_t)p : 0;
     return p;
