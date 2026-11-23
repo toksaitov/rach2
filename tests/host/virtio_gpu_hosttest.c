@@ -1125,7 +1125,12 @@ static struct {
     uint32_t cursor_cmd;
     uint64_t hostmem_len; /* shared memory region 1, 0 for none */
     uint32_t windows;     /* kernel windows onto it now mapped */
-    pte_t window_cache;   /* the last window's cache bits */
+    /* The control queue's bounds on a chain, as a transport sets them:
+     * descriptors, 0 for VIRTIO_GPU_CMD_SGS + 64, and bytes each way, 0
+     * for any. A row sets them before the bind. */
+    uint16_t max_chain;
+    uint32_t max_bytes;
+    pte_t window_cache; /* the last window's cache bits */
 } gpu;
 
 /* Host-visible memory: shared memory region 1 at 14 TiB, as QEMU places
@@ -1519,10 +1524,16 @@ static int deliver(struct model_queue *q)
 /** Carry out chain `k` of `q` and write its answer. */
 static void run_chain(struct model_queue *q, uint32_t k)
 {
-    static uint8_t req[PAGE_SIZE * (VIRTIO_GPU_CMD_EXTRA + 1)];
     const struct virtio_sg *sg = q->flight[k].sg;
     unsigned out = q->flight[k].out;
-    uint32_t n = gather(sg, out, req, sizeof(req));
+    uint32_t n, cap = 0, j;
+    uint8_t *req;
+
+    for (j = 0; j < out; j++) {
+        cap += sg[j].len;
+    }
+    req = (uint8_t *)calloc(1, cap ? cap : 1);
+    n = gather(sg, out, req, cap);
 #ifdef VGPU_3D_TEST
     unsigned in = q->flight[k].in;
     uint32_t i, room = 0, off = 0;
@@ -1543,6 +1554,7 @@ static void run_chain(struct model_queue *q, uint32_t k)
     q->flight[k].len = execute(req, n, (uint8_t *)(uintptr_t)sg[out].addr);
     CHECK(q->flight[k].len <= sg[out].len, "the answer fits its segment");
 #endif
+    free(req);
     q->flight[k].run = 1;
     q->flight[k].answered = gpu.answer != ANSWER_NEVER;
 }
@@ -1556,6 +1568,7 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
     uint32_t k = q->nflight;
 
     CHECK(in >= 1 && out >= 1, "a command has its request and answer");
+    CHECK(virtqueue_chain_fits(vq, sg, out, in), "a chain the driver adds fits the queue");
     if (gpu.torn_down) {
         return -EIO;
     }
@@ -1603,12 +1616,22 @@ int virtqueue_reap(struct virtqueue *vq)
     return deliver(mq(vq));
 }
 
+/** Whether the chain fits `vq`'s bounds once the segments that follow each
+ * other in one direction are merged, as virtqueue.c merges them. */
 int virtqueue_chain_fits(const struct virtqueue *vq, const struct virtio_sg *sg, unsigned out,
                          unsigned in)
 {
-    (void)vq;
-    (void)sg;
-    return out + in <= VIRTIO_GPU_CMD_SGS + 64u;
+    uint64_t bytes[2] = {0, 0};
+    unsigned k, descs = 0;
+
+    for (k = 0; k < out + in; k++) {
+        if (k == 0 || k == out || sg[k].addr != sg[k - 1].addr + sg[k - 1].len) {
+            descs++;
+        }
+        bytes[k >= out] += sg[k].len;
+    }
+    return descs <= vq->max_chain &&
+           (vq->max_bytes == 0 || (bytes[0] <= vq->max_bytes && bytes[1] <= vq->max_bytes));
 }
 
 int virtio_backing_fill(struct virtio_dev *d, struct shmem *sh, uint64_t bytes)
@@ -1675,6 +1698,8 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
     q->vq.dev = d;
     q->vq.index = index;
     q->vq.size = index == 0 ? 64 : 16;
+    q->vq.max_chain = index == 0 && gpu.max_chain ? gpu.max_chain : VIRTIO_GPU_CMD_SGS + 64;
+    q->vq.max_bytes = index == 0 ? gpu.max_bytes : 0;
     q->vq.done = done;
     q->vq.priv = priv;
     q->nflight = 0;
@@ -1717,8 +1742,8 @@ void *virtio_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
 {
     void *p;
 
-    (void)d;
-    CHECK(bytes <= PAGE_SIZE, "a DMA allocation is at most a page");
+    CHECK(bytes <= (d->dma_max ? d->dma_max : PAGE_SIZE),
+          "a DMA allocation is at most a page, or the transport's run");
     p = kzalloc(bytes);
     *addr = p ? (uint64_t)(uintptr_t)p : 0;
     return p;

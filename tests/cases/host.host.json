@@ -1721,6 +1721,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "vgpupayload",
+          "checks": "tests/host/vgpupayload_hosttest.c sends payloads of 1 MiB less the header, 1 MiB and 4 MiB through EXECBUFFER and CREATE_BLOB on virtio-pci's and the shared region's chain bounds, each whole in one SUBMIT_3D, and refuses what a transport cannot carry with ENOMEM under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "vgpupayload64",
+          "checks": "tests/host/vgpupayload64_hosttest.c runs the payload rows with x86-64 kernel structures under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "vgpushm",
           "checks": "tests/host/vgpushm_hosttest.c runs the virtio transport over a shared region against a model of the VM's device through the virtio core and checks the layout, the handshake, the queues in the ring area and their bounds, a round trip, merged and refused chains, a full region that gives ENOMEM, backing from the heap, the doorbells' hooks, the control node's report, a lost device, a refused setup and the detach under ASan and UBSan",
           "source": "scenario"

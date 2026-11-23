@@ -22,7 +22,19 @@ static struct {
     struct virtio_gpu_transfer_3d transfer;
     uint8_t submitted[8192];
     uint32_t submitted_size;
+    uint32_t submitted_sum; /* FNV-1a of the whole of the last SUBMIT_3D's bytes */
 } three;
+
+/** FNV-1a of `n` bytes at `p`. */
+static uint32_t fnv1a(const uint8_t *p, uint32_t n)
+{
+    uint32_t h = 2166136261u;
+
+    while (n--) {
+        h = (h ^ *p++) * 16777619u;
+    }
+    return h;
+}
 
 /** Whether the model has a context with this id. */
 static int context_present(uint32_t id)
@@ -192,6 +204,7 @@ static uint32_t execute_3d(const uint8_t *req, uint32_t n, uint8_t *resp, uint32
         if (s->size <= sizeof(three.submitted)) {
             k_memcpy(three.submitted, req + 32, s->size);
         }
+        three.submitted_sum = n == 32 + s->size ? fnv1a(req + 32, s->size) : 0;
         three.submits++;
         break;
     default:
