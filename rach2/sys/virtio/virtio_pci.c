@@ -799,18 +799,35 @@ static void vp_irq_release(struct virtio_dev *d)
     vp->mode = VP_IRQ_NONE;
 }
 
-/** A page the device reads by its physical address, from any memory the
- * kernel reaches (`alloc_dma64_frame`): every address of virtio 1.x is 64
- * bits wide, rings and buffers alike, as Linux's virtio-pci sets a DMA mask
- * of 64 bits, so the device's pages leave the 64 MiB pool below
- * HARD_MEMORY_LIMIT to the devices whose registers take 32 bits. */
+/* The most pages one vp_dma_alloc gives as a run: kalloc_contig's largest. */
+#define VP_DMA_RUN_PAGES 256u
+
+/** Zeroed memory the device reads by its physical address. A page comes
+ * from any memory the kernel reaches (`alloc_dma64_frame`): every address
+ * of virtio 1.x is 64 bits wide, rings and buffers alike, as Linux's
+ * virtio-pci sets a DMA mask of 64 bits, so the device's pages leave the
+ * 64 MiB pool below HARD_MEMORY_LIMIT to the devices whose registers take
+ * 32 bits. More than a page, up to VP_DMA_RUN_PAGES, is a run of
+ * consecutive frames (`kalloc_contig`), for a buffer one descriptor
+ * carries, given back whole. */
 static void *vp_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
 {
+    uint32_t pages = bytes / PAGE_SIZE + (bytes % PAGE_SIZE != 0);
+    uintptr_t phys;
     void *frame;
 
     (void)d;
-    if (bytes == 0 || bytes > PAGE_SIZE) {
+    if (bytes == 0 || pages > VP_DMA_RUN_PAGES) {
         return 0;
+    }
+    if (pages > 1) {
+        frame = kalloc_contig(pages, &phys);
+        if (!frame) {
+            return 0;
+        }
+        k_memset(frame, 0, pages * PAGE_SIZE);
+        *addr = (uint64_t)phys;
+        return frame;
     }
     frame = alloc_dma64_frame();
     if (!frame) {
@@ -821,8 +838,8 @@ static void *vp_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
     return frame;
 }
 
-/** Give back a page `vp_dma_alloc` gave, or the run `vp_ring_alloc` gave
- * for a ring of more than a page. */
+/** Give back a page or a run `vp_dma_alloc` gave, or the run
+ * `vp_ring_alloc` gave for a ring of more than a page, whole. */
 static void vp_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
 {
     (void)d;
@@ -1359,6 +1376,7 @@ static int vp_attach_legacy(struct virtio_pci *vp)
     vp->io_len = (uint16_t)(r.end - r.start + 1u);
     vp->dev.legacy = 1;
     vp->dev.ops = &vp_legacy_ops;
+    vp->dev.dma_max = VP_DMA_RUN_PAGES * PAGE_SIZE;
     vp->claimed = pci_owner(p->bus, (uint8_t)(p->device << 3 | p->function)) == NULL;
     pci_enable_memory_space(&vp->pci);
     cmd = pci_read_config16(p->bus, p->device, p->function, PCI_COMMAND);
@@ -1505,6 +1523,7 @@ static int vp_probe_one(const pci_device_t *p, struct virtio_pci **out)
     }
     vp->pci = *p;
     vp->dev.ops = &vp_ops;
+    vp->dev.dma_max = VP_DMA_RUN_PAGES * PAGE_SIZE;
     vp->dev.notify_unlocked = 1;
     vp->dev.config_atomic = 1;
     vp->dev.transport = vp;

@@ -238,8 +238,7 @@ struct virtio_map;
  *     at most a page, or `d->dma_max` bytes where the transport sets it,
  *     page-aligned, with that address in `*addr`; NULL when none. A larger
  *     buffer is a list of pieces.
- * dma_free: give back what dma_alloc gave, with its `bytes`; where
- *     `d->dma_max` is set, any whole pages of it, each given back once.
+ * dma_free: give back what dma_alloc gave, whole, with its `bytes`.
  * shm_region: shared memory region `id` (virtio 1.2, 2.10) as the device
  *     exposes it, its physical address and length; 0, or -ENOENT.
  *
@@ -343,7 +342,7 @@ struct virtio_dev {
      * shared INTx line and the other transports keep it. */
     int irq_unlocked;
     /* The most bytes one dma_alloc gives, in whole pages that follow each
-     * other in the device's addresses; 0 for one page, as on virtio-pci. */
+     * other in the device's addresses; 0 for one page. */
     uint32_t dma_max;
     /* The device maps its buffers from its own pages (`map_pages`), as
      * the transport and the device have agreed; set by the transport. */
