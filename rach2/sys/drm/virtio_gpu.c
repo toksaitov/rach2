@@ -1834,9 +1834,6 @@ int32_t vgpu_backing_entries(struct virtio_gpu_cmd *cmd, struct virtio_gpu_objec
     if (cmd->vg->dead) {
         return -ENODEV;
     }
-    if (cmd->nextra + 2 > (uint32_t)cmd->vq->size) {
-        return -E2BIG;
-    }
     k = *n < inl ? *n : inl;
     cmd->sg[0].len += k * (uint32_t)sizeof(struct virtio_gpu_mem_entry);
     left = *n - k;
@@ -1848,6 +1845,13 @@ int32_t vgpu_backing_entries(struct virtio_gpu_cmd *cmd, struct virtio_gpu_objec
         left -= here;
     }
     cmd->nout = 1 + cmd->nextra;
+    /* The answer's segment, as cmd_submit sets it, so that the chain is
+     * judged whole, as cmd_submit judges it before it refuses one. */
+    cmd->sg[cmd->nout].addr = cmd->addr + VIRTIO_GPU_RESP_OFF;
+    cmd->sg[cmd->nout].len = PAGE_SIZE - VIRTIO_GPU_RESP_OFF;
+    if (!virtqueue_chain_fits(cmd->vq, cmd->sg, cmd->nout, 1)) {
+        return -E2BIG;
+    }
     return 0;
 }
 
