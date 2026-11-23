@@ -485,16 +485,30 @@ static int op_ctx_create(void *c, uint32_t ctx, uint32_t capset, uint32_t nlen, 
     return err;
 }
 
-/** Destroy a context. */
+/**
+ * Destroy a context and forget the fences of its rings, which virglrenderer
+ * frees with it without retiring them, in vrend and in the render server's
+ * proxy alike; the device answers their commands at CTX_DESTROY.
+ */
 static void op_ctx_destroy(void *c, uint32_t ctx)
 {
     struct vr *r = c;
     int i = venus_slot(r, ctx);
+    unsigned k;
 
     if (i >= 0) {
         r->venus[i] = 0;
     }
     virgl_renderer_context_destroy(ctx);
+    if (r->fence_fd >= 0) {
+        pthread_mutex_lock(&r->fence_lock);
+        for (k = 0; k < VD_PENDING; k++) {
+            if (r->fences[k].per_ctx && r->fences[k].ctx == ctx) {
+                r->fences[k].used = 0;
+            }
+        }
+        pthread_mutex_unlock(&r->fence_lock);
+    }
 }
 
 /**
