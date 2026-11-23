@@ -33,9 +33,9 @@ static int32_t payload_copy(struct virtio_gpu_cmd *cmd, void *page, uint64_t use
 /** The `n` pages of a command's payload as one block of the DMA pool, its
  * address at *addr, or NULL where the transport gives no run of `n` pages
  * (`dma_max`) or none is free. A payload of more pages than `room`, the
- * segments one chain of the queue holds beside the header and the
- * response, has the block as its only way, so it waits for the pool
- * (`vgpu_dma_alloc_wait`). May sleep. */
+ * segments one chain of the queue holds beside the header, and beside the
+ * inline answer for a payload the device reads, has the block as its only
+ * way, so it waits for the pool (`vgpu_dma_alloc_wait`). May sleep. */
 static uint8_t *payload_block(struct virtio_gpu_cmd *cmd, uint32_t n, uint32_t room, uint64_t *addr)
 {
     struct virtio_dev *vdev = cmd->vg->vdev;
@@ -55,59 +55,37 @@ static int32_t payload_refusal(const struct virtio_dev *vdev, uint32_t n)
     return n < 2 || vdev->dma_max / PAGE_SIZE < n ? -E2BIG : -ENOMEM;
 }
 
-/** Allocate payload pages and their scatter list before submitting a command.
- * The pages are one block that the device sees as one segment where the
- * transport gives more than a page at once (`dma_max`), and a page each
- * otherwise; either way each page is freed alone. The descriptors one
- * chain of the queue may hold (`max_chain`), the header and the response
- * among them, bound the pages that go a page each, since a longer chain
- * is refused whole at its send: the shared region's transport takes 16. A
- * payload past that bound waits for a block: E2BIG where the transport
- * gives no block of its size, ENOMEM where the wait gives up, and ENODEV
- * for every command of a dead device, whose queues are freed, a device
- * that dies while an allocation sleeps among them. Process context. */
-int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes, int response)
+/** The pages of a payload of `bytes` that may go a page each in one chain
+ * of `cmd`'s queue, at *room: its `max_chain` less the header and, unless
+ * the device writes the payload (`response`), which takes the place of
+ * the answer in the command's page, the inline answer. -E2BIG where the
+ * bytes each way, the header's and the inline answer's among them, pass
+ * the queue's `max_bytes`, which the shared region sets to its 1 MiB
+ * command; else 0. */
+static int32_t payload_room(const struct virtio_gpu_cmd *cmd, uint32_t bytes, int response,
+                            uint32_t *room)
 {
-    uint32_t n, i, room, left = bytes, off = 0, here;
-    struct virtio_sg *sg;
-    struct virtio_dev *vdev = cmd->vg->vdev;
-    uint8_t *block = NULL;
-    uint64_t addr = 0;
+    uint64_t out = cmd->sg[0].len + (response ? 0 : (uint64_t)bytes);
+    uint64_t in = response ? (uint64_t)bytes : PAGE_SIZE - VIRTIO_GPU_RESP_OFF;
+    uint32_t fixed = response ? 1 : 2;
 
-    n = bytes / PAGE_SIZE + (bytes % PAGE_SIZE != 0);
-    if (!n) {
-        return 0;
+    if (cmd->vq->max_bytes != 0 && (out > cmd->vq->max_bytes || in > cmd->vq->max_bytes)) {
+        return -E2BIG;
     }
-    if (cmd->vg->dead) {
-        return -ENODEV;
-    }
-    /* The wait below lets a reset free the queue, so its bound is read now. */
-    room = cmd->vq->max_chain > 2 ? (uint32_t)cmd->vq->max_chain - 2 : 0;
-    block = payload_block(cmd, n, room, &addr);
-    if (!block && cmd->vg->dead) {
-        return -ENODEV;
-    }
-    if (!block && n > room) {
-        return payload_refusal(vdev, n);
-    }
-    cmd->payload = kzalloc(n * sizeof(*cmd->payload));
-    sg = kzalloc((n + 2) * sizeof(*sg));
-    if (!cmd->payload || !sg || cmd->vg->dead) {
-        kfree(sg);
-        if (block) {
-            for (i = 0; i < n; i++) {
-                virtio_dma_free(vdev, block + i * PAGE_SIZE, PAGE_SIZE);
-            }
-        }
-        return cmd->vg->dead ? -ENODEV : -ENOMEM;
-    }
-    sg[0] = cmd->sg[0];
-    cmd->segments = sg;
-    for (i = 0; block && i < n; i++) {
-        cmd->payload[i].page = block + i * PAGE_SIZE;
-        cmd->payload[i].addr = addr + (uint64_t)i * PAGE_SIZE;
-        cmd->npayload++;
-    }
+    *room = cmd->vq->max_chain > fixed ? (uint32_t)cmd->vq->max_chain - fixed : 0;
+    return 0;
+}
+
+/** Fill the `n` segments of a payload of `bytes` after `sg`'s header, from
+ * the user's `user` unless the device writes it (`response`), taking each
+ * page from the DMA pool when `cmd->payload` holds no block. 0, -ENODEV,
+ * -ENOMEM or -EFAULT; the pages taken stay `cmd`'s to free. May sleep. */
+static int32_t payload_fill(struct virtio_gpu_cmd *cmd, struct virtio_sg *sg, uint32_t n,
+                            uint64_t user, uint32_t bytes, int response)
+{
+    uint32_t i, left = bytes, off = 0, here;
+    int block = cmd->npayload != 0;
+
     for (i = 0; i < n; i++) {
         if (!block) {
             cmd->payload[i].page = vgpu_dma_alloc_wait(cmd->vg, PAGE_SIZE, &cmd->payload[i].addr);
@@ -125,13 +103,83 @@ int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t byt
         left -= here;
         off += here;
     }
+    return 0;
+}
+
+/** Allocate payload pages and their scatter list before submitting a command.
+ * The pages are one block that the device sees as one segment where the
+ * transport gives more than a page at once (`dma_max`), and a page each
+ * otherwise; either way each page is freed alone. The chain is judged
+ * whole before it is sent, as `cmd_submit` judges it and refuses one: its
+ * bytes each way (`payload_room`) before anything is allocated, and its
+ * descriptors against the queue's `max_chain`, 16 on the shared region,
+ * which bound the pages that go a page each. A payload past that bound
+ * waits for a block. E2BIG where the chain cannot carry the payload, or
+ * the transport gives no block of its size; ENOMEM where the wait gives
+ * up; ENODEV for every command of a dead device, whose queues are freed,
+ * a device that dies while an allocation sleeps among them. Process
+ * context. */
+int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes, int response)
+{
+    uint32_t n, i, room;
+    struct virtio_sg *sg;
+    struct virtio_dev *vdev = cmd->vg->vdev;
+    uint8_t *block = NULL;
+    uint64_t addr = 0;
+    int32_t rc;
+
+    n = bytes / PAGE_SIZE + (bytes % PAGE_SIZE != 0);
+    if (!n) {
+        return 0;
+    }
+    if (cmd->vg->dead) {
+        return -ENODEV;
+    }
+    /* The wait below lets a reset free the queue: its bounds are read now. */
+    rc = payload_room(cmd, bytes, response, &room);
+    if (rc) {
+        return rc;
+    }
+    block = payload_block(cmd, n, room, &addr);
+    if (!block && cmd->vg->dead) {
+        return -ENODEV;
+    }
+    if (!block && n > room) {
+        return payload_refusal(vdev, n);
+    }
+    cmd->payload = kzalloc(n * sizeof(*cmd->payload));
+    sg = kzalloc((n + 2) * sizeof(*sg));
+    if (!cmd->payload || !sg || cmd->vg->dead) {
+        kfree(sg);
+        for (i = 0; block && i < n; i++) {
+            virtio_dma_free(vdev, block + i * PAGE_SIZE, PAGE_SIZE);
+        }
+        return cmd->vg->dead ? -ENODEV : -ENOMEM;
+    }
+    sg[0] = cmd->sg[0];
+    cmd->segments = sg;
+    for (i = 0; block && i < n; i++) {
+        cmd->payload[i].page = block + i * PAGE_SIZE;
+        cmd->payload[i].addr = addr + (uint64_t)i * PAGE_SIZE;
+        cmd->npayload++;
+    }
+    rc = payload_fill(cmd, sg, n, user, bytes, response);
+    if (rc) {
+        return rc;
+    }
     if (response) {
         cmd->response_size = bytes;
         cmd->nin = n;
     } else {
         cmd->nout = n + 1;
+        /* The answer's segment, as cmd_submit sets it. */
+        sg[n + 1].addr = cmd->addr + VIRTIO_GPU_RESP_OFF;
+        sg[n + 1].len = PAGE_SIZE - VIRTIO_GPU_RESP_OFF;
     }
-    return 0;
+    if (cmd->vg->dead) {
+        return -ENODEV;
+    }
+    return virtqueue_chain_fits(cmd->vq, sg, cmd->nout, response ? n : 1) ? 0 : -E2BIG;
 }
 
 /** Copy a completed capset payload into `to`; return 0 or EIO. */
