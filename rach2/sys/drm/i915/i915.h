@@ -6,6 +6,7 @@
 #define _I915_H_
 
 #include "../drm.h"
+#include "../drm_frame_trace.h"
 #include "../../mm/notify.h"
 #include "../../mm/pressure.h"
 #include "../../mm/shmem.h"
@@ -3379,6 +3380,13 @@ void intel_crtc_arm_event(struct intel_crtc *crtc, struct drm_crtc_state *cs, ui
  * before vblank. Return the interrupt flags for spin_unlock_irqrestore.
  * The caller has already prepared the plane buffers and any vblank hold. */
 uint32_t intel_pipe_update_lock(struct intel_crtc *crtc);
+
+#ifdef RACH2_DRM_FRAME_TRACE
+/** Record the pipe's hardware frame and raw scanline in a profiling build. */
+void intel_trace_pipe(struct intel_crtc *crtc, enum drm_frame_event event, uint64_t value);
+#else
+#define intel_trace_pipe(crtc, event, value) ((void)0)
+#endif
 
 /* A plane's address, stride and offset resolved before the vblank guard. */
 struct intel_plane_surface {

@@ -100,6 +100,7 @@
 #include "sys/vdso.h"
 #include "sys/watchdog.h"
 #include "sys/drm/drm.h"
+#include "sys/drm/drm_frame_trace.h"
 #include "sys/virtio/virtio.h"
 #include "sys/virtio/virtio_console.h"
 #include "sys/virtio/virtio_input.h"
@@ -4930,6 +4931,7 @@ static void start_processors(void)
     }
     sched_debugfs_init();
     vfs_bind_trace_init();
+    drm_frame_trace_init();
     walk_gate_init();
 #ifdef RACH2_LOCKDEP
     if (debugfs_create_text("lockdep/inject", 0600u, &lockdep_inject_ops, NULL) != 0) {

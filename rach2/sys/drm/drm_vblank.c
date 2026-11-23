@@ -5,6 +5,7 @@
  */
 
 #include "drm.h"
+#include "drm_frame_trace.h"
 
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
@@ -382,6 +383,12 @@ static void send_vblank_event(struct drm_pending_event *e, uint64_t seq, int64_t
     case DRM_EVENT_FLIP_COMPLETE:
         e->event.vbl.sequence = (uint32_t)seq;
         ns_split(now, &e->event.vbl.tv_sec, &e->event.vbl.tv_usec);
+        if (e->event.base.type == DRM_EVENT_FLIP_COMPLETE) {
+            drm_frame_trace(DRM_FRAME_STAMP, e->event.vbl.crtc_id, (uint32_t)seq,
+                            (uint64_t)e->event.vbl.tv_sec * 1000000000u +
+                                (uint64_t)e->event.vbl.tv_usec * 1000u,
+                            e->event.vbl.user_data);
+        }
         break;
     case DRM_EVENT_CRTC_SEQUENCE:
         if (seq) {

@@ -8,6 +8,7 @@ DRM_C_SRC = sys/drm/drm.c \
     sys/drm/drm_auth.c \
     sys/drm/drm_debugfs.c \
     sys/drm/drm_edid.c \
+    sys/drm/drm_frame_trace.c \
     sys/drm/drm_gem.c \
     sys/drm/drm_lease.c \
     sys/drm/drm_legacy.c \
