@@ -1,40 +1,62 @@
 /* The walk sequence of fs/walkseq.c for a single-threaded host test: the
- * same counts, with no lock, no waiters and no walk gate to arm. */
+ * same counts, with no lock, no waiters and no walk gate to arm, and a
+ * switch that lets the test make changes as another thread. */
 #include "fs/walkseq.h"
 
 /* The sequence, which moves at each beginning and end of a change, and the
- * count of the changes under way, all the single thread's own. */
+ * count of the changes under way; and of those, as fs/walkseq.c keeps them
+ * for each thread, the changes under way the test's thread began and the
+ * moves they made. `seq_other` set makes the changes that begin and end
+ * another thread's (`walkseq_host_other`). */
 static uint64_t seq_now;
 static uint32_t seq_active;
+static uint32_t own_tokens;
+static uint64_t own_moves;
+static int seq_other;
+
+/** Make the changes that begin and end from now another thread's when `on`
+ * is set, and the test thread's own, as at the start, when it is clear. */
+void walkseq_host_other(int on)
+{
+    seq_other = on;
+}
 
 /** Begin a change: one more under way, and the sequence moves. */
 void vfs_seq_begin(void)
 {
     seq_active++;
     seq_now++;
+    if (!seq_other) {
+        own_tokens++;
+        own_moves++;
+    }
 }
 
 /** End a change: one fewer under way, and the sequence moves. */
 void vfs_seq_end(void)
 {
+    if (!seq_other && own_tokens > 0) {
+        own_tokens--;
+        own_moves++;
+    }
     seq_active--;
     seq_now++;
 }
 
-/** The sequence into `*seq`, less the thread's own moves, which here are
- * all of them, as fs/walkseq.c takes a thread's own changes out; 1, since
- * every change under way is the single thread's own. */
+/** The sequence into `*seq`, less the moves of the thread's own changes,
+ * as fs/walkseq.c takes them out; 1 when no change is under way but the
+ * thread's own. */
 int vfs_seq_read(uint64_t *seq)
 {
-    *seq = 0;
-    return 1;
+    *seq = seq_now - own_moves;
+    return seq_active == own_tokens;
 }
 
-/** Whether no other thread's change has come since `seq`: always, with no
- * other thread. */
+/** Whether no other thread's change is under way or has come since
+ * `seq`. */
 int vfs_seq_still(uint64_t seq)
 {
-    return seq == 0;
+    return seq_active == own_tokens && seq_now - own_moves == seq;
 }
 
 /** `vfs_seq_still` and `vfs_seq_begin` as one step. */
@@ -56,7 +78,7 @@ void vfs_seq_wait(uint64_t *seq)
 /** Whether the thread began a change it has not ended. */
 int vfs_seq_mine(void)
 {
-    return seq_active != 0;
+    return own_tokens != 0;
 }
 
 /* The last walk's stamp, the single thread's. */
