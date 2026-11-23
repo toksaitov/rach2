@@ -1800,6 +1800,24 @@ crysis_figure()
     fi
 }
 
+# crysis_fresh: print, without carriage returns, the console's whole lines
+# that began after byte $mark. The read starts one byte early, or at an
+# added newline when $mark is 0, so its first record is the rest of the
+# line the mark cut, or nothing, and is dropped; the sentinel after the file
+# ends the last record, so a line still being written is dropped too.
+crysis_fresh()
+{
+    {
+        if [ "$mark" -gt 0 ]; then
+            tail -c "+$mark" "$console"
+        else
+            echo
+            cat "$console"
+        fi
+        printf '%s\n' '@crysis-fresh-end@'
+    } | tr -d '\r' | awk 'NR > 1 && !/@crysis-fresh-end@$/'
+}
+
 # crysis_account: stop the VM's backend with SIGTERM through the control
 # port, so that it prints its `backend: result:` lines before the VM is
 # killed, and wait while the VM lives, 120 s at most in all, for the
@@ -1814,19 +1832,19 @@ crysis_account()
         fail account 'the VM ended before its backend was stopped'
         return
     fi
-    mark=$(wc -l < "$console")
+    mark=$(($(wc -c < "$console")))
     start=$(date +%s)
     aerr=''
     vm_ctl term 120 || aerr="no word from the VM that the backend was sent TERM"
     n=$((120 - ($(date +%s) - start)))
-    until tail -n "+$((mark + 1))" "$console" | tr -d '\r' | grep -q 'bed-vm: backend: ended: status'; do
+    until crysis_fresh | grep -aqE 'bed-vm: backend: ended: status [0-9]+$'; do
         n=$((n - 1))
         { [ "$n" -gt 0 ] && vm_alive; } || break
         sleep 1
     done
-    tail -n "+$((mark + 1))" "$console" | tr -d '\r' | grep -aE 'bed-vm: backend: (result|ended): ' |
+    crysis_fresh | grep -aE 'bed-vm: backend: (result|ended): ' |
         sed 's/^.*bed-vm: /bed-shm: vm: /'
-    line=$(tail -n "+$((mark + 1))" "$console" | tr -d '\r' | awk '
+    line=$(crysis_fresh | awk '
         /bed-vm: backend: result: account / {
             sub(/^.*bed-vm: backend: result: account /, "")
             acc = $0 ~ /^judged [0-9]+, least room [0-9]+ bytes, ledger most [0-9]+ bytes$/ ? $0 : ""
