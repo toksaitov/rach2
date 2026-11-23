@@ -101,7 +101,7 @@ int vfs_child_lock(const struct vfs_ref *dir, const char *name, struct vfs_ref *
     if (!base->type->file_locked) {
         return 0;
     }
-    rc = base->type->ops->lookup(base, ref_node(dir), name, &found);
+    rc = dcache_lookup(base, ref_node(dir), name, &found);
     if (rc != 0) {
         return rc;
     }
