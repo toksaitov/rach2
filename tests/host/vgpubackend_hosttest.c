@@ -20,7 +20,8 @@
  * renderer refuses to make stays held behind the work before it, until
  * the renderer takes its fence when asked again or a later fence on its
  * timeline retires; and CTX_DESTROY frees the stream its context was
- * sending, and the context's later parts allocate nothing.
+ * sending, the context's later parts allocate nothing, and the commands
+ * held on its rings are answered with their fences.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -761,6 +762,43 @@ static void row_destroy(const uint8_t *data)
           "the other context's stream reaches the renderer whole");
 }
 
+/** CTX_DESTROY answers each command held on the context's rings, its
+ * fence taken or refused, with that fence, and asks the renderer for no
+ * fence of the dead context; a command held on the global timeline stays
+ * held until its own fence retires. */
+static void row_destroy_held(const uint8_t *data)
+{
+    uint32_t a, b, g;
+    unsigned before;
+
+    CHECK(start(0) == 0, "the device runs");
+    make_context();
+    a = submit(FLAGS_FR, 1, 2, data, 4096, 0);
+    g = submit(VD_FLAG_FENCE, 9, 0, data, 4096, 0);
+    serve_all();
+    fence_fails = 1;
+    b = submit(FLAGS_FR, 2, 2, data, 4096, 0);
+    serve_all();
+    CHECK(answered[a] == 0 && answered[b] == 0 && answered[g] == 0 && dev.npend == 3 &&
+              dev.nunfenced == 1 && nasked == 2,
+          "a taken ring fence, a refused one and a global one are held");
+    destroy_context(CTX);
+    CHECK(fenced_answer(a, VD_RESP_OK_NODATA, 1) && fenced_answer(b, VD_RESP_OK_NODATA, 2),
+          "CTX_DESTROY answers its rings' held commands with their fences");
+    CHECK(answered[g] == 0 && dev.npend == 1 && dev.nunfenced == 0,
+          "CTX_DESTROY keeps a command held on the global timeline");
+    before = refused;
+    serve_all();
+    serve_all();
+    fence_fails = 0;
+    serve_all();
+    CHECK(refused == before && nasked == 2, "no fence of a dead context is asked for");
+    vd_fence_retired(&dev, 0, 0, 0, 9);
+    serve_all();
+    CHECK(fenced_answer(g, VD_RESP_OK_NODATA, 9) && dev.npend == 0,
+          "the global command comes at its own fence");
+}
+
 /** Run the rows over the real device. */
 int main(void)
 {
@@ -780,6 +818,7 @@ int main(void)
     row_broken(data);
     row_fence_refused(data);
     row_destroy(data);
+    row_destroy_held(data);
     if (base) {
         vd_fini(&dev);
         free(base);
