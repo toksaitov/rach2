@@ -1291,12 +1291,24 @@ static void commit_disables(struct drm_atomic_state *state)
     }
 }
 
-/** Linux's drm_atomic_helper_commit_planes: each CRTC's begin, each plane's
- * update or disable, each CRTC's flush. */
+/** Program planes and arm events. A driver can update each CRTC in
+ * isolation, as i915 does for vblank evasion. The default is Linux's
+ * drm_atomic_helper_commit_planes. */
 static void commit_planes(struct drm_atomic_state *state)
 {
+    struct drm_mode_config *mc = &state->dev->mode_config;
     int i;
 
+    if (mc->commit_crtc_planes) {
+        for (i = 0; i < DRM_MAX_CRTCS; i++) {
+            struct drm_crtc_state *cs = state->crtcs_new[i];
+
+            if (cs) {
+                mc->commit_crtc_planes(cs->crtc, state);
+            }
+        }
+        return;
+    }
     for (i = 0; i < DRM_MAX_CRTCS; i++) {
         struct drm_crtc_state *cs = state->crtcs_new[i];
 

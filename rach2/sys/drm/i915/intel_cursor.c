@@ -105,7 +105,8 @@ static uint32_t cursor_coord(int32_t v, uint32_t sign)
  * Haswell turns a cursor by 180 degrees from its base, without the moved
  * base older chips need.
  */
-static void cursor_update(struct drm_plane *plane, struct drm_atomic_state *state)
+void intel_cursor_update(struct drm_plane *plane, struct drm_atomic_state *state,
+                         const struct intel_plane_surface *surface)
 {
     struct intel_crtc *c = cursor_crtc(plane);
     struct i915_hw *hw = &c->i915->hw;
@@ -138,8 +139,17 @@ static void cursor_update(struct drm_plane *plane, struct drm_atomic_state *stat
     i915_write(hw, CURPOS(c->pipe),
                cursor_coord(ps->crtc_y, CURSOR_POS_X_SIGN) << 16 |
                    cursor_coord(ps->crtc_x, CURSOR_POS_X_SIGN));
-    i915_write(hw, CURBASE(c->pipe), intel_fb_ggtt(ps->fb));
+    i915_write(hw, CURBASE(c->pipe), surface->addr);
     c->planes_on |= 1u << INTEL_PLANE_CURSOR;
+}
+
+/** Resolve the legacy cursor's address for the independent update path. */
+static void cursor_update(struct drm_plane *plane, struct drm_atomic_state *state)
+{
+    struct intel_plane_surface surface = {0, 0, 0, 0};
+
+    intel_plane_prepare(plane->state, &surface);
+    intel_cursor_update(plane, state, &surface);
 }
 
 static const struct drm_plane_funcs cursor_funcs = {cursor_check, cursor_update, NULL};
