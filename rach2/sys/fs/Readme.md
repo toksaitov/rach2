@@ -87,6 +87,8 @@ An empty pathname with `AT_EMPTY_PATH` names the directory or file already held 
 
 A directory descriptor's path is made again at each use: a synthetic directory's from its kind and process; a directory's of a type with a `path` operation by the type, so the descriptor follows a rename; and a KRFFS root directory's from its node, which must still resolve to itself, or the call answers `EBADF`. The message queue file system, the one type without `path`, uses the path recorded at the open in the description's `dirpath`, a copy from the heap of any length the walk takes, which `/proc/PID/fd` also reports for a file of every type but KRFFS. The path is then made relative to the process's root (`path_in_root`); one outside that root, from a descriptor opened before a `chroot`, keeps its path from the root of the mount table, with leading slashes that make the resolver start there, as Linux walks from such a descriptor.
 
+When recording a path, the expansion of object links below `/dev` examines the first component after `/dev`. It extends the search one component beyond `fd` to find a numbered descriptor. The standard input, output and error aliases name their descriptors directly.
+
 The working directory's path is in the `fs_struct` that `CLONE_FS` shares, in its 64 bytes (`CWD_MAX`) when it fits and in the heap, up to 4096 bytes, when it does not (`proc_cwd_set`).
 
 An `O_PATH` open of a proc descriptor link keeps the mounted file or synthetic object the source descriptor names. A mounted inode gets a new path description, and a synthetic object shares its held description with access disabled on the new descriptor, so closing the source does not invalidate the path.

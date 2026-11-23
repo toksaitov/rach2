@@ -280,23 +280,31 @@ static void keep(struct vfs_mount *mnt, void *dir, const char *name, uint32_t le
     release_list(out);
 }
 
+/* The text and hash of the component a lookup seeks. */
+struct lookup_key {
+    const char *name;
+    uint32_t len;
+    uint32_t hash;
+};
+
 /**
- * The entry of `name` in `dir` of `mnt` as `dcache_lookup` answers from the
+ * The entry of `key` in `dir` of `mnt` as `dcache_lookup` answers from the
  * cache: 0 with the node held in `*node`, -ENOENT for a negative entry, or
- * -EAGAIN when there is none. The entry becomes the newest; the caller
- * counts the hit (`dcache_count_hits`). Takes and gives back the lock; the
+ * -EAGAIN when there is none. The entry becomes the newest, with the hit
+ * counted when `count` is set. Takes and gives back the lock; the
  * hold is taken under it, while the entry holds the node, so a node that
  * gains a hold here already has one.
  */
-static int hit(struct vfs_mount *mnt, void *dir, const char *name, uint32_t len, uint32_t h,
-               void **node)
+static int hit(struct vfs_mount *mnt, void *dir, const struct lookup_key *key, void **node,
+               int count)
 {
     struct dentry *e;
     uint32_t flags = spin_lock_irqsave(&dcache_lock);
     int rc = -EAGAIN;
 
-    e = find(mnt, dir, name, len, h);
+    e = find(mnt, dir, key->name, key->len, key->hash);
     if (e) {
+        hits += (uint32_t)count;
         age_unlink(e);
         age_push(e);
         rc = -ENOENT;
@@ -313,7 +321,8 @@ static int hit(struct vfs_mount *mnt, void *dir, const char *name, uint32_t len,
 int dcache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
     const struct vfs_ops *ops = mnt->type->ops;
-    uint32_t len, h, gen, flags;
+    struct lookup_key key;
+    uint32_t gen, flags;
     int rc;
 
     if (!cacheable(mnt) || dot_name(name)) {
@@ -325,10 +334,10 @@ int dcache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **nod
     if (!dir) {
         dir = mnt->root;
     }
-    h = hash_of(dir, name, &len);
-    rc = hit(mnt, dir, name, len, h, node);
+    key.name = name;
+    key.hash = hash_of(dir, name, &key.len);
+    rc = hit(mnt, dir, &key, node, 1);
     if (rc != -EAGAIN) {
-        dcache_count_hits(1);
         return rc;
     }
     flags = spin_lock_irqsave(&dcache_lock);
@@ -337,7 +346,7 @@ int dcache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **nod
     spin_unlock_irqrestore(&dcache_lock, flags);
     rc = ops->lookup(mnt, dir, name, node);
     if (rc == 0 || rc == -ENOENT) {
-        keep(mnt, dir, name, len, h, rc == 0 ? *node : 0, gen);
+        keep(mnt, dir, name, key.len, key.hash, rc == 0 ? *node : 0, gen);
     }
     return rc;
 }
@@ -361,7 +370,7 @@ int dcache_lookup_cached(struct vfs_mount *mnt, void *dir, const char *name, voi
 
 int dcache_lookup_hit(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
-    uint32_t len, h;
+    struct lookup_key key;
 
     if (!cacheable(mnt) || dot_name(name)) {
         return -EAGAIN;
@@ -369,8 +378,9 @@ int dcache_lookup_hit(struct vfs_mount *mnt, void *dir, const char *name, void *
     if (!dir) {
         dir = mnt->root;
     }
-    h = hash_of(dir, name, &len);
-    return hit(mnt, dir, name, len, h, node);
+    key.name = name;
+    key.hash = hash_of(dir, name, &key.len);
+    return hit(mnt, dir, &key, node, 0);
 }
 
 void dcache_count_hits(uint32_t n)

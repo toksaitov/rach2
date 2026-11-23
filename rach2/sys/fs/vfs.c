@@ -751,6 +751,16 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
     if (m) {
         return m;
     }
+    for (i = 1; i < mount_slots; i++) {
+        struct vfs_mount *child = mounts[i];
+
+        if (child && child->state != VFS_FREE && child->parent == mnt && child->covered) {
+            break;
+        }
+    }
+    if (i == mount_slots) {
+        return NULL;
+    }
     if (!mnt->type->ops->lookup ||
         mnt->type->ops->lookup(mount_base(mnt), node, name, &found) != 0) {
         return 0;
@@ -2065,10 +2075,11 @@ static int walk_rest_back(struct vfs_ref *cur, const char **p, const char *left)
  * before its parent hold is released: a regular file, FIFO, socket or device
  * node, whose descriptor rebuilds its path from the entry, as an O_PATH one
  * that a bind names through /proc/self/fd does. A directory has its own path
- * (`vfs_node_path`), and a link is followed past or names no file.
+ * (`vfs_node_path`), and a link is followed past or names no file. Use
+ * `attrs` when the walk has already read the node's type to find links.
  */
 static int walk_record_entry(struct walk_record *record, const struct vfs_ref *parent, void *found,
-                             const char *leaf, const char *rest)
+                             const char *leaf, const char *rest, const struct vfs_stat *attrs)
 {
     struct vfs_stat st;
     int rc;
@@ -2082,9 +2093,15 @@ static int walk_record_entry(struct walk_record *record, const struct vfs_ref *p
     if (*rest || (mount_base(parent->mnt) == mounts[0] && parent->mnt->type == &vfs_krffs_type)) {
         return 0;
     }
-    rc = vfs_getattr(parent->mnt, found, &st);
-    if (rc != 0 || VFS_IS_DIR(st.mode) || (st.mode & VFS_S_IFMT) == VFS_S_IFLNK) {
-        return rc;
+    if (!attrs) {
+        rc = vfs_getattr(parent->mnt, found, &st);
+        if (rc != 0) {
+            return rc;
+        }
+        attrs = &st;
+    }
+    if (VFS_IS_DIR(attrs->mode) || (attrs->mode & VFS_S_IFMT) == VFS_S_IFLNK) {
+        return 0;
     }
     return vfs_name_capture(parent, leaf, record->entry);
 }
@@ -2107,9 +2124,9 @@ static void walk_record_clear(struct walk_record *record, int release)
 /** Move to a looked-up node after recording its final directory entry and,
  * for the last name of the path, its directory's attributes. */
 static int walk_record_move(struct walk_record *record, struct vfs_ref *cur, void *found,
-                            const char *leaf, const char *rest)
+                            const char *leaf, const char *rest, const struct vfs_stat *attrs)
 {
-    int rc = walk_record_entry(record, cur, found, leaf, rest);
+    int rc = walk_record_entry(record, cur, found, leaf, rest, attrs);
 
     if (rc == 0 && record && record->dir) {
         while (*rest == '/') {
@@ -3020,6 +3037,8 @@ begin:
 
     for (;;) {
         char comp[VFS_NAME_MAX + 1];
+        struct vfs_stat lst;
+        const struct vfs_stat *attrs = NULL;
         uint32_t len;
         void *found;
         struct vfs_mount *m;
@@ -3204,7 +3223,6 @@ begin:
         }
         walk_name_add(&name, comp, len);
         if (cur.mnt->type->ops->readlink && cur.mnt->type->ops->getattr) {
-            struct vfs_stat lst;
             const char *rest = p;
             int more;
 
@@ -3217,6 +3235,7 @@ begin:
                 node_put(cur.mnt, found);
                 goto out_err;
             }
+            attrs = &lst;
             if ((lst.mode & 0170000u) == 0120000u && (more || !(flags & VFS_WALK_NOFOLLOW))) {
                 int absolute = walk_follow_ok(&rules, &cur, &lst, more, use_real);
 
@@ -3252,12 +3271,10 @@ begin:
                 continue;
             }
         }
-        rc = walk_record_move(record, &cur, found, comp, p);
-        if (rc != 0) {
-            goto out_err;
+        rc = walk_record_move(record, &cur, found, comp, p, attrs);
+        if (rc == 0) {
+            rc = walk_record_cross(record, &cur, locked);
         }
-
-        rc = walk_record_cross(record, &cur, locked);
         if (rc != 0) {
             goto out_err;
         }
