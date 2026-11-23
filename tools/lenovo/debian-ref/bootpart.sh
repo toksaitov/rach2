@@ -63,7 +63,7 @@ arm()
     [ -n "$stage" ]
     status=$(bootctl status)
     printf '%s\n' "$status" | grep -Fxq 'bootctl: saved_entry: candidate'
-    printf '%s\n' "$status" | grep -Eq '^bootctl: next_entry: (absent|empty)$'
+    printf '%s\n' "$status" | grep -Eq '^bootctl: next_entry: (absent|empty \(a trial was consumed\))$'
     printf '%s\n' "$status"
     dd if=/dev/bootpart of="$work/before.img" bs=1M status=none
     before=$(hash "$work/before.img")
