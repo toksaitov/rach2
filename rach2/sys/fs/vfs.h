@@ -895,10 +895,11 @@ int vfs_resolve_fd(const char *path, int flags, struct vfs_ref *out, char *fd_pa
  * walk sequence the caller read with no change under way, before it took
  * `start` (`vfs_seq_read`, walkseq.h): an answer stands only if nothing has
  * changed what a path names since, and is a miss otherwise. `flags` takes
- * VFS_WALK_NOFOLLOW, VFS_WALK_REAL_IDS and VFS_WALK_LOCK; any other is a
- * miss. With `entry` not NULL a regular file at the last name has its
- * directory entry recorded there, as `vfs_resolve_entry` records it;
- * `*entry` is NULL on every other answer.
+ * VFS_WALK_NOFOLLOW, VFS_WALK_REAL_IDS, VFS_WALK_LOCK and VFS_WALK_CREATE.
+ * With `entry` given a regular file at the last name has its directory entry
+ * recorded there, as `vfs_resolve_entry` records it. VFS_WALK_CREATE with
+ * `entry` given sends a file in a sticky directory to the full walk. Creation
+ * itself always takes the full walk. `*entry` is NULL on every other answer.
  */
 int vfs_resolve_cached(const struct vfs_ref *start, uint64_t seq, const char *path, int flags,
                        struct vfs_ref *out, struct vfs_name **entry);

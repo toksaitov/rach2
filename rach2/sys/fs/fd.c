@@ -542,13 +542,14 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
 /**
  * Whether the end of description `ofd`, whose count reached 0, needs the
  * big lock: unless it names no file, or names a file or a directory of a
- * type that sets `reads_unlocked`, as ext2 does, with no pin, no access
- * claim and no device or synthetic node, and in either case no inotify
+ * type that sets `reads_unlocked`, as ext2 does, with no pin and no
+ * device or synthetic node, and in either case no inotify
  * watch is on its file system (`inotify_mount_watched`). Such a type's
  * `release` and `put` and the name record (`vfs_name_put`) take the big
  * lock where they need it, as Linux's last `fput` of a file takes no lock
- * but its own (`__fput`, fs/file_table.c:442). The description's own record
- * locks go under their list's lock (`lock_ofd_gone`).
+ * but its own (`__fput`, fs/file_table.c:442). A type that also sets
+ * `writes_unlocked` puts its access reservation under `ofd_lock` alone.
+ * The description's record locks go under their list's lock (`lock_ofd_gone`).
  */
 static int ofd_end_big(const struct open_file *ofd)
 {
@@ -556,8 +557,10 @@ static int ofd_end_big(const struct open_file *ofd)
         return 1;
     }
     if (ofd->vmnt) {
-        return ofd->dev_mnt || ofd->synth_mnt || ofd->pin || ofd->access ||
-               !vfs_mount_base(ofd->vmnt)->type->reads_unlocked;
+        const struct vfs_type *type = vfs_mount_base(ofd->vmnt)->type;
+
+        return ofd->dev_mnt || ofd->synth_mnt || ofd->pin || !type->reads_unlocked ||
+               (ofd->access && !type->writes_unlocked);
     }
     return ofd->dev_mnt || ofd->synth_mnt || ofd->name || ofd->pin || ofd->access || ofd->dirpath ||
            ofd->leaf;
