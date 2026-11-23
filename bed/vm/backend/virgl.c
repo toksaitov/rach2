@@ -18,7 +18,6 @@
 #include <poll.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <sys/uio.h>
 
@@ -834,11 +833,6 @@ struct gpu_scan {
     uint64_t sum;     /* bytes of the objects counted */
     char (*seen)[80]; /* "drm-pdev drm-client-id" of each client counted */
     size_t nseen, cap;
-    struct {
-        long pid;
-        int fd;
-    } read[32];      /* the first descriptors whose fdinfo was read */
-    size_t nread;    /* entries of read; past 32 a file is not matched */
     int failed;      /* the errno that stopped the scan, or 0 */
     char where[512]; /* the file or directory the scan failed on */
 };
@@ -847,9 +841,6 @@ struct gpu_scan {
  * accel nodes, the only files whose fdinfo gives Linux's drm-usage stats. */
 #define DRM_MAJOR   226u
 #define ACCEL_MAJOR 261u
-
-/* kcmp's type that compares two descriptors' open files (linux/kcmp.h). */
-#define VR_KCMP_FILE 0
 
 /** Stop scan s on errno err at path, the first failure kept. */
 static void scan_fail(struct gpu_scan *s, const char *path, int err)
@@ -987,31 +978,14 @@ static FILE *cgroup_procs(struct gpu_scan *s, char *path, size_t size)
 }
 
 /**
- * Whether descriptor fd of process pid names an open file whose fdinfo
- * scan s has read, as kcmp's KCMP_FILE compares them: a dup or an inherited
- * copy of it, which gives the same drm-usage stats. 0 when kcmp cannot
- * tell, for want of the call or of access, which reads the file again and
- * leaves it to the client's ID (`unbacked_of`).
- */
-static int scan_has(const struct gpu_scan *s, long pid, int fd)
-{
-    size_t i;
-
-    for (i = 0; i < s->nread; i++) {
-        if (syscall(SYS_kcmp, (pid_t)pid, (pid_t)s->read[i].pid, VR_KCMP_FILE, (unsigned long)fd,
-                    (unsigned long)s->read[i].fd) == 0) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-/**
  * Add to s what each DRM descriptor of process pid holds (`unbacked_of`),
- * reading the fdinfo of each open file once. A descriptor is one when the
- * file its /proc/PID/fd link names is a character device of DRM's or
- * accel's major; a stat of the link costs a lookup, where a read of every
- * descriptor's fdinfo cost an open, a seq_file and a close each. A
+ * which counts each client once however many descriptors name it. A
+ * descriptor is one when the file its /proc/PID/fd link names is a
+ * character device of DRM's or accel's major; a stat of the link costs a
+ * lookup, where a read of every descriptor's fdinfo cost an open, a
+ * seq_file and a close each. Descriptors are not matched to the open files
+ * already read, since another thread may close one and reuse its number
+ * between the two reads. A
  * descriptor or process that ended before or while it was read adds what
  * was read; any other failure to read the directory or stat a link fails s.
  */
@@ -1049,17 +1023,11 @@ static void scan_fds(struct gpu_scan *s, long pid)
             continue;
         }
         major_of = major(st.st_rdev);
-        if (!S_ISCHR(st.st_mode) || (major_of != DRM_MAJOR && major_of != ACCEL_MAJOR) ||
-            scan_has(s, pid, atoi(e->d_name))) {
+        if (!S_ISCHR(st.st_mode) || (major_of != DRM_MAJOR && major_of != ACCEL_MAJOR)) {
             continue;
         }
         snprintf(path, sizeof(path), "/proc/%ld/fdinfo/%s", pid, e->d_name);
         unbacked_of(path, s);
-        if (s->nread < sizeof(s->read) / sizeof(s->read[0])) {
-            s->read[s->nread].pid = pid;
-            s->read[s->nread].fd = atoi(e->d_name);
-            s->nread++;
-        }
     }
     closedir(dir);
 }
