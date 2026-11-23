@@ -195,36 +195,45 @@ static void user_strings_unlock(struct mm *mm)
 }
 
 /**
- * Each byte's address is checked before it is read, so a short string near
- * the top of user space is copied and an unterminated one cannot run off
- * the end. The pages are backed one at a time, not the whole `n` at once,
- * since `n` is only a cap and the page past the string's end may lie in no
- * region. Each byte is read from user memory once and tested in `dst`, so a
- * thread on another processor that stores into the string meanwhile cannot
- * make the copy end without its NUL. The caller holds the regions' lock to
- * read, once, so that a page's fill may let it go (`vm_prefault_held`).
+ * Check and back one page's span at a time, since `n` is only a cap and the
+ * page past the string's end may lie in no region. At the edge of user
+ * space or a kernel window, check each byte if the whole span is refused,
+ * so a string ending before the edge still works. Read each byte once and
+ * test it in `dst`, so a concurrent store to the string cannot make the
+ * copy end without its NUL. The caller holds the regions' lock to read,
+ * once, so that a page's fill may let it go (`vm_prefault_held`).
  */
 static int strncpy_locked(char *dst, const char __user *src, uint32_t n)
 {
     uintptr_t addr = (__force uintptr_t)src;
     const char *s = (const char __force *)src;
-    uint32_t i;
+    uint32_t i = 0;
 
     if (n == 0) {
         return -EINVAL;
     }
-    for (i = 0; i < n; i++) {
+    while (i < n) {
         uintptr_t a = addr + i;
+        uint32_t span = PAGE_SIZE - (a & (PAGE_SIZE - 1));
+        uint32_t end;
+        int range;
 
-        if (!user_range_ok(a, 1)) {
+        if (span > n - i) {
+            span = n - i;
+        }
+        range = user_range_ok(a, span);
+        if ((!range && !user_range_ok(a, 1)) || !vm_prefault_held(a, 1, 0)) {
             return -EFAULT;
         }
-        if ((i == 0 || (a & (PAGE_SIZE - 1)) == 0) && !vm_prefault_held(a, 1, 0)) {
-            return -EFAULT;
-        }
-        dst[i] = *(const volatile char *)&s[i];
-        if (dst[i] == '\0') {
-            return (int)i;
+        end = i + span;
+        for (; i < end; i++) {
+            if (!range && !user_range_ok(addr + i, 1)) {
+                return -EFAULT;
+            }
+            dst[i] = *(const volatile char *)&s[i];
+            if (dst[i] == '\0') {
+                return (int)i;
+            }
         }
     }
     return -ENAMETOOLONG;
