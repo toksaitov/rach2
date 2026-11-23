@@ -44,6 +44,7 @@
 #define SYS_sync 162
 #define SYS_openat 257
 #define AT_FDCWD (-100)
+#define O_EXCL 0200
 #define F_GETFL 3
 #define LOCK_EX 2
 #define LOCK_UN 8
@@ -262,12 +263,15 @@ static int repeat(const char *kind, unsigned long n)
     return 0;
 }
 
-/** Write a file of SIZE zero bytes at PATH; 0 or the error. */
+/** Write a file of SIZE zero bytes at PATH unless it exists, as a run
+ * before this one in the same boot left it; 0 or the error. */
 static long seed_file(const char *path, unsigned long size)
 {
-    long fd = sys4(SYS_openat, AT_FDCWD, (long)path, O_WRONLY | O_CREAT, 0644), rc = 0;
+    long fd = sys4(SYS_openat, AT_FDCWD, (long)path, O_WRONLY | O_CREAT | O_EXCL, 0644), rc = 0;
     unsigned long n;
 
+    if (fd == -EEXIST)
+        return 0;
     if (fd < 0)
         return fd;
     for (n = 0; n < BUFSIZE; n++)
