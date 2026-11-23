@@ -727,12 +727,11 @@ static void ap_sp_int(struct procfs_text *t, int v)
  * for the process's file. RLIMIT_RSS, which Rach2 does not keep, is
  * RLIM_INFINITY, its value on Linux.
  *
- * Every field of `p` is read first, since the wait for the regions' lock of
- * another process's address space may sleep, and the process may end and be
- * reaped meanwhile. The address space's own fields are read under that lock,
- * whose user's count keeps them until `mm_read_end`, which may drop the last
- * one and free the space, as Linux's `do_task_stat` holds the mm from
- * `get_task_mm` until every field is written (fs/proc/array.c).
+ * The address space's sizes and bounds are read without its regions' lock,
+ * each word once, as Linux's `do_task_stat` reads the mm's counters and
+ * bounds with no mmap_lock (fs/proc/array.c), so that a read never waits for
+ * the process's own mmap or fault, and nothing here sleeps: the record and
+ * its address space stay as they are for the read.
  */
 static void ap_stat_tail(struct procfs_text *t, const process_t *p, int whole)
 {
@@ -757,7 +756,6 @@ static void ap_stat_tail(struct procfs_text *t, const process_t *p, int whole)
     policy = (uint64_t)(uint32_t)p->sched_policy;
     exit_code = permitted ? (int)p->exit_code : 0;
     if (mm) {
-        mm_read_begin(mm);
         vsize = vm_total(&mm->vm);
         rss = mm_resident(mm);
         code[0] = permitted ? mm->start_code : 1;
@@ -772,7 +770,6 @@ static void ap_stat_tail(struct procfs_text *t, const process_t *p, int whole)
             data[5] = mm->env_start;
             data[6] = mm->env_end;
         }
-        mm_read_end(mm);
     }
     ap_sp_u64(t, (uint64_t)vsize);         /* 23 vsize */
     ap_sp_u64(t, (uint64_t)rss);           /* 24 rss */
@@ -1741,7 +1738,8 @@ int procfs_fd_ref(const struct vpath *vp, struct vfs_ref *out, char *path, uint3
  * reaped or execute another program meanwhile, so nothing of the process is
  * read here. Each read stays within one page, so a page the address space
  * cannot read ends the text there and keeps the bytes before it, as Linux's
- * access_remote_vm does.
+ * access_remote_vm does; so does SIGKILL ending the wait for the regions'
+ * lock, which access_remote_vm waits for with `mmap_read_lock_killable`.
  */
 static void ap_memory(struct procfs_text *t, struct mm *mm, uintptr_t start, uintptr_t end,
                       int to_nul)
@@ -1760,7 +1758,7 @@ static void ap_memory(struct procfs_text *t, struct mm *mm, uintptr_t start, uin
         if (n > page_left) {
             n = (uint32_t)page_left;
         }
-        if (paging_access(mm, start, chunk, n, 0) != 0) {
+        if (paging_access(mm, start, chunk, n, PAGING_ACCESS_KILLABLE) != 0) {
             return;
         }
         for (i = 0; i < n; i++) {
@@ -1808,7 +1806,7 @@ static int procfs_gen_cmdline(struct procfs_text *t, int pid)
         char last = '\0';
 
         mm_get(mm);
-        if (paging_access(mm, end - 1, &last, 1, 0) != 0 || last == '\0') {
+        if (paging_access(mm, end - 1, &last, 1, PAGING_ACCESS_KILLABLE) != 0 || last == '\0') {
             ap_memory(t, mm, start, end, 0);
         } else {
             if (env_start == end && env_end > end) {
@@ -2486,8 +2484,11 @@ static char *maps_exe_name(struct open_file *file, const char *recorded)
  * `maps_names_free`, so that the regions and the program's files stay while
  * the target ends meanwhile, as Linux's m_start takes mm_users only while it
  * is not 0 (fs/proc/task_mmu.c); `mn` is empty for one with no user left.
+ * The regions' lock is waited for as Linux's m_start waits for it, with
+ * `mmap_read_lock_killable`: 0, or -EINTR when SIGKILL ended a wait, with
+ * what `mn` holds still the caller's to free.
  */
-static void procfs_maps_names(int pid, struct maps_names *mn)
+static int procfs_maps_names(int pid, struct maps_names *mn)
 {
     process_t *p = procfs_proc(pid);
     struct mm *mm;
@@ -2496,30 +2497,34 @@ static void procfs_maps_names(int pid, struct maps_names *mn)
 
     k_memset(mn, 0, sizeof(*mn));
     if (!p || !p->mm || !procfs_may_read_mem(p)) {
-        return;
+        return 0;
     }
     mm = p->mm;
     if (!mm_get_live(mm)) {
-        return;
+        return 0;
     }
     mn->mm = mm;
     mn->exe = maps_exe_name(mm->exe_file, mm->exe);
     mn->interp = maps_exe_name(mm->interp_file, mm->interp);
-    mm_read_begin(mm);
+    if (mm_read_begin_killable(mm) != 0) {
+        return -EINTR;
+    }
     for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
         n += maps_named(r);
     }
     mm_read_end(mm);
     if (n == 0 || (mn->v = kmalloc(n * sizeof(*mn->v))) == NULL) {
-        return;
+        return 0;
     }
     p = procfs_proc(pid);
     if (!p || p->mm != mm) {
         kfree(mn->v);
         mn->v = NULL;
-        return;
+        return 0;
     }
-    mm_read_begin(mm);
+    if (mm_read_begin_killable(mm) != 0) {
+        return -EINTR;
+    }
     for (r = vm_first(&mm->vm); r && mn->n < n; r = vm_next(r)) {
         if (maps_named(r) && (mn->n == 0 || mn->v[mn->n - 1].file != r->file)) {
             vm_file_get(r->file);
@@ -2541,6 +2546,7 @@ static void procfs_maps_names(int pid, struct maps_names *mn)
         }
         kfree(name.buf);
     }
+    return 0;
 }
 
 /** Free the names of `mn` and drop its references to the files and its
@@ -2660,15 +2666,18 @@ static int procfs_gen_maps(struct procfs_text *t, int pid)
     struct mm *mm;
     const vma_t *r;
 
-    procfs_maps_names(pid, &names);
+    rc = procfs_maps_names(pid, &names);
     p = procfs_proc(pid);
-    rc = !p ? -ENOENT : !procfs_may_read_mem(p) ? -EACCES : t->len;
+    rc = rc < 0 ? rc : !p ? -ENOENT : !procfs_may_read_mem(p) ? -EACCES : t->len;
     if (rc < 0 || !p->mm) {
         maps_names_free(&names);
         return rc;
     }
     mm = p->mm;
-    mm_read_begin(mm);
+    if (mm_read_begin_killable(mm) != 0) {
+        maps_names_free(&names);
+        return -EINTR;
+    }
     for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
         ap_maps_line(t, mm, r, &names);
     }
@@ -2801,15 +2810,18 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
     struct mm *mm;
     const vma_t *r;
 
-    procfs_maps_names(pid, &names);
+    rc = procfs_maps_names(pid, &names);
     p = procfs_proc(pid);
-    rc = !p ? -ENOENT : !procfs_may_read_mem(p) ? -EACCES : t->len;
+    rc = rc < 0 ? rc : !p ? -ENOENT : !procfs_may_read_mem(p) ? -EACCES : t->len;
     if (rc < 0 || !p->mm) {
         maps_names_free(&names);
         return rc;
     }
     mm = p->mm;
-    mm_read_begin(mm);
+    if (mm_read_begin_killable(mm) != 0) {
+        maps_names_free(&names);
+        return -EINTR;
+    }
     for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
         unsigned long present, clean, dirty, anon;
         int shared = r->type == VM_SHARED;
@@ -2940,16 +2952,20 @@ static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
     struct mm *mm;
     const vma_t *r;
 
-    procfs_maps_names(pid, &names);
+    rc = procfs_maps_names(pid, &names);
     p = procfs_proc(pid);
-    rc = !p ? -ENOENT : !procfs_may_read_mem(p) ? -EACCES : t->len;
+    rc = rc < 0 ? rc : !p ? -ENOENT : !procfs_may_read_mem(p) ? -EACCES : t->len;
     if (rc < 0 || !p->mm) {
         maps_names_free(&names);
         return rc;
     }
     mm = p->mm;
     proc_ref_get(p);
-    mm_read_begin(mm);
+    if (mm_read_begin_killable(mm) != 0) {
+        proc_ref_put(p);
+        maps_names_free(&names);
+        return -EINTR;
+    }
     own = p->state != PROC_UNUSED ? vm_policy_get(p->mempolicy) : NULL;
     proc_ref_put(p);
     for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
@@ -2989,18 +3005,11 @@ static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
     return t->len;
 }
 
-/** The bytes of `mm`'s regions of type `type`. */
+/** The bytes of `mm`'s regions of type `type`, its counter read without the
+ * regions' lock. */
 static unsigned long mm_bytes(const struct mm *mm, vm_type_t type)
 {
-    unsigned long n = 0;
-    const vma_t *r;
-
-    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
-        if (r->type == type) {
-            n += r->end - r->start;
-        }
-    }
-    return n;
+    return (unsigned long)vm_type_total(&mm->vm, type);
 }
 
 /** Append "Name:\t" and the kilobytes of `bytes`, right-aligned in eight
@@ -3370,7 +3379,9 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
 
 /** /proc/<pid>/statm: the sizes in pages, total, resident, shared, text,
  * library, data with stack, and dirty, of which the kernel keeps the first,
- * second, fourth and sixth. */
+ * second, fourth and sixth. They are the address space's counters, read
+ * without its regions' lock, as Linux's `task_statm` reads them
+ * (fs/proc/task_mmu.c). */
 static int procfs_gen_statm(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
@@ -3384,7 +3395,6 @@ static int procfs_gen_statm(struct procfs_text *t, int pid)
         ap_str(t, "0 0 0 0 0 0 0\n");
         return t->len;
     }
-    mm_read_begin(mm);
     ap_ulong(t, vm_total(&mm->vm) / PAGE_SIZE);
     ap_ch(t, ' ');
     ap_ulong(t, mm_resident(mm));
@@ -3394,7 +3404,6 @@ static int procfs_gen_statm(struct procfs_text *t, int pid)
     ap_ulong(t, (mm_bytes(mm, VM_DATA) + mm_bytes(mm, VM_HEAP) + mm_bytes(mm, VM_ANON) +
                  mm_bytes(mm, VM_STACK)) /
                     PAGE_SIZE);
-    mm_read_end(mm);
     ap_str(t, " 0\n");
     return t->len;
 }
@@ -9328,6 +9337,9 @@ static struct mm *procfs_mem_mm(const struct procfs_file *f)
     return f->mm && mm_get_live(f->mm) ? f->mm : NULL;
 }
 
+/* The access of a /proc/<pid>/mem transfer: forced, and killable. */
+#define MEM_ACCESS (PAGING_ACCESS_FORCE | PAGING_ACCESS_KILLABLE)
+
 /**
  * Read or write `count` bytes of /proc/<pid>/mem at the descriptor's offset,
  * which is the address, through the address space the open allowed
@@ -9341,8 +9353,10 @@ static struct mm *procfs_mem_mm(const struct procfs_file *f)
  * those are returned and the offset moves past them. When none could be,
  * -EIO, -EFAULT for the caller's buffer, or -ENOMEM (`paging_access`); 0
  * once nothing runs in the address space; and -EIO for an offset past the
- * machine's addresses. It has a user's count for the length of the call,
- * which may sleep bringing a page in while the process ends.
+ * machine's addresses, or when SIGKILL ends the wait for the regions' lock,
+ * as Linux's mem_rw gives it when access_remote_vm's killable take fails.
+ * It has a user's count for the length of the call, which may sleep
+ * bringing a page in while the process ends.
  */
 static int32_t procfs_mem_access(fd_entry_t *e, char __user *dst, const char __user *src,
                                  uint32_t count, int write)
@@ -9372,14 +9386,15 @@ static int32_t procfs_mem_access(fd_entry_t *e, char __user *dst, const char __u
                 rc = -EFAULT;
                 break;
             }
-            rc = paging_access(mm, addr, buf, n, PAGING_ACCESS_FORCE | PAGING_ACCESS_WRITE);
+            rc = paging_access(mm, addr, buf, n, MEM_ACCESS | PAGING_ACCESS_WRITE);
         } else {
-            rc = paging_access(mm, addr, buf, n, PAGING_ACCESS_FORCE);
+            rc = paging_access(mm, addr, buf, n, MEM_ACCESS);
             if (rc == 0 && copy_to_user(dst + done, buf, n) != 0) {
                 rc = -EFAULT;
             }
         }
         if (rc != 0) {
+            rc = rc == -EINTR ? -EIO : rc; /* access_remote_vm's 0, mem_rw's -EIO */
             break;
         }
         done += n;

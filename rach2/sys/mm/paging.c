@@ -2756,7 +2756,11 @@ int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int fl
     uint8_t *p = buf;
     int rc = 0;
 
-    mmap_read_lock(mm);
+    if (!(flags & PAGING_ACCESS_KILLABLE)) {
+        mmap_read_lock(mm);
+    } else if (mmap_read_lock_killable(mm) != 0) {
+        return -EINTR;
+    }
     while (len > 0 && rc == 0) {
         uint32_t chunk = PAGE_SIZE - (addr & (PAGE_SIZE - 1));
 

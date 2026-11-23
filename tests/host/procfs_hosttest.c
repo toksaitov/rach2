@@ -3,17 +3,19 @@
  * and its allocation, /proc/uptime, the CPU times of a process and of a
  * thread, task ids, the syscall, wchan and schedstat files, descriptor links,
  * /proc/PID/mem, /proc/PID/exe, the paths of /proc/PID/maps, a read of a
- * process's arguments while the process is reaped, a read of its stat,
- * status and numa_maps while it is reaped as the read waits for its address
- * space's lock, a read of its maps while it is reaped as the program's path
- * is built, a write to its autogroup file, oom_score_adj, the
- * cache, NUMA, clock source and DMI files of /sys, and the /sys entries
- * and uevents of a DRM device and of a driver's own attributes, links, PCI
- * identity and resources, a writable attribute's offset and the mode its
- * open is judged by, the directions an attribute's open refuses before the
- * capability overrides, a PCI function's resourceN files, and those of a PS/2
- * keyboard and a USB mouse and their records in /proc/bus/input
- * (evdev_sysfs.c).
+ * process's arguments while the process is reaped, a read of its stat and
+ * statm that does not wait while its address space's lock is held to write,
+ * and of its maps, smaps, numa_maps and status that SIGKILL ends while it
+ * waits for that lock, a read of its status and numa_maps while it is
+ * reaped as the read waits for the lock, a read of its maps while it is
+ * reaped as the program's path is built, a write to its autogroup file,
+ * oom_score_adj, the cache, NUMA, clock source and DMI files of /sys, and
+ * the /sys entries and uevents of a DRM device and of a driver's own
+ * attributes, links, PCI identity and resources, a writable attribute's
+ * offset and the mode its open is judged by, the directions an attribute's
+ * open refuses before the capability overrides, a PCI function's resourceN
+ * files, and those of a PS/2 keyboard and a USB mouse and their records in
+ * /proc/bus/input (evdev_sysfs.c).
  *
  * host-deps: tests/host/compat/vm_iter_host.c
  * host-deps: rach2/sys/fs/sysfs.c rach2/sys/drm/drm_sysfs.c
@@ -512,6 +514,10 @@ static int reaps;
  * (compat/mmap_lock_host.c). */
 extern void (*host_read_begin)(struct mm *mm);
 extern void (*host_read_end)(struct mm *mm);
+/* The address space another thread holds to write, and the takes of its
+ * lock that would have waited for ever (compat/mmap_lock_host.c). */
+extern struct mm *host_write_held;
+extern int host_stuck;
 page_dir_t *_kernel_dir;
 
 /** Record a failed invariant. */
@@ -584,6 +590,15 @@ process_t *proc_named(uint32_t pid)
 uintptr_t vm_total(const vm_space_t *vm)
 {
     (void)vm;
+    return 0;
+}
+
+/** The size of an address space's regions of one type, which statm gives:
+ *  0. */
+uintptr_t vm_type_total(const vm_space_t *vm, vm_type_t type)
+{
+    (void)vm;
+    (void)type;
     return 0;
 }
 
@@ -3174,6 +3189,21 @@ const struct vm_policy *mempolicy_at(const vma_t *vma, uintptr_t addr)
     return NULL;
 }
 
+/** No region of the smaps row is mapped by a huge page: 0. */
+unsigned long paging_user_huge(page_dir_t *dir, uintptr_t start, uintptr_t end)
+{
+    (void)dir;
+    (void)start;
+    (void)end;
+    return 0;
+}
+
+/** The processor of the smaps row has no protection keys: 0. */
+int fpu_pkeys(void)
+{
+    return 0;
+}
+
 /** No page of the numa_maps row is present. */
 void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end,
                         struct paging_frame_counts *counts)
@@ -3234,42 +3264,73 @@ static int make_reaped(void)
     return 1;
 }
 
+/** Read process 13's `kind` with the generator `gen` while another thread
+ * holds its regions' lock to write and SIGKILL ends the read's wait: -EINTR,
+ * and the read keeps no user's count of the address space, no file and no
+ * reference to the record. */
+static void killed_read(int (*gen)(struct procfs_text *t, int pid), const char *what)
+{
+    struct procfs_text text;
+    int len;
+
+    procfs_text_init(&text);
+    len = gen(&text, 13);
+    kfree(text.buf);
+    check(len == -EINTR && reading->mm->users == 1 && reading->refs == 1 && file_holds == 0 &&
+              host_stuck == 0,
+          what);
+}
+
 /**
- * A read of the stat of a process that ends and is reaped while the read
- * waits for its address space's lock reads every field of the record before
- * the wait and the address space's bounds under the lock, and nothing of
- * either after: the walk's user's count is the last, and its put frees the
- * address space. AddressSanitizer reports a read of the freed record or of
- * the freed address space.
+ * While another thread holds a process's regions' lock to write, as its own
+ * mmap or fault would, a read of its stat or statm takes no regions' lock
+ * and reads the record and the address space's bounds and counters as they
+ * are, as Linux's do_task_stat and task_statm do with no mmap_lock; a read
+ * of its maps, smaps, numa_maps or status waits for the lock killably, as
+ * Linux's m_start, and once SIGKILL ends the wait returns -EINTR.
  */
-static void stat_reaped_during_wait(void)
+static void reads_while_write_held(void)
 {
     struct procfs_text text;
     long long code, end, stack, ignored, cpu, data, env;
-    int before = reaps, len;
+    int len;
 
-    check(make_reaped(), "allocate the process whose stat is read");
+    check(make_reaped(), "allocate the process whose regions' lock is held");
     if (!reading) {
         return;
     }
-    host_read_begin = reap_at_walk;
+    reading->refs = 1;
+    host_write_held = reading->mm;
+    host_stuck = 0;
+    host_read_begin = get_at_walk;
     host_read_end = put_at_walk;
     procfs_text_init(&text);
     len = procfs_gen_stat(&text, 13, 1);
-    host_read_begin = NULL;
-    host_read_end = NULL;
-    check(len > 0 && reaps == before + 1 && !reading,
-          "a stat read of a process reaped while it waits for the regions' lock ends");
+    check(len > 0 && host_stuck == 0,
+          "a stat read of a process whose regions' lock is held to write does not wait");
     check(len > 0 && stat_field(text.buf, 26, &code) && code == 0x8048000 &&
               stat_field(text.buf, 27, &end) && end == 0x8049000 &&
               stat_field(text.buf, 28, &stack) && stack == 0xbffff000 &&
               stat_field(text.buf, 45, &data) && data == 0x804a000 &&
               stat_field(text.buf, 51, &env) && env == 0xbfffe200,
-          "and gives the bounds its address space had under the lock");
+          "and gives its address space's bounds");
     check(len > 0 && stat_field(text.buf, 33, &ignored) && ignored == 2 &&
               stat_field(text.buf, 39, &cpu) && cpu == 2,
-          "and the dispositions and processor its record had before the wait");
+          "and its record's dispositions and processor");
     kfree(text.buf);
+    procfs_text_init(&text);
+    len = procfs_gen_statm(&text, 13);
+    check(len == 14 && host_stuck == 0 && text_has(text.buf, len, "0 0 0 0 0 0 0\n"),
+          "a statm read of it does not wait");
+    kfree(text.buf);
+    killed_read(procfs_gen_maps, "a maps read of it that SIGKILL ends returns EINTR");
+    killed_read(procfs_gen_smaps, "a smaps read of it that SIGKILL ends returns EINTR");
+    killed_read(procfs_gen_numa_maps, "a numa_maps read of it that SIGKILL ends returns EINTR");
+    killed_read(procfs_gen_status, "a status read of it that SIGKILL ends returns EINTR");
+    host_read_begin = NULL;
+    host_read_end = NULL;
+    host_write_held = NULL;
+    end_reading();
 }
 
 /**
@@ -3446,7 +3507,7 @@ static void autogroup_write_rows(void)
 static void pid_file_rows(void)
 {
     reaped_during_read();
-    stat_reaped_during_wait();
+    reads_while_write_held();
     status_reaped_during_wait();
     maps_reaped_during_names();
     numa_maps_policy_after_wait();
@@ -5745,7 +5806,9 @@ int main(int argc, char **argv)
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
                "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
-               "process's arguments, stat and status, autogroup writes, oom_score_adj, the maps' "
+               "process's arguments and status, stat and statm read and maps, smaps, numa_maps "
+               "and status killed under a held regions' lock, autogroup writes, oom_score_adj, "
+               "the maps' "
                "paths, the uptime idle sum, an interface's counts, a DRM device's /sys entries and "
                "uevents, a driver's attribute, link and PCI identity, a PCI function's BARs mapped "
                "and read through its resource files, writes of a PCI function's uevent, an input "

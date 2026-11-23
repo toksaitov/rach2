@@ -847,10 +847,13 @@ void paging_user_count(struct mm *mm, uintptr_t start, uintptr_t end, unsigned l
 
 struct mm;
 
-/* The flags of `paging_access`: a write, not a read; and Linux's FOLL_FORCE,
- * which ptrace and /proc/PID/mem give and nothing else. */
-#define PAGING_ACCESS_WRITE 1
-#define PAGING_ACCESS_FORCE 2
+/* The flags of `paging_access`: a write, not a read; Linux's FOLL_FORCE,
+ * which ptrace and /proc/PID/mem give and nothing else; and a wait for the
+ * regions' lock that SIGKILL ends, as access_remote_vm's, which /proc's
+ * readers of another process's memory give. */
+#define PAGING_ACCESS_WRITE    1
+#define PAGING_ACCESS_FORCE    2
+#define PAGING_ACCESS_KILLABLE 4
 
 /**
  * Read or write `len` bytes at `addr` of the address space `mm`, which need
@@ -864,9 +867,12 @@ struct mm;
  * device memory, of memfd_secret or of the vDSO's data pages, [vvar], a
  * page that cannot be backed, and a page of a read-only shared region for a
  * write are -EIO, as Linux's get_user_pages refuses them.
- * Returns 0, -EIO, or -ENOMEM when no temporary mapping was free. It may
- * sleep, bringing a page in or releasing a file a region let go of
- * meanwhile, and looks each page up again after a sleep.
+ * Returns 0, -EIO, or -ENOMEM when no temporary mapping was free, or with
+ * PAGING_ACCESS_KILLABLE -EINTR when SIGKILL ended the wait for `mm`'s
+ * regions' lock, nothing read or written. It may sleep, bringing a page in
+ * or releasing a file a region let go of meanwhile, and looks each page up
+ * again after a sleep; the lock taken again after a file's fill is waited
+ * for whatever the flags.
  */
 int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int flags);
 
