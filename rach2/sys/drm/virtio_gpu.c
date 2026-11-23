@@ -913,14 +913,22 @@ static void kick_ctrl(struct virtio_gpu_device *vg, int sleepable)
     }
 }
 
+static int32_t room_wait(struct virtio_gpu_device *vg, int killable, int64_t until);
+
 /**
  * Free each object on the device's list, oldest first, until it is empty;
- * objects that the frees' own waits hand on meanwhile are freed too. The
- * UNREFs go without a notify, and one notify at the end, made without the
- * big lock (`kick_ctrl`), or one before any wait on the device, sends them
- * all. Process context, may sleep.
+ * objects that the frees' own waits hand on meanwhile are freed too. Each
+ * free first waits for room (`room_wait`) here, where the pass may bound
+ * it, so that the free's own wait (`vgpu_room`) finds room: the pass stops,
+ * leaving the rest of the list to the worker, once `until` of
+ * dma_fence_now's clock has passed or, with `killable`, at SIGKILL, with
+ * the device still holding no room. The worker and a dying device pass
+ * VGPU_NEVER, as a free with no bound would wait. The UNREFs go without a
+ * notify, and one notify at the end, made without the big lock
+ * (`kick_ctrl`), or one before any wait on the device, sends them all.
+ * Process context, may sleep.
  */
-void vgpu_frees_run(struct virtio_gpu_device *vg)
+void vgpu_frees_run(struct virtio_gpu_device *vg, int64_t until, int killable)
 {
     struct virtio_gpu_object *bo;
     uint32_t flags;
@@ -928,6 +936,9 @@ void vgpu_frees_run(struct virtio_gpu_device *vg)
     drm_dev_get(&vg->drm);
     vg->freeing++;
     for (;;) {
+        if (vg->frees && room_wait(vg, killable, until) != 0) {
+            break;
+        }
         flags = spin_lock_irqsave(&vg->lock);
         bo = vg->frees;
         if (bo) {
@@ -1139,12 +1150,14 @@ static int held_low(void *arg)
  * pages are held, as Linux's sender sleeps for room in the queue. The sleep
  * polls the queues every 10 ms, for a device without interrupts, and ends
  * when the device dies or the sender may no longer wait (`vgpu_may_wait`),
- * and with `killable` at SIGKILL, since a device that has stopped answering
- * would hold the sender for ever. 0, or -EINTR when SIGKILL ended it.
+ * with `killable` at SIGKILL, and once `until` of dma_fence_now's clock has
+ * passed, since a device that has stopped answering would hold the sender
+ * for ever. 0, -EINTR when SIGKILL ended it, or -ETIMEDOUT at `until`.
  */
-int32_t vgpu_room(struct virtio_gpu_device *vg, int killable)
+static int32_t room_wait(struct virtio_gpu_device *vg, int killable, int64_t until)
 {
     int32_t rc = 0;
+    int64_t now, wake;
 
     if (!vgpu_may_wait(vg) || vg->held < VGPU_HELD_MAX) {
         return 0;
@@ -1159,12 +1172,22 @@ int32_t vgpu_room(struct virtio_gpu_device *vg, int killable)
             rc = -EINTR;
             break;
         }
+        now = dma_fence_now();
+        if (now >= until) {
+            rc = -ETIMEDOUT;
+            break;
+        }
+        wake = until - now < VGPU_POLL_NS ? until : now + VGPU_POLL_NS;
         vgpu_kick(vg);
-        vgpu_sleep(held_low, vg, dma_fence_now() + VGPU_POLL_NS,
-                   killable ? "virtio_gpu_queue_ctrl_sgs" : NULL);
+        vgpu_sleep(held_low, vg, wake, killable ? "virtio_gpu_queue_ctrl_sgs" : NULL);
     }
     drm_dev_put(&vg->drm);
     return rc;
+}
+
+int32_t vgpu_room(struct virtio_gpu_device *vg, int killable)
+{
+    return room_wait(vg, killable, VGPU_NEVER);
 }
 
 /* What a wait for a command's pages watches: the device, and the pages its
@@ -1200,12 +1223,14 @@ static int vgpu_dma_wait(struct virtio_gpu_device *vg, int64_t until)
 {
     struct held_wait w;
 
+    if (dma_fence_now() >= until) {
+        return 0;
+    }
     if (vg->frees && !vg->freeing && vgpu_may_wait(vg)) {
-        vgpu_frees_run(vg);
+        vgpu_frees_run(vg, until, 0);
         return !vg->dead;
     }
-    if (!vgpu_may_wait(vg) || (vg->held == 0 && !(vg->freeing && unrefs_awaited(vg))) ||
-        dma_fence_now() >= until) {
+    if (!vgpu_may_wait(vg) || (vg->held == 0 && !(vg->freeing && unrefs_awaited(vg)))) {
         return 0;
     }
     w.vg = vg;
@@ -1296,7 +1321,10 @@ static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_obje
             return 0;
         }
         if (vg->frees && !vg->freeing && vgpu_may_wait(vg)) {
-            vgpu_frees_run(vg);
+            vgpu_frees_run(vg, VGPU_NEVER, 1);
+            if (vgpu_killed()) {
+                return -EINTR;
+            }
             continue;
         }
         w.seen = vg->unrefs;
@@ -3003,7 +3031,7 @@ static void vgpu_worker(void)
                     vgpu_display_changed(vg);
                 }
                 vgpu_reap(vg);
-                vgpu_frees_run(vg);
+                vgpu_frees_run(vg, VGPU_NEVER, 0);
                 drm_dev_put(&vg->drm);
             }
         }
@@ -3379,7 +3407,7 @@ void vgpu_kill(struct virtio_gpu_device *vg)
         }
     }
     vgpu_reap(vg);
-    vgpu_frees_run(vg);
+    vgpu_frees_run(vg, VGPU_NEVER, 0);
     for (bo = vg->resources; bo; bo = bo->next) {
         vgpu_resource_forget(vg, bo);
         bo->res_id = 0;
