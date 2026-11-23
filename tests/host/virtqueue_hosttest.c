@@ -277,11 +277,17 @@ static void m_irq_release(struct virtio_dev *d)
     mod(d)->irq_releases++;
 }
 
-/** A page of the arena at its device address. */
+static void *m_ring_alloc(struct virtio_dev *d, uint16_t index, uint32_t bytes, uint64_t *addr);
+
+/** A page of the arena at its device address, or a run of pages, as
+ * m_ring_alloc gives one, up to the transport's `dma_max`. */
 static void *m_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
 {
     int i;
 
+    if (!mod(d)->dma_fail && bytes > 4096u && bytes <= d->dma_max) {
+        return m_ring_alloc(d, 0, bytes, addr);
+    }
     if (mod(d)->dma_fail || bytes == 0 || bytes > 4096u) {
         return 0;
     }
@@ -892,6 +898,57 @@ static void indirect(void)
     virtio_teardown(d);
 }
 
+/** Indirect tables of 1024 descriptors, QEMU's most in a chain, which take
+ * a run of four pages each where the transport gives runs (`dma_max`),
+ * and are cut to a page's 256 where it does not. */
+static void long_tables(void)
+{
+    static struct virtio_sg sg[VIRTQ_INDIRECT_MAX + 1];
+    struct virtio_dev *d = model_reset();
+    struct virtqueue *vq = 0;
+    int k;
+
+    d->indirect_len = VIRTQ_INDIRECT_MAX;
+    d->indirect_tables = 2;
+    check(virtio_init(d, 0, 1) == 0 && virtio_queue_setup(d, 0, done, 0, &vq) == 0 &&
+              vq->ind_len == 256 && vq->ind_pages == 2 && vq->max_chain == 256,
+          "a transport of pages cuts a table to the 256 descriptors of a page");
+    virtio_teardown(d);
+    check(m.dma_out == 0, "the tables of a page are given back");
+
+    d = model_reset();
+    d->dma_max = 4u * 4096u;
+    d->indirect_len = VIRTQ_INDIRECT_MAX;
+    d->indirect_tables = 2;
+    check(virtio_init(d, 0, 1) == 0 && virtio_queue_setup(d, 0, done, 0, &vq) == 0 &&
+              vq->ind_len == 1024 && vq->ind_per_page == 1 && vq->ind_pages == 2 &&
+              vq->ind_tables == 2 && vq->max_chain == 1024,
+          "a transport of runs gives two tables of 1024 descriptors, a run each");
+    data = (uint8_t *)virtio_dma_alloc(d, 4096, &data_addr);
+    for (k = 0; k <= VIRTQ_INDIRECT_MAX; k++) {
+        sg[k] = piece(k % 64, 4);
+    }
+    seen_indirect = 0;
+    seen_out = seen_in = seen_badflags = 0;
+    ndone = 0;
+    check(virtqueue_add(vq, sg, VIRTQ_INDIRECT_MAX + 1, 0, (void *)0x1) == -E2BIG,
+          "a chain past 1024 descriptors does not fit one chain");
+    check(virtqueue_add(vq, sg, 1000, 24, (void *)0x1024) == 0 && vq->indirect_free == 2u,
+          "a chain of 1024 descriptors goes into the first table");
+    check(virtqueue_add(vq, sg, 600, 0, (void *)0x600) == 0 && vq->indirect_free == 0,
+          "a chain of 600 goes into the second, a run of its own");
+    virtqueue_kick(vq);
+    check(model_run(0, 4, 0xCD) == 2 && seen_indirect == 2 && seen_out == 1600 && seen_in == 24 &&
+              seen_badflags == 0,
+          "the device walks both tables whole");
+    check(virtqueue_reap(vq) == 2 && done_token[0] == (void *)0x1024 && done_len[0] == 96 &&
+              done_token[1] == (void *)0x600 && vq->indirect_free == 3u,
+          "both chains come back with their tables");
+    virtio_dma_free(d, data, 4096);
+    virtio_teardown(d);
+    check(m.dma_out == 0, "the runs of the tables are given back");
+}
+
 /**
  * EVENT_IDX: a kick notifies only for buffers past the device's
  * `avail_event`, so not again while the device has not taken the last it
@@ -1149,6 +1206,7 @@ int main(void)
     legacy();
     fill_wrap_drain();
     indirect();
+    long_tables();
     event_index();
     quiet_and_batch();
     device_faults();
@@ -1156,7 +1214,8 @@ int main(void)
     if (!failures) {
         printf("virtqueue-hosttest: result: pass: negotiation, refusals, queue setup, a legacy "
                "device, fill, "
-               "wrap and drain, a stuck reset, indirect tables, event index, quiet queues and "
+               "wrap and drain, a stuck reset, indirect tables, tables of 1024, event index, quiet "
+               "queues and "
                "batches, device faults, configuration and interrupts\n");
     }
     return failures != 0;

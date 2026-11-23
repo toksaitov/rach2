@@ -607,7 +607,7 @@ static int model_chain(struct virtqueue *vq, uint16_t head, struct seg *s)
         tlen = t[i].len / 16u;
         t = (volatile struct virtq_desc *)at(t[i].addr);
         i = 0;
-        check(tlen >= 1 && tlen <= VIRTQ_INDIRECT_MAX, "an indirect table fits its limit");
+        check(tlen >= 1 && tlen <= VBLK_TABLE_LEN, "an indirect table fits its limit");
     }
     for (;;) {
         check(n < SEGS_MAX && i < tlen, "a chain stays inside its table");
@@ -985,8 +985,8 @@ static void bring_up(void)
     check(virtio_blk_init() == 0, "QEMU's device is published");
     check(m->taken == qemu_features(), "every feature offered that the driver knows is taken");
     check(vb->nqueues == 4 && m->vq[3] && !m->vq[4], "a queue for each of the four offered");
-    check(m->vq[0]->ind_len == VIRTQ_INDIRECT_MAX && m->vq[0]->ind_tables == VBLK_TABLES &&
-              m->vq[0]->ind_pages == VBLK_TABLES && m->vq[0]->max_chain == VIRTQ_INDIRECT_MAX,
+    check(m->vq[0]->ind_len == VBLK_TABLE_LEN && m->vq[0]->ind_tables == VBLK_TABLES &&
+              m->vq[0]->ind_pages == VBLK_TABLES && m->vq[0]->max_chain == VBLK_TABLE_LEN,
           "each queue has 8 tables of 256 descriptors, a page each");
     check(vb->seg_max == 126 && vb->seg_bytes == 4096, "seg_max cuts the pieces of a chain");
     check(disk0()->max_sectors == 126 * 8, "a request is the pages 126 pieces cover");
