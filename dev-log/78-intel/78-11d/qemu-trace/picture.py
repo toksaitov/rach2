@@ -100,7 +100,7 @@ def main():
         backend = ["--backend=headless", "--width=640", "--height=480"]
         if drm:
             backend = ["--backend=drm", "--continue-without-input", "--debug"]
-            os.environ["LIBSEAT_BACKEND"] = "noop"
+            os.environ["LIBSEAT_BACKEND"] = "seatd"
         weston = subprocess.Popen(
             ["weston", "--no-config", *backend, "--renderer=pixman", "--shell=kiosk",
              "--idle-time=0", "--socket=wayland-measure", "--log=" + str(out / "weston.log")],

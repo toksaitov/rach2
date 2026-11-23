@@ -73,12 +73,32 @@ guest "cd '$stage' && sh -s '$step/picture.py' '$browser_trace' '$timeline'" <<'
 set -eu
 trace=/sys/kernel/debug/bkl/trace
 drm=/sys/kernel/debug/drm_frame_trace
+seat=
+cleanup()
+{
+    printf 'stop\n' > "$trace"
+    if [ "$3" = 1 ]; then printf 'stop\n' > "$drm"; fi
+    if [ -n "$seat" ]; then
+        kill "$seat" 2>/dev/null || :
+        wait "$seat" 2>/dev/null || :
+    fi
+}
 test -e "$trace" || mount -t debugfs debugfs /sys/kernel/debug
 printf 'start\n' > "$trace"
-trap 'printf "stop\n" > "$trace"; if [ "$3" = 1 ]; then printf "stop\n" > "$drm"; fi' EXIT
+trap 'cleanup "$@"' EXIT
 if [ "$3" = 1 ]; then
     [ -f "$drm" ]
     pkill -TERM -x weston || :
+    export SEATD_SOCK="$PWD/seatd.sock"
+    SEATD_VTBOUND=0 seatd -s "$SEATD_SOCK" -g seat > out/seatd.log 2>&1 &
+    seat=$!
+    tries=0
+    until [ -S "$SEATD_SOCK" ]; do
+        kill -0 "$seat"
+        tries=$((tries + 1))
+        [ "$tries" -lt 10 ] || exit 1
+        sleep 1
+    done
     printf 'start\n' > "$drm"
 fi
 status=0
