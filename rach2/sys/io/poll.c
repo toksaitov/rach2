@@ -323,19 +323,17 @@ static int poll_expired(struct poll_deadline *d)
  * may wake the thread, as Linux's select_estimate_accuracy gives poll,
  * select and epoll_wait (fs/select.c:53-91): none when the thread's timer
  * slack (`timer_slack_ns`) is zero, as under a real-time or deadline policy
- * or in an ordinary child that reset-on-fork gave its slack, or under such
- * a policy; otherwise a thousandth of the time left, a two-hundredth at a
+ * or in an ordinary child that reset-on-fork gave its slack; otherwise,
+ * whatever the policy, a thousandth of the time left, a two-hundredth at a
  * positive nice, at most 100 ms and at least the timer slack, 50 us by
  * default. A wait of up to 50 ms thus ends within 50 us of its time.
  */
 static uint64_t poll_slack(int64_t left)
 {
-    uint8_t policy = current_proc->sched_policy;
     uint64_t div = current_proc->nice > 0 ? 200u : 1000u;
     uint64_t slack = 0;
 
-    if (current_proc->timer_slack_ns == 0 || policy == SCHED_FIFO || policy == SCHED_RR ||
-        policy == SCHED_DEADLINE) {
+    if (current_proc->timer_slack_ns == 0) {
         return 0;
     }
     if (left >= (int64_t)(POLL_SLACK_MAX_NS * div)) {
