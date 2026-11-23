@@ -46,6 +46,19 @@ uint32_t intel_get_vblank_counter(struct drm_crtc *crtc)
     return i915_read(&c->i915->hw, PIPE_FRMCOUNT_G4X(c->pipe));
 }
 
+#ifdef RACH2_DRM_FRAME_TRACE
+void intel_trace_pipe(struct intel_crtc *c, enum drm_frame_event event, uint64_t value)
+{
+    uint32_t frame, line;
+
+    if (drm_frame_trace_enabled) {
+        frame = intel_get_vblank_counter(&c->base);
+        line = i915_read(&c->i915->hw, PIPEDSL(c->pipe)) & PIPEDSL_LINE_MASK;
+        drm_frame_trace(event, (uint32_t)c->pipe, frame, line, value);
+    }
+}
+#endif
+
 void intel_pipe_update_start(struct intel_crtc *c)
 {
     struct i915_hw *hw = &c->i915->hw;
@@ -225,6 +238,7 @@ void intel_crtc_send_event(struct intel_crtc *c)
         i915_irq_mask(c->i915, I915_IRQ_DE, DE_PLANE_FLIP_DONE_IVB(c->pipe));
         c->event_async = 0;
     }
+    intel_trace_pipe(c, DRM_FRAME_DELIVER, e->event.vbl.user_data);
     drm_crtc_send_vblank_event_locked(&c->base, e);
     drm_crtc_vblank_put(&c->base);
     intel_crtc_interactive_end(c);
@@ -300,6 +314,7 @@ void intel_crtc_arm_event(struct intel_crtc *c, struct drm_crtc_state *cs, uint3
     if (cs->active && drm_crtc_vblank_get(&c->base) == 0) {
         c->event = e;
         c->event_frame = frame;
+        intel_trace_pipe(c, DRM_FRAME_ARM, frame);
         c->event_async = cs->async_flip != 0;
         if (c->event_async) {
             /* The event is installed before the surface write can raise
@@ -355,6 +370,19 @@ static void intel_de_irq(struct drm_i915_private *i915, uint32_t iir, void *data
         err_int(i915);
         iir &= ~DE_ERR_INT_IVB;
     }
+#ifdef RACH2_DRM_FRAME_TRACE
+    if (drm_frame_trace_enabled) {
+        int pipe;
+
+        for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+            uint32_t bits = iir & (DE_PIPE_VBLANK_IVB(pipe) | DE_PLANE_FLIP_DONE_IVB(pipe));
+
+            if (bits) {
+                intel_trace_pipe(&i915->display.crtc[pipe], DRM_FRAME_IRQ, bits);
+            }
+        }
+    }
+#endif
     i915->display.de_iir |= iir;
 }
 

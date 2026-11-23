@@ -481,6 +481,7 @@ void intel_primary_update(struct drm_plane *plane, struct drm_atomic_state *stat
     if (!ps->visible || !ps->fb || !cs->active) {
         i915_write(hw, DSPCNTR(c->pipe), intel_plane_ctl_crtc(c));
         i915_write(hw, DSPSURF(c->pipe), 0);
+        intel_trace_pipe(c, DRM_FRAME_SURFACE, 0);
         c->planes_on &= ~(1u << INTEL_PLANE_PRIMARY);
         return;
     }
@@ -508,6 +509,7 @@ void intel_primary_update(struct drm_plane *plane, struct drm_atomic_state *stat
         i915_write(hw, DSPCNTR(c->pipe), cntr);
         i915_write(hw, DSPSURF(c->pipe), surface->addr);
     }
+    intel_trace_pipe(c, DRM_FRAME_SURFACE, surface->addr);
     c->planes_on |= 1u << INTEL_PLANE_PRIMARY;
 }
 

@@ -911,6 +911,23 @@ A write of
 clears every count, as a write of 0 clears one of Linux's KVM statistics
 in its debugfs; any other write fails with
 .Er EINVAL .
+.It Pa drm_frame_trace
+Mode 0600, present in kernels built with
+.Dv RACH2_DRM_FRAME_TRACE .
+Write
+.Ql start
+followed by a newline to clear and start the capture, and
+.Ql stop
+followed by a newline to freeze it for reading.
+Reading an active capture or starting it again fails with
+.Er EBUSY .
+The binary stream is little-endian.
+Its header is four 32-bit words (version 1, record count, records lost
+and zero) and two 64-bit monotonic timestamps in nanoseconds (start and stop).
+Each record is four 64-bit words (monotonic nanoseconds and three
+event-dependent values), then two 32-bit words (event and object).
+The capture keeps the first 32768 records.
+See the DRM driver's Readme for the record types.
 .It Pa dri
 The display devices' files, one directory for each device registered with
 the DRM core, as Linux 6.12 makes them.

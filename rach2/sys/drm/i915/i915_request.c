@@ -284,6 +284,25 @@ void i915_request_set_error_once(struct i915_request *rq, int32_t err)
     }
 }
 
+#ifdef RACH2_DRM_FRAME_TRACE
+/** Record the fence identity, sampled frequency in MHz and raw 1.28 us
+ * RC6 counter of a request. The engine lock keeps the request alive. */
+static void trace_request(struct i915_request *rq, enum drm_frame_event event)
+{
+    struct drm_i915_private *i915 = rq->i915;
+    uint32_t rc6, mhz;
+
+    if (drm_frame_trace_enabled) {
+        rc6 = i915_read(&i915->hw, GEN6_GT_GFX_RC6);
+        mhz = i915_rps_read_actual_mhz(i915);
+        drm_frame_trace(event, rq->engine->linux_id, rq->fence.base.context, rq->seqno,
+                        (uint64_t)mhz << 32 | rc6);
+    }
+}
+#else
+#define trace_request(rq, event) ((void)0)
+#endif
+
 /**
  * Give the chip the requests of `e` that wait for nothing more, oldest
  * first, up to the first that still waits, as Linux's ring submission
@@ -336,6 +355,14 @@ static void engine_submit(struct drm_i915_private *i915, struct i915_engine *e)
     arch_dma_fence();
     i915_uncore_write(i915, RING_TAIL(e->mmio_base), last->tail);
     e->hw_tail = last->tail;
+#ifdef RACH2_DRM_FRAME_TRACE
+    if (drm_frame_trace_enabled) {
+        for (rq = first; rq != last; rq = rq->next) {
+            trace_request(rq, DRM_FRAME_REQUEST_SUBMIT);
+        }
+        trace_request(last, DRM_FRAME_REQUEST_SUBMIT);
+    }
+#endif
     spin_unlock_irqrestore(&e->lock, elock);
 }
 
@@ -804,6 +831,7 @@ static int request_signal_locked(struct i915_engine *e, struct i915_request *rq)
         }
     }
     if (!rq->fence.base.signaled) {
+        trace_request(rq, DRM_FRAME_REQUEST_DONE);
         (void)dma_fence_signal(&rq->fence.base);
     }
     return kick;

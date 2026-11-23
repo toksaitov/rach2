@@ -5,6 +5,7 @@
  */
 
 #include "drm.h"
+#include "drm_frame_trace.h"
 #include "../dmabuf/dmabuf.h"
 
 #include "../lib/kerrno.h"
@@ -1510,6 +1511,7 @@ static int work_fence_arm(struct commit_work *w, int i, struct dma_fence *fence)
                       ? rtc_ticks_now() + MS_TO_TICKS(mc->commit_fence_timeout_ms) + 1u
                       : 0;
     spin_unlock_irqrestore(&work_lock, flags);
+    drm_frame_trace(DRM_FRAME_FENCE_WAIT, (uint32_t)i, fence->context, fence->seqno, 1);
     if (dma_fence_add_callback(fence, &w->cbs[i].cb, work_fence_done) != 0) {
         return 0;
     }
@@ -2136,6 +2138,7 @@ static int32_t wait_for_fences(struct drm_atomic_state *state, int intr)
         if (!ps || !ps->fence) {
             continue;
         }
+        drm_frame_trace(DRM_FRAME_FENCE_WAIT, (uint32_t)i, ps->fence->context, ps->fence->seqno, 0);
         if (ms) {
             if (dma_fence_wait_until(ps->fence, 0, dma_fence_now() + (int64_t)ms * 1000000) != 0) {
                 return 0;

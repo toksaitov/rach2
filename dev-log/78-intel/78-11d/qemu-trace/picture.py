@@ -1,4 +1,5 @@
 """Measure Chromium's WebGPU picture under headless Weston or a supplied display."""
+from contextlib import contextmanager, ExitStack
 import os
 from pathlib import Path
 import signal
@@ -9,6 +10,28 @@ import time
 
 sys.path.insert(0, str(Path("tests/graphics/browser").resolve()))
 from run import Browser, hasvk_picture, save, server, stop
+
+
+@contextmanager
+def weston_streams(out, env, client):
+    """Subscribe to the two Weston streams and close them on every exit."""
+    scopes = ("timeline", "drm-backend")
+    listed = subprocess.run(client(["weston-debug", "--list"]), env=env, check=True,
+                            capture_output=True, text=True, timeout=10)
+    available = listed.stdout + listed.stderr
+    if any(scope not in available for scope in scopes):
+        raise RuntimeError("Weston lacks a required log scope: " + available)
+    with ExitStack() as stack:
+        for scope in scopes:
+            output = stack.enter_context((out / scope).open("w"))
+            error = stack.enter_context((out / (scope + ".err")).open("w"))
+            process = subprocess.Popen(client(["weston-debug", scope]), env=env,
+                                       stdout=output, stderr=error, start_new_session=True)
+            stack.callback(stop, process)
+        yield
+        for scope in scopes:
+            if not (out / scope).stat().st_size:
+                raise RuntimeError("Weston's " + scope + " stream was empty")
 
 
 def tids(path):
@@ -73,10 +96,14 @@ def main():
         os.environ.update(TMPDIR=str(work), XDG_RUNTIME_DIR=str(runtime),
                           WAYLAND_DISPLAY="wayland-measure", LP_NUM_THREADS="2",
                           MESA_SHADER_CACHE_DIR=str(work / "mesa"))
+        drm = os.environ.get("RACH2_FRAME_TIMELINE") == "1"
+        backend = ["--backend=headless", "--width=640", "--height=480"]
+        if drm:
+            backend = ["--backend=drm", "--continue-without-input", "--debug"]
+            os.environ["LIBSEAT_BACKEND"] = "noop"
         weston = subprocess.Popen(
-            ["weston", "--no-config", "--backend=headless", "--renderer=pixman",
-             "--width=640", "--height=480", "--shell=kiosk", "--idle-time=0",
-             "--socket=wayland-measure", "--log=" + str(out / "weston.log")],
+            ["weston", "--no-config", *backend, "--renderer=pixman", "--shell=kiosk",
+             "--idle-time=0", "--socket=wayland-measure", "--log=" + str(out / "weston.log")],
             start_new_session=True)
         try:
             for _ in range(30):
@@ -89,7 +116,11 @@ def main():
                 raise RuntimeError("Weston did not open its socket")
             print("qemu: Weston ready")
             (out / "weston.pid").write_text("%d\n" % weston.pid)
-            measure(out, work, swiftshader=True)
+            if drm:
+                with weston_streams(out, os.environ, lambda args: args):
+                    measure(out, work, swiftshader=True)
+            else:
+                measure(out, work, swiftshader=True)
         finally:
             stop(weston)
 

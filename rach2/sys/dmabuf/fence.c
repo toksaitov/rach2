@@ -1,5 +1,6 @@
 /* Fence lifetimes, completion callbacks, waits and flattened all-of fences. */
 #include "dmabuf.h"
+#include "../drm/drm_frame_trace.h"
 #include "../mm/kheap.h"
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
@@ -144,6 +145,7 @@ int32_t dma_fence_signal(struct dma_fence *f)
     }
     dma_fence_get(f);
     f->timestamp_ns = dma_fence_now();
+    drm_frame_trace(DRM_FRAME_FENCE_SIGNAL, 0, f->context, f->seqno, (uint64_t)f->timestamp_ns);
     f->signaled = 1;
     while ((cb = f->cbs) != NULL) {
         f->cbs = cb->next;

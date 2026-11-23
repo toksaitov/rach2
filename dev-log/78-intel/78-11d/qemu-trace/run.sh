@@ -7,13 +7,20 @@ cd "$tree"
 step=dev-log/78-intel/78-11d/qemu-trace
 disk=${RACH2_TRACE_DISK:-"$tree/build/runs/t3504t/qemu.disk"}
 port=${RACH2_TRACE_PORT:-26516}
+kernel=${RACH2_TRACE_KERNEL:-build/x86_64/rach2/kernel}
 browser_trace=${RACH2_BROWSER_TRACE:-1}
+timeline=${RACH2_FRAME_TIMELINE:-0}
 case $browser_trace in 0|1) ;; *) exit 2 ;; esac
+case $timeline in
+    0) set -- ;;
+    1) set -- -device virtio-vga ;;
+    *) exit 2 ;;
+esac
 out="$tree/build/runs/t3504-wake-trace-$(date '+%Y%m%dT%H%M%S')"
 root=/data/trial/t3504t
 stage=$root/qemu-trace
 test -f "$disk"
-test -f build/x86_64/rach2/kernel
+test -f "$kernel"
 mkdir -p build/tmp build/runs
 mkdir "$out"
 export TMPDIR="$tree/build/tmp"
@@ -31,14 +38,14 @@ guest()
 }
 
 git rev-parse HEAD > "$out/commit"
-shasum -a 256 build/x86_64/rach2/kernel > "$out/kernel.sha256"
+shasum -a 256 "$kernel" > "$out/kernel.sha256"
 : > "$out/serial.log"
 qemu-system-x86_64 -accel tcg,thread=multi -cpu max -smp 4 -m 6G -machine q35 \
-    -kernel build/x86_64/rach2/kernel \
+    -kernel "$kernel" \
     -append 'rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial/t3504t/root-5ed936d79361e924.img rach2.slot=trialroot' \
     -snapshot -drive "file=$disk,format=raw,if=none,id=d0" -device ide-hd,drive=d0,bus=ide.0 \
     -nic "user,model=rtl8139,hostfwd=tcp:127.0.0.1:$port-:22" \
-    -display none -vga none -monitor none -no-reboot -serial "file:$out/serial.log" &
+    -display none -vga none "$@" -monitor none -no-reboot -serial "file:$out/serial.log" &
 qemu=$!
 printf 'qemu: evidence: %s\n' "$out"
 old=0
@@ -62,20 +69,32 @@ guest "mkdir '$stage' && tar -xzf - -C '$stage' && mkdir '$stage/out' && chown d
     < "$out/payload.tar.gz"
 
 status=0
-guest "cd '$stage' && sh -s '$step/picture.py' '$browser_trace'" <<'GUEST' || status=$?
+guest "cd '$stage' && sh -s '$step/picture.py' '$browser_trace' '$timeline'" <<'GUEST' || status=$?
 set -eu
 trace=/sys/kernel/debug/bkl/trace
+drm=/sys/kernel/debug/drm_frame_trace
 test -e "$trace" || mount -t debugfs debugfs /sys/kernel/debug
 printf 'start\n' > "$trace"
-trap 'printf "stop\n" > "$trace"' EXIT
+trap 'printf "stop\n" > "$trace"; if [ "$3" = 1 ]; then printf "stop\n" > "$drm"; fi' EXIT
+if [ "$3" = 1 ]; then
+    [ -f "$drm" ]
+    pkill -TERM -x weston || :
+    printf 'start\n' > "$drm"
+fi
 status=0
-timeout -k 10 240 su -s /bin/sh desktop -c "RACH2_BROWSER_TRACE='$2' PYTHONDONTWRITEBYTECODE=1 python3 -u '$1'" || status=$?
+timeout -k 10 240 su -s /bin/sh desktop -c "RACH2_FRAME_TIMELINE='$3' RACH2_BROWSER_TRACE='$2' PYTHONDONTWRITEBYTECODE=1 python3 -u '$1'" || status=$?
+if [ "$3" = 1 ]; then
+    printf 'stop\n' > "$drm"
+    cat "$drm" > drm.bin
+fi
 printf 'stop\n' > "$trace"
 cat "$trace" > kernel.bin
 printf 'clear\n' > "$trace"
 exit "$status"
 GUEST
-guest "tar -czf - -C '$stage' out kernel.bin" > "$out/guest.tar.gz"
+set -- out kernel.bin
+if [ "$timeline" = 1 ]; then set -- "$@" drm.bin; fi
+guest "tar -czf - -C '$stage' $*" > "$out/guest.tar.gz"
 tar -xzf "$out/guest.tar.gz" -C "$out"
 guest 'sync; poweroff -f' </dev/null || :
 exit "$status"

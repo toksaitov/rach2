@@ -9,14 +9,16 @@ import signal
 import subprocess
 import sys
 import tempfile
-import threading
+from contextlib import nullcontext
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(Path("tests/graphics/lenovo").resolve()))
 from hasvk import end_desktop, machine, private_weston, run, stop, user_command
-from stall import frames, gpu_profile, profile_start
+from picture import weston_streams
+from stall import frames
 
 TRACE = Path("/sys/kernel/debug/bkl/trace")
+DRM_TRACE = Path("/sys/kernel/debug/drm_frame_trace")
 
 
 def desktop_dir(path, account):
@@ -45,7 +47,7 @@ def client_command(user, args):
                                "graphics", *args])
 
 
-def collect(case, work, settle, weston, account, env):
+def collect(case, work, settle, weston, account, env, joined=False):
     """Record the kernel from just before readback until the picture answers."""
     case.mkdir()
     out = case / "out"
@@ -55,8 +57,14 @@ def collect(case, work, settle, weston, account, env):
     command = client_command(account.pw_name, [sys.executable, "-u", HERE / "picture.py",
                                               out, work, settle])
     env = dict(env, TMPDIR=str(work), MESA_SHADER_CACHE_DIR=str(work / "mesa"))
-    started = stopped = False
-    with (case / "measure.log").open("w", buffering=1) as log:
+    streams = (weston_streams(case, env, lambda args: user_command(account.pw_name, args))
+               if joined else nullcontext())
+    traces = [(TRACE, "kernel.bin")]
+    if joined:
+        traces.append((DRM_TRACE, "drm.bin"))
+    started = []
+    stopped = False
+    with streams, (case / "measure.log").open("w", buffering=1) as log:
         browser = subprocess.Popen(command, env=env, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=log, text=True,
                                    start_new_session=True)
@@ -65,12 +73,14 @@ def collect(case, work, settle, weston, account, env):
                 print(line, end="", flush=True)
                 log.write(line)
                 if line == "webgpu: trace start\n" and not started:
-                    TRACE.write_text("start\n")
-                    started = True
+                    for path, name in traces:
+                        path.write_text("start\n")
+                        started.append((path, name))
                     browser.stdin.write("start\n")
                     browser.stdin.flush()
                 elif line == "webgpu: trace stop\n" and started and not stopped:
-                    TRACE.write_text("stop\n")
+                    for path, _ in reversed(started):
+                        path.write_text("stop\n")
                     stopped = True
                     browser.stdin.write("stop\n")
                     browser.stdin.flush()
@@ -80,34 +90,30 @@ def collect(case, work, settle, weston, account, env):
             stop(browser)
             browser.stdin.close()
             browser.stdout.close()
-            if started:
-                TRACE.write_text("stop\n")
+            for path, _ in started:
+                path.write_text("stop\n")
+            for path, name in started:
                 try:
-                    with TRACE.open("rb") as source, (case / "kernel.bin").open("wb") as target:
+                    with path.open("rb") as source, (case / name).open("wb") as target:
                         shutil.copyfileobj(source, target)
                 finally:
-                    TRACE.write_text("clear\n")
+                    if path == TRACE:
+                        path.write_text("clear\n")
 
 
 def profiled_pictures(out, work, weston, account, env):
-    """Trace fresh immediate pictures beside the GPU sampler until a late frame."""
-    env = dict(env, RACH2_BROWSER_TRACE="0")
+    """Trace fresh immediate pictures until a frame misses its bound."""
+    env = dict(env, RACH2_BROWSER_TRACE="1")
     for index in range(1, 5):
         name = "immediate-%d" % index
-        print("webgpu: measure " + name + " with GPU sampling", flush=True)
-        profile_start()
-        done = threading.Event()
-        sampler = threading.Thread(target=gpu_profile, args=(out / (name + ".profile"), done))
-        sampler.start()
-        try:
-            collect(out / name, work / name, 0, weston, account, env)
-        finally:
-            done.set()
-            sampler.join()
+        print("webgpu: measure " + name + " with Chromium, Weston and DRM tracing", flush=True)
+        collect(out / name, work / name, 0, weston, account, env, joined=True)
         result = json.loads((out / name / "out/result.json").read_text())
-        late = frames(result["picture"])["late_after_steady"]
-        print("webgpu: %s: %d late frames" % (name, late), flush=True)
-        if late:
+        picture = frames(result["picture"])
+        late = picture["late_after_steady"]
+        early = max(picture["first_gaps_ms"])
+        print("webgpu: %s: %.2f ms early gap, %d late frames" % (name, early, late), flush=True)
+        if early > 33.4 or late:
             break
 
 
@@ -116,12 +122,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("user")
     parser.add_argument("output")
-    parser.add_argument("--profiled", action="store_true", help="trace the GPU sampler's workload")
+    parser.add_argument("--profiled", action="store_true", help="trace Chromium, Weston and DRM")
     args = parser.parse_args()
     user = args.user
     account = pwd.getpwnam(user)
     if os.getuid() != 0 or account.pw_uid == 0 or not TRACE.is_file():
         raise RuntimeError("need root, a display user and the kernel trace file")
+    if args.profiled and not DRM_TRACE.is_file():
+        raise RuntimeError("need the DRM frame trace build")
     _, icd = machine()
     out = Path(args.output).resolve()
     out.mkdir()
