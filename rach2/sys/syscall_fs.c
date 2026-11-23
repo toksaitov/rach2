@@ -434,9 +434,10 @@ static int fd_locks_by_node(const fd_entry_t *e)
  * is open on, when `e` is one of the table's descriptors, as POSIX has every
  * close do; the table owns them for every thread and process that shares it
  * (`lock.h`), so a close by any of them drops them all. The copy of an entry
- * a file mapping or a message in flight keeps is not a descriptor of the
- * table (`fd_in_table`), and its release drops neither record locks nor
- * queue notifications. A queue descriptor close cancels the caller's
+ * a file mapping or a message in flight keeps drops neither record locks
+ * nor queue notifications. With `installed` set, the caller has claimed
+ * a descriptor of its table. Otherwise `fd_in_table` checks the entry.
+ * A queue descriptor close cancels the caller's
  * registration even on a duplicated description. No locks go on the close of
  * an O_PATH descriptor, which Linux does not count as a close of the file.
  * The record lock check ends when none exists. Linux's locks_remove_posix looks
@@ -447,13 +448,13 @@ static int fd_locks_by_node(const fd_entry_t *e)
  * closing under the table's lock first, which the command reads after it
  * sets its lock (`fd_lock_still_open`).
  */
-static void fd_close_locks(const fd_entry_t *e)
+static void fd_close_locks(const fd_entry_t *e, int installed)
 {
     struct lock_key key;
     int big, locks = lock_any();
 
     if ((!locks && e->ops != &mq_ops) || !e->ofd || (e->flags & FD_FLAG_PATH) || !current_proc ||
-        !fd_in_table(current_proc->fds, e))
+        (!installed && !fd_in_table(current_proc->fds, e)))
         return;
     if (e->ops == &mq_ops) {
         bkl_enter();
@@ -537,7 +538,7 @@ void fd_release_backing(fd_entry_t *e)
     if (!e) {
         return;
     }
-    fd_close_locks(e);
+    fd_close_locks(e, 0);
     fd_release_objects(e);
 }
 
@@ -2368,7 +2369,7 @@ int canonicalize_abs(char *path)
 
     while (*p) {
         const char *comp;
-        int clen, i;
+        int clen;
 
         while (*p == '/') {
             p++;
@@ -2388,9 +2389,10 @@ int canonicalize_abs(char *path)
         if (out > 1) {
             path[out++] = '/';
         }
-        for (i = 0; i < clen; i++) {
-            path[out++] = comp[i];
+        if (path + out != comp) {
+            k_memmove(path + out, comp, (uint32_t)clen);
         }
+        out += clen;
     }
     path[out] = '\0';
     return out;
@@ -7348,15 +7350,11 @@ static void fd_teardown(fd_table_t *table, int fd, fd_entry_t *e)
 static int32_t close_fd(int fd)
 {
     fd_table_t *table = current_proc->fds;
-    fd_entry_t *e = fd_get(table, fd);
-    int rc;
+    fd_entry_t *e;
+    int rc = fd_close_claim(table, fd, &e);
 
-    if (!e) {
-        return -EBADF;
-    }
-    rc = fd_close_claim(table, fd, &e);
     if (rc >= 0) {
-        fd_close_locks(e);
+        fd_close_locks(e, 1);
     }
     if (rc == 1) {
         fd_teardown(table, fd, e);
@@ -9613,7 +9611,7 @@ static int32_t dup_clear(int fd, const fd_entry_t *nw)
     int rc = fd_dup_swap(current_proc->fds, fd, nw, &e);
 
     if (rc == 0 && e) {
-        fd_close_locks(e);
+        fd_close_locks(e, 1);
     }
     if (rc == 0) {
         fd_gone_release();

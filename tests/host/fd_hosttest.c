@@ -794,16 +794,16 @@ static void shared_closes(void)
               fd_peek(first->fds, fd, &copy, 0) == -EBADF,
           "no lookup, copy or second close passes a closing descriptor");
     current_proc = second;
-    check(fd_holds_claim(0, &claimed) == fd && claimed == fd_slot(second->fds, fd) &&
+    check(fd_holds_claim(0, &claimed) == -1 && second->fd_holding == 0,
+          "the closer still holds the entry when the other call ends");
+    current_proc = first;
+    check(fd_holds_claim(0, &claimed) == fd && claimed == fd_slot(first->fds, fd) &&
               (claimed->flags & FD_FLAG_RELEASING),
-          "the end of the holder's call claims the release");
-    check(fd_holds_claim(fd + 1, &claimed) == -1 && second->fd_holding == 0,
-          "and the call holds nothing more");
+          "the closer claims the release after dropping its hold");
     check(ofd->refcount == 1 && fd_ofd_unref_unless_last(ofd) == 0,
           "the claimed descriptor holds the description's last reference");
     fd_ofd_unref(ofd);
-    fd_free_after(second->fds, fd, fd_slot(second->fds, fd));
-    current_proc = first;
+    fd_free_after(first->fds, fd, fd_slot(first->fds, fd));
     check(fd_holds_claim(0, &claimed) == -1 && fd_alloc(first->fds) == fd,
           "a released slot is free for the next open");
     current_proc = 0;
@@ -989,13 +989,16 @@ static process_t *race_first, *race_second;
 static int race_fd, race_closed;
 static fd_entry_t *race_was;
 
-/** The first sharer closes the race's descriptor. */
+/** The first sharer closes the race's descriptor and ends a deferred close. */
 static void race_close(void)
 {
     fd_entry_t *claimed = 0;
 
     current_proc = race_first;
     race_closed = fd_close_claim(race_first->fds, race_fd, &claimed);
+    if (race_closed == 0) {
+        check(fd_holds_claim(0, &claimed) == -1, "the other call still holds the closing entry");
+    }
     current_proc = race_second;
 }
 

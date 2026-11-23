@@ -457,6 +457,9 @@ struct vfs_ops {
      * real ids. Called on a held node with or without its lock, only on a
      * mount whose `sb_posixacl` is set; NULL for a type that keeps none. */
     int (*check_acl)(struct vfs_mount *mnt, void *node, int want, int use_real);
+    /* Read the mode and owner IDs of a held node for a path walk without
+     * the big lock. Fill only mode, uid and gid. NULL uses getattr. */
+    void (*walk_attrs)(void *node, struct vfs_stat *st);
 };
 
 /* renameat2(2)'s flags, Linux's values. */
