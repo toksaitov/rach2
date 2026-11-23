@@ -1832,18 +1832,55 @@ static void run_teardown(struct drv *dr, uint32_t id)
            GPU_RESP_OK_NODATA, "unref");
 }
 
+/** Make 2D resource `id` of IMG_W by IMG_H, which the device must answer. */
+static void backing_create(struct drv *dr, uint32_t id)
+{
+    struct gpu_create_2d c;
+    struct gpu_hdr resp;
+
+    hdr(&c, sizeof(c), GPU_CMD_RESOURCE_CREATE_2D, 0, 0);
+    c.resource_id = id;
+    c.format = GPU_FORMAT_B8G8R8X8_UNORM;
+    c.width = IMG_W;
+    c.height = IMG_H;
+    expect(send_cmd(dr, "backing-create", &(struct gpu_message){&c, sizeof(c), 0, 0}, &resp,
+                    sizeof(resp)),
+           GPU_RESP_OK_NODATA, "backing-create");
+}
+
+/** Free resource `id`, which the device must still answer. */
+static void backing_unref(struct drv *dr, uint32_t id)
+{
+    struct gpu_resource rs;
+    struct gpu_hdr resp;
+
+    hdr(&rs, sizeof(rs), GPU_CMD_RESOURCE_UNREF, 0, 0);
+    rs.resource_id = id;
+    expect(send_cmd(dr, "backing-unref", &(struct gpu_message){&rs, sizeof(rs), 0, 0}, &resp,
+                    sizeof(resp)),
+           GPU_RESP_OK_NODATA, "backing-unref");
+}
+
+/** Wait until file `go` exists, when it is not 0. */
+static void backing_wait(struct drv *dr, const char *go)
+{
+    if (go) {
+        printf("peer: backing: waiting for %s\n", go);
+        while (access(go, F_OK) != 0) {
+            wait_bell(dr);
+        }
+    }
+}
+
 /**
- * Make 2D resource `id`, once `go` exists when it is not 0, ask for a
- * backing of `bytes` of the VM's memory for it with VGS_CMD_BACKING, print
- * the answer, which must be RESP_OK_MAP_INFO or ERR_OUT_OF_MEMORY, and free
- * the resource, which the device must still answer. Exits on a wrong
- * answer or none.
+ * Ask for a backing of `bytes` of the VM's memory for resource `id`, made
+ * and not backed, with VGS_CMD_BACKING, and print the answer, which must be
+ * RESP_OK_MAP_INFO or ERR_OUT_OF_MEMORY. Exits on a wrong answer or none.
  */
-static void ask_backing(struct drv *dr, uint32_t id, uint64_t bytes, const char *go)
+static void ask_backing(struct drv *dr, uint32_t id, uint64_t bytes)
 {
     union {
-        struct gpu_create_2d c2;
-        struct gpu_resource rs;
+        struct gpu_hdr h;
         uint8_t raw[VGS_PAGES_OFF];
     } u;
     struct vgs_backing *b = (struct vgs_backing *)(void *)(u.raw + sizeof(struct gpu_hdr));
@@ -1851,20 +1888,6 @@ static void ask_backing(struct drv *dr, uint32_t id, uint64_t bytes, const char 
     struct vgs_pages pg;
     uint32_t type;
 
-    hdr(&u, sizeof(u.c2), GPU_CMD_RESOURCE_CREATE_2D, 0, 0);
-    u.c2.resource_id = id;
-    u.c2.format = GPU_FORMAT_B8G8R8X8_UNORM;
-    u.c2.width = IMG_W;
-    u.c2.height = IMG_H;
-    expect(send_cmd(dr, "backing-create", &(struct gpu_message){&u, sizeof(u.c2), 0, 0}, resp,
-                    sizeof(struct gpu_hdr)),
-           GPU_RESP_OK_NODATA, "backing-create");
-    if (go) {
-        printf("peer: backing: waiting for %s\n", go);
-        while (access(go, F_OK) != 0) {
-            wait_bell(dr);
-        }
-    }
     hdr(&u, sizeof(struct gpu_hdr) + sizeof(*b), VGS_CMD_BACKING, 0, 0);
     b->resource_id = id;
     b->size = bytes;
@@ -1885,32 +1908,73 @@ static void ask_backing(struct drv *dr, uint32_t id, uint64_t bytes, const char 
         fprintf(stderr, "%s: backing: response 0x%x\n", prog, (unsigned)type);
         exit(1);
     }
-    hdr(&u, sizeof(u.rs), GPU_CMD_RESOURCE_UNREF, 0, 0);
-    u.rs.resource_id = id;
-    expect(send_cmd(dr, "backing-unref", &(struct gpu_message){&u, sizeof(u.rs), 0, 0}, resp,
-                    sizeof(struct gpu_hdr)),
-           GPU_RESP_OK_NODATA, "backing-unref");
 }
 
 /**
- * Ask for backings of dr->backing bytes of the VM's memory for
- * PEER_BACKINGS new 2D resources from `id` on, one at a time, the first
- * once dr->go exists when -g names it, then with -B one of dr->last bytes,
- * once dr->lastgo exists when -G names it (`ask_backing`). Exits when the
+ * Ask for RESOURCE_CREATE_3D of texture `id`, 1024 by 1024 of 4 bytes a
+ * texel, 4 MiB, while the VM has no memory: the answer must be
+ * ERR_OUT_OF_MEMORY, or OK, after which the texture is freed, and is
+ * printed. Exits on another answer or none.
+ */
+static void ask_texture(struct drv *dr, uint32_t id)
+{
+    struct gpu_create_3d c;
+    struct gpu_hdr resp;
+    uint32_t type;
+
+    memset(&c, 0, sizeof(c));
+    hdr(&c, sizeof(c), GPU_CMD_RESOURCE_CREATE_3D, 0, 0);
+    c.resource_id = id;
+    c.target = 2;     /* PIPE_TEXTURE_2D */
+    c.format = 1;     /* B8G8R8A8_UNORM */
+    c.bind = 1u << 3; /* a sampler view */
+    c.width = 1024;
+    c.height = 1024;
+    c.depth = 1;
+    c.array_size = 1;
+    type = send_cmd(dr, "texture", &(struct gpu_message){&c, sizeof(c), 0, 0}, &resp, sizeof(resp));
+    if (type == GPU_RESP_OK_NODATA) {
+        printf("peer: texture: resource %u, 1024x1024: made\n", (unsigned)id);
+        backing_unref(dr, id);
+    } else if (type == GPU_RESP_ERR_OUT_OF_MEMORY) {
+        printf("peer: texture: resource %u, 1024x1024: refused: out of memory\n", (unsigned)id);
+    } else {
+        fprintf(stderr, "%s: texture: response 0x%x\n", prog, (unsigned)type);
+        exit(1);
+    }
+}
+
+/**
+ * Make PEER_BACKINGS new 2D resources from `id` on, and one more with -B,
+ * before the VM's memory is taken, since a create past the VM's room is
+ * refused; then, once dr->go exists when -g names it, ask for a backing of
+ * dr->backing bytes for each in turn and a texture (`ask_texture`), and
+ * free them; then with -B, once dr->lastgo exists when -G names it, a
+ * backing of dr->last bytes for the last (`ask_backing`). Exits when the
  * device took no backings, or on a wrong answer or none.
  */
 static void run_backing(struct drv *dr, uint32_t id)
 {
-    uint32_t i;
+    uint32_t i, n = PEER_BACKINGS + (dr->last != 0);
 
     if ((dr->me.transport_features & VGS_TF_BACKING) == 0) {
         die("%s", "the device offers no backings of the VM's memory");
     }
-    for (i = 0; i < PEER_BACKINGS; i++, id++) {
-        ask_backing(dr, id, dr->backing, i == 0 ? dr->go : 0);
+    for (i = 0; i < n; i++) {
+        backing_create(dr, id + i);
+    }
+    backing_wait(dr, dr->go);
+    for (i = 0; i < PEER_BACKINGS; i++) {
+        ask_backing(dr, id + i, dr->backing);
+    }
+    ask_texture(dr, id + n);
+    for (i = 0; i < PEER_BACKINGS; i++) {
+        backing_unref(dr, id + i);
     }
     if (dr->last) {
-        ask_backing(dr, id, dr->last, dr->lastgo);
+        backing_wait(dr, dr->lastgo);
+        ask_backing(dr, id + PEER_BACKINGS, dr->last);
+        backing_unref(dr, id + PEER_BACKINGS);
     }
 }
 

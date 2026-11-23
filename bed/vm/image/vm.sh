@@ -31,10 +31,12 @@
 # With -V the backend takes the device through vfio-pci under QEMU's
 # intel-iommu in place of the module. With -b, once the peer has drawn,
 # the VM's memory is taken until MemAvailable reads 0 and held there for
-# 30 s, and the peer then asks for eight backings of 64 MiB of it in turn:
-# the backend must refuse each with ERR_OUT_OF_MEMORY, where a pin of
-# memory the VM has not got would wake its OOM killer, and answer the
-# commands after. Once the fill has ended, the backend is moved into a
+# 30 s, and the peer then asks for eight backings of 64 MiB of it in turn,
+# for resources it made before, and for a texture of 4 MiB, which the
+# backend counts as 16 MiB, 16 bytes a texel being the most of any format
+# but those of 64-bit channels: it must refuse each with ERR_OUT_OF_MEMORY, where a pin of memory the VM has
+# not got, or a texture the GPU's driver would fill, would wake its OOM
+# killer, and answer the commands after. Once the fill has ended, the backend is moved into a
 # memory cgroup of 64 MiB and the peer asks for a backing of 1 GiB, which
 # the VM's counts allow and the cgroup cannot hold: the backend must refuse
 # it when its pin's allocation fails, where the cgroup's OOM killer would
@@ -46,9 +48,14 @@
 # that at each boot loads the module and runs the backend surfaceless on
 # the ivshmem device, `bed-vm: ` before each of its lines on the console,
 # counting for bed/measure/profile.sh when QEMU gives the firmware entry
-# opt/rach2/vgpu-profile, and one that does to the backend the words
-# Rach2's test writes to the VM's second serial port; gfx takes the
-# development key, and perf is there. With -o it also writes the image
+# opt/rach2/vgpu-profile, and at its end, once it has killed what the
+# backend left of the service, `bed-vm: backend: ended: status S` with the
+# kernel's lines of a kill or a crash; one of bed-vm-memory, which writes
+# `bed-vm: memory:` lines there as the VM's memory moves, through the
+# backend's end too; and one that does to the backend the words Rach2's
+# test writes to the VM's second serial port; no getty on the console,
+# whose hangup of the tty would silence them; gfx takes the development
+# key, and perf is there. With -o it also writes the image
 # whole as the raw disk RAW, the form etude's overlays take as their base.
 #
 # The images and the account's key are in BED_VM_CACHE, by default
@@ -338,6 +345,10 @@ judge()
             "$(grep -c '^peer: backing: resource [0-9]*, 67108864 bytes: refused: out of memory$' "$p")" 8
         expect "backings of 64 MiB refused by the VM's counts" \
             "$(grep -c "^backend: back: resource [0-9]*: refused: 67108864 bytes: no room in the VM's counts: " "$b")" 8
+        expect "a texture refused while MemAvailable read 0" \
+            "$(grep -c '^peer: texture: resource [0-9]*, 1024x1024: refused: out of memory$' "$p")" 1
+        expect "the texture refused by the VM's counts" \
+            "$(grep -c "^backend: create: resource [0-9]*: refused: 16777216 bytes: no room in the VM's counts$" "$b")" 1
         expect "the backing of 1 GiB refused" \
             "$(grep -c '^peer: backing: resource [0-9]*, 1073741824 bytes: refused: out of memory$' "$p")" 1
         expect "the backend moved into a cgroup of 64 MiB" \
@@ -467,6 +478,10 @@ printf '%s\n' 'GRUB_TIMEOUT=0' \
     'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT quiet loglevel=3 apparmor=0 systemd.service_watchdogs=0"' |
     sudo tee /etc/default/grub.d/99-rach2.cfg > /dev/null
 sudo update-grub
+# The services below write the console, ttyS0, and no one logs in there.
+# The getty's unit hangs up the tty as it starts, which leaves a descriptor
+# opened before it writing nothing; with Type=idle it starts after them.
+sudo systemctl mask serial-getty@ttyS0.service
 make -s -C bed/vm/module
 make -s -C bed/vm/backend
 sudo install -m 644 bed/vm/module/vgpushm.ko /usr/local/lib/vgpushm.ko
@@ -519,9 +534,114 @@ if [ -r "$cfg" ]; then
     echo "bed-vm: profile: $*" > /dev/ttyS0
 fi
 ! stty -F /dev/ttyS1 > /dev/null 2>&1 || set -- "$@" -H
-/usr/local/sbin/vgpu-backend -v "$@" 2>&1 | sed -u 's/^/bed-vm: /' > /dev/ttyS0
+# The backend's lines reach the console through sed, over a FIFO that the
+# backend and what it starts, the render server and its workers, hold open.
+# The backend's end alone ends the service: once it has ended, every other
+# process of the service's cgroup but this shell and sed is killed, which
+# frees every object they held and closes their ends of the FIFO, and then
+# the end's lines go to sed, which ends when this shell closes its own.
+fifo=/run/bed-vm-backend.$$
+rm -f "$fifo"
+mkfifo -m 600 "$fifo" || exit 1
+sed -u 's/^/bed-vm: /' < "$fifo" > /dev/ttyS0 &
+out=$!
+exec 3> "$fifo"
+rm -f "$fifo"
+/usr/local/sbin/vgpu-backend -v "$@" >&3 2>&3
+status=$?
+# Kill until the cgroup holds none of them, a process forked meanwhile and
+# one that is dying included; a pid read that has gone is passed over.
+procs=/sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)/cgroup.procs
+left=''
+while :; do
+    alive=0
+    for pid in $(cat "$procs"); do
+        [ "$pid" != $$ ] && [ "$pid" != "$out" ] || continue
+        kill -KILL "$pid" 2> /dev/null || continue
+        alive=$((alive + 1))
+    done
+    [ -n "$left" ] || left=$alive
+    [ "$alive" -gt 0 ] || break
+    sleep 0.1
+done
+# How the backend ended, 128 and the signal's number for a kill, and the
+# kernel's lines of a kill or a crash, which the console's log level hides.
+echo "backend: ended: status $status" >&3
+echo "backend: ended: $left of its processes left, killed and gone" >&3
+dmesg | grep -E 'invoked oom-killer|Out of memory|Killed process|segfault at|traps: ' |
+    sed 's/^/kernel: /' >&3
+exec 3>&-
+wait "$out"
 RUN
-sudo chmod 755 /usr/local/sbin/bed-vm-backend
+sudo tee /usr/local/sbin/bed-vm-memory > /dev/null <<'RUN'
+#!/bin/sh
+# bed-vm-memory: the VM's memory on the console, read once a second and
+# written as a line only when MemAvailable or the bytes of i915's objects
+# with pages have moved 64 MiB or more since the last line, so that a run's
+# least MemAvailable and most i915 memory are on record while a steady VM
+# writes nothing: each byte of the console is an exit to QEMU. A line gives
+# the least MemAvailable and the most i915 memory of the seconds since the
+# line before; `i915 none` without i915's debugfs file. A line is written
+# also when i915's file comes or goes.
+step=65536
+gem=''
+shown=-1 shown_gem=0 shown_i915='' least='' most=0
+while :; do
+    avail=0
+    while read -r name value _; do
+        if [ "$name" = MemAvailable: ]; then
+            avail=$value
+            break
+        fi
+    done < /proc/meminfo
+    # i915's file, sought until found, since i915 may bind after the
+    # sampler starts, and again when it has gone with its device.
+    if [ -z "$gem" ] || [ ! -r "$gem" ]; then
+        gem=''
+        for f in /sys/kernel/debug/dri/*/i915_gem_objects; do
+            if [ -r "$f" ]; then
+                gem=$f
+                break
+            fi
+        done
+    fi
+    # Linux's i915_gem_object_info: "N shrinkable [F free] objects, B bytes".
+    objects='' bytes=0
+    [ -z "$gem" ] || read -r objects _ _ _ _ bytes _ < "$gem" || objects=''
+    case $avail$bytes in *[!0-9]*) avail=0 bytes=0 objects='' ;; esac
+    kib=$((bytes / 1024))
+    if [ -z "$least" ] || [ "$avail" -lt "$least" ]; then least=$avail; fi
+    [ "$kib" -le "$most" ] || most=$kib
+    moved=$((avail - shown))
+    gem_moved=$((kib - shown_gem))
+    i915=${objects:+y}
+    if [ "$shown" -lt 0 ] || [ "$moved" -ge "$step" ] || [ "$moved" -le "-$step" ] ||
+        [ "$gem_moved" -ge "$step" ] || [ "$gem_moved" -le "-$step" ] ||
+        [ "$i915" != "$shown_i915" ]; then
+        if [ -n "$objects" ]; then
+            echo "bed-vm: memory: available $avail kB, least $least kB; i915 $objects objects, $kib kB, most $most kB"
+        else
+            echo "bed-vm: memory: available $avail kB, least $least kB; i915 none"
+        fi
+        shown=$avail shown_gem=$kib shown_i915=$i915 least=$avail most=$kib
+    fi
+    sleep 1
+done
+RUN
+sudo chmod 755 /usr/local/sbin/bed-vm-backend /usr/local/sbin/bed-vm-memory
+# The sampler is a service of its own, so that it goes on through the
+# backend's end and restart, and its lines show what the end gave back.
+sudo tee /etc/systemd/system/bed-vm-memory.service > /dev/null <<'UNIT'
+[Unit]
+Description=Write the VM's memory on the console as it moves
+After=bed-vm-ready.service
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'exec /usr/local/sbin/bed-vm-memory > /dev/ttyS0 2>&1'
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl enable bed-vm-memory.service
 sudo tee /etc/systemd/system/bed-vm-backend.service > /dev/null <<'UNIT'
 [Unit]
 Description=Serve Rach2's virtio-gpu from the ivshmem device

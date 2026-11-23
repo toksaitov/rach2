@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <malloc.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -662,6 +663,11 @@ int main(int argc, char **argv)
     int gbm, card = -1;
 
     options(argc, argv, &o);
+    /* A fixed threshold, which also ends glibc's raising of it at each free,
+       maps every allocation of 1 MiB or more on its own and unmaps it at
+       its free, so that the textures llvmpipe frees go back to the VM,
+       whose MemAvailable judges each create and backing. */
+    mallopt(M_MMAP_THRESHOLD, 1 << 20);
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
     if (o.hold) {

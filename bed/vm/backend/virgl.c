@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -28,6 +29,9 @@
 #define CAPSET_VIRGL2 2u
 #define CAPSET_VENUS  4u
 #define CAPSET_DRM    6u
+
+/* Gallium's target of a buffer, as virgl's resources number targets. */
+#define PIPE_BUFFER 0u
 
 /* virglrenderer's flag for a resource whose first row is the top one. */
 #define RESOURCE_Y_0_TOP 1u
@@ -293,12 +297,85 @@ static int resp(int err)
     return VD_RESP_ERR_UNSPEC;
 }
 
-/** Create a resource without backing; device.c attaches it later. */
+static int mem_room(uint64_t size);
+
+/* Gallium's targets of a 3D texture, whose depth halves at each level, and
+ * of a cube map, which has six faces. */
+#define PIPE_TEXTURE_3D   3u
+#define PIPE_TEXTURE_CUBE 4u
+
+/* virgl's formats R64_FLOAT to R64G64B64A64_FLOAT, of up to 32 bytes a
+ * texel; every other format has 16 at most, a block of 4 by 4 or more
+ * texels of a compressed one 16 bytes. */
+#define VIRGL_FORMAT_R64_FLOAT          24u
+#define VIRGL_FORMAT_R64G64B64A64_FLOAT 27u
+
+/**
+ * The bytes of a resource's storage at most, as the VM's counts judge its
+ * create: a buffer's width, or a texture's texels at the most bytes a texel
+ * its format can have, 32 for a format of 64-bit channels and 16 for any
+ * other, summed over its mipmap chain, each level's width, height and, for
+ * a 3D texture, depth half the last's and never below 1, by its layers, six
+ * for a cube, and its samples, and rounded up to a 4 KiB page. A bound, not
+ * the driver's size: it judges only this create, since once the renderer
+ * has the resource the VM's counts and i915's hold its storage
+ * (`gpu_unbacked`), and an error of one create lies within the eighth of
+ * the VM that `mem_room` keeps.
+ */
+static uint64_t create_bytes(const struct vd_create *a)
+{
+    uint64_t w = a->width ? a->width : 1, h = a->height ? a->height : 1;
+    uint64_t d = a->depth ? a->depth : 1, layers = a->array_size ? a->array_size : 1;
+    uint64_t texel = 16, samples = a->nr_samples ? a->nr_samples : 1, n = 0;
+    uint32_t level;
+
+    if (a->target == PIPE_BUFFER) {
+        return a->width;
+    }
+    if ((w | h | d | layers) > 65536u || samples > 64u) {
+        return UINT64_MAX; /* past any GPU's limits, and the sum's 64 bits */
+    }
+    if (a->format >= VIRGL_FORMAT_R64_FLOAT && a->format <= VIRGL_FORMAT_R64G64B64A64_FLOAT) {
+        texel = 32;
+    }
+    if (a->target == PIPE_TEXTURE_CUBE && layers < 6) {
+        layers = 6;
+    }
+    for (level = 0; level <= a->last_level && level < 32; level++) {
+        n += w * h * d;
+        w = w > 1 ? w / 2 : 1;
+        h = h > 1 ? h / 2 : 1;
+        if (a->target == PIPE_TEXTURE_3D) {
+            d = d > 1 ? d / 2 : 1;
+        }
+    }
+    if (n > (UINT64_MAX / 2) / (layers * samples * texel)) {
+        return UINT64_MAX;
+    }
+    n *= layers * samples * texel;
+    return (n + 4095u) & ~(uint64_t)4095u;
+}
+
+/**
+ * Create a resource without backing; device.c attaches it later. A create
+ * whose storage the VM has no room for (`mem_room`) is refused with
+ * ERR_OUT_OF_MEMORY, as the backing of one is, since the renderer takes
+ * the storage from the VM's memory, which a GPU's driver fills and does
+ * not give back while the resource lives: past the room the VM's OOM
+ * killer ends the process that maps the most, this one.
+ */
 static int op_create(void *c, const struct vd_create *a)
 {
     struct virgl_renderer_resource_create_args args;
+    uint64_t bytes = create_bytes(a);
 
     (void)c;
+    if (!mem_room(bytes)) {
+        fprintf(stderr,
+                "backend: create: resource %u: refused: %llu bytes: no room in the VM's counts\n",
+                (unsigned)a->id, (unsigned long long)bytes);
+        return VD_RESP_ERR_OUT_OF_MEMORY;
+    }
     args.handle = a->id;
     args.target = a->target;
     args.format = a->format;
@@ -731,17 +808,244 @@ static int op_pages(void *c, struct vd_pages *q)
     return pin_runs(r, p, q);
 }
 
+/*
+ * A scan of the GPU objects the renderer holds with no pages yet
+ * (`gpu_unbacked`), each DRM client counted once.
+ */
+struct gpu_scan {
+    uint64_t sum;     /* bytes of the objects counted */
+    char (*seen)[80]; /* "drm-pdev drm-client-id" of each client counted */
+    size_t nseen, cap;
+    int failed;      /* the errno that stopped the scan, or 0 */
+    char where[512]; /* the file or directory the scan failed on */
+};
+
+/** Stop scan s on errno err at path, the first failure kept. */
+static void scan_fail(struct gpu_scan *s, const char *path, int err)
+{
+    if (s->failed == 0) {
+        s->failed = err ? err : EIO;
+        snprintf(s->where, sizeof(s->where), "%s", path);
+    }
+}
+
 /**
- * Whether the VM has room for a backing of `size` bytes: its available
- * memory, as /proc/meminfo counts it, holds the backing and an eighth of
- * the VM's memory besides, so that a guest that asks for more than the VM
- * has is refused, as a Linux guest's allocation fails when its RAM runs
- * out, before the pin's reclaim stalls the VM and every answer with it. A
- * resource's own storage is not judged so: the renderer's process may keep
- * what it frees, as llvmpipe's textures stay in the C library's heap, and
- * the counts would refuse the next resource that memory could hold. 1
- * also when the VM has no /proc/meminfo or it lacks either count; 0 when
- * it cannot be opened for want of memory or its read fails, as seq_file's
+ * Add to s the bytes of system memory that the DRM client of fdinfo file
+ * `path` holds in GPU objects with no pages yet, as Linux's drm-usage stats
+ * give them: drm-total-system0 less drm-resident-system0, or the whole
+ * total for a driver that gives no resident count. i915 makes an object's
+ * pages at its first use, not at its creation, so these are bytes the VM's
+ * counts do not hold yet and the renderer will take. A client that
+ * drm-client-id and drm-pdev name is counted once however many descriptors
+ * share it, since every descriptor of one struct drm_file gives the same
+ * figures. A file of any other kind adds nothing, nor does one whose
+ * descriptor or process ended before it was read (ENOENT, ESRCH); any other
+ * failure to open or read it fails the scan.
+ */
+static void unbacked_of(const char *path, struct gpu_scan *s)
+{
+    unsigned long long n, id = 0, total = 0, resident = 0;
+    int has_total = 0, has_resident = 0, has_id = 0, bad, err;
+    char line[160], unit[8], pdev[40] = "", key[80];
+    size_t i;
+    FILE *f = fopen(path, "r");
+
+    if (f == 0) {
+        if (errno != ENOENT && errno != ESRCH) {
+            scan_fail(s, path, errno);
+        }
+        return;
+    }
+    errno = 0;
+    while (fgets(line, sizeof(line), f)) {
+        unsigned long long *to;
+        int *has;
+
+        if (strncmp(line, "drm-client-id:", 14) == 0) {
+            has_id = sscanf(line + 14, "%llu", &id) == 1;
+            continue;
+        } else if (strncmp(line, "drm-pdev:", 9) == 0) {
+            if (sscanf(line + 9, "%39s", pdev) != 1) {
+                pdev[0] = 0;
+            }
+            continue;
+        } else if (strncmp(line, "drm-total-system0:", 18) == 0) {
+            to = &total;
+            has = &has_total;
+        } else if (strncmp(line, "drm-resident-system0:", 21) == 0) {
+            to = &resident;
+            has = &has_resident;
+        } else {
+            continue;
+        }
+        unit[0] = 0;
+        if (sscanf(strchr(line, ':') + 1, "%llu %7s", &n, unit) < 1) {
+            continue;
+        }
+        /* drm_print_memory_stats gives bytes, KiB or MiB. */
+        *to = strcmp(unit, "MiB") == 0 ? n << 20 : strcmp(unit, "KiB") == 0 ? n << 10 : n;
+        *has = 1;
+    }
+    bad = ferror(f);
+    err = errno;
+    fclose(f);
+    if (bad) {
+        if (err != ENOENT && err != ESRCH) {
+            scan_fail(s, path, err);
+        }
+        return;
+    }
+    if (!has_total) {
+        return;
+    }
+    if (has_id) {
+        snprintf(key, sizeof(key), "%s %llu", pdev, id);
+        for (i = 0; i < s->nseen; i++) {
+            if (strcmp(s->seen[i], key) == 0) {
+                return;
+            }
+        }
+        if (s->nseen == s->cap) {
+            size_t cap = s->cap ? s->cap * 2 : 16;
+            char (*seen)[80] = realloc(s->seen, cap * sizeof(*seen));
+
+            if (seen == 0) {
+                scan_fail(s, path, ENOMEM);
+                return;
+            }
+            s->seen = seen;
+            s->cap = cap;
+        }
+        memcpy(s->seen[s->nseen++], key, sizeof(key));
+    }
+    s->sum += has_resident ? (total > resident ? total - resident : 0) : total;
+}
+
+/**
+ * Open the cgroup.procs file of this process's cgroup v2, the backend
+ * service's, naming it in path. Returns the file, or 0 when the kernel has
+ * no cgroup v2 to name or, with s failed, when a file cannot be opened or
+ * read for a cause other than its absence.
+ */
+static FILE *cgroup_procs(struct gpu_scan *s, char *path, size_t size)
+{
+    char line[256];
+    FILE *cg = fopen("/proc/self/cgroup", "r"), *procs = 0;
+
+    if (cg == 0) {
+        if (errno != ENOENT) {
+            scan_fail(s, "/proc/self/cgroup", errno);
+        }
+        return 0;
+    }
+    while (fgets(line, sizeof(line), cg)) {
+        if (strncmp(line, "0::", 3) == 0) {
+            line[strcspn(line, "\n")] = 0;
+            snprintf(path, size, "/sys/fs/cgroup%s/cgroup.procs", line + 3);
+            if ((procs = fopen(path, "r")) == 0 && errno != ENOENT) {
+                scan_fail(s, path, errno);
+            }
+            break;
+        }
+    }
+    if (procs == 0 && ferror(cg)) {
+        scan_fail(s, "/proc/self/cgroup", errno);
+    }
+    fclose(cg);
+    return procs;
+}
+
+/**
+ * Add to s what each descriptor in fdinfo directory `base` holds
+ * (`unbacked_of`). A directory whose process ended before or while it was
+ * read adds what was read; any other failure to read it fails s.
+ */
+static void scan_fdinfo(struct gpu_scan *s, const char *base)
+{
+    char path[512];
+    struct dirent *e;
+    DIR *dir = opendir(base);
+
+    if (dir == 0) {
+        if (errno != ENOENT && errno != ESRCH) {
+            scan_fail(s, base, errno);
+        }
+        return;
+    }
+    for (;;) {
+        errno = 0;
+        if ((e = readdir(dir)) == 0) {
+            if (errno != 0 && errno != ENOENT && errno != ESRCH) {
+                scan_fail(s, base, errno);
+            }
+            break;
+        }
+        if (e->d_name[0] != '.') {
+            snprintf(path, sizeof(path), "%s/%s", base, e->d_name);
+            unbacked_of(path, s);
+        }
+    }
+    closedir(dir);
+}
+
+/**
+ * Read into s->sum the bytes of the VM's memory that the renderer's GPU
+ * objects will take and the VM's counts do not hold yet (`unbacked_of`),
+ * over every descriptor of every process of the backend's cgroup, the
+ * service's (`cgroup_procs`), which holds virglrenderer's render server
+ * and its workers too; of this process alone where the kernel has no
+ * cgroup v2 to name. 0 with no GPU: llvmpipe fills a texture's memory at
+ * its create. A process that ends during the scan adds nothing. Returns 0,
+ * or -1 with s->failed and s->where when a file or directory of the scan
+ * cannot be opened or read for any other cause, ENOMEM or EMFILE among
+ * them, since a scan that skipped a client would count its objects as 0.
+ */
+static int gpu_unbacked(struct gpu_scan *s)
+{
+    char path[512], base[64];
+    FILE *procs;
+    long pid;
+
+    memset(s, 0, sizeof(*s));
+    procs = cgroup_procs(s, path, sizeof(path));
+    if (procs == 0 && s->failed == 0) {
+        scan_fdinfo(s, "/proc/self/fdinfo");
+    }
+    while (procs && s->failed == 0) {
+        if (fscanf(procs, "%ld", &pid) != 1) {
+            if (ferror(procs)) {
+                scan_fail(s, path, errno);
+            }
+            break;
+        }
+        snprintf(base, sizeof(base), "/proc/%ld/fdinfo", pid);
+        scan_fdinfo(s, base);
+    }
+    if (procs) {
+        fclose(procs);
+    }
+    free(s->seen);
+    s->seen = 0;
+    return s->failed ? -1 : 0;
+}
+
+/**
+ * Whether the VM has room for `size` bytes more, of a backing or of a
+ * resource's storage: its available memory, as /proc/meminfo counts it,
+ * holds them, the bytes the renderer's GPU objects will yet take
+ * (`gpu_unbacked`), and an eighth of the VM's memory besides, so that a
+ * guest that asks for more than the VM has is refused, as a Linux guest's
+ * allocation fails when its RAM runs out, before the pin's reclaim, or
+ * i915's at an object's first use, stalls the VM and every answer with it
+ * or wakes its OOM killer. Creates (`op_create`) and backings (`back_new`)
+ * are judged so against one account: a create's GPU object counts here
+ * from its creation until it has its pages, and in MemAvailable after. The
+ * objects are read before MemAvailable, so that one made resident between
+ * the two readings is counted twice, which refuses early, and never not at
+ * all. main has the C library give back at once what llvmpipe frees. 0,
+ * with `backend: counts: PATH: ERROR`, when the objects cannot be read; 1
+ * when the VM has no /proc/meminfo or it lacks either count; 0 when it
+ * cannot be opened for want of memory or its read fails, as seq_file's
  * does when it cannot allocate its buffer. MemAvailable reads 0, not less,
  * when the free pages are down to the watermarks, which is no room.
  */
@@ -749,10 +1053,16 @@ static int mem_room(uint64_t size)
 {
     unsigned long long total = 0, avail = 0, kib;
     int has_total = 0, has_avail = 0, failed;
+    struct gpu_scan scan;
+    uint64_t need;
     char line[128];
-    FILE *f = fopen("/proc/meminfo", "r");
+    FILE *f;
 
-    if (f == 0) {
+    if (gpu_unbacked(&scan) != 0) {
+        fprintf(stderr, "backend: counts: %s: %s\n", scan.where, strerror(scan.failed));
+        return 0;
+    }
+    if ((f = fopen("/proc/meminfo", "r")) == 0) {
         return errno != ENOMEM && errno != ENFILE && errno != EMFILE;
     }
     while (fgets(line, sizeof(line), f)) {
@@ -766,7 +1076,14 @@ static int mem_room(uint64_t size)
     }
     failed = ferror(f);
     fclose(f);
-    return !failed && (!has_total || !has_avail || size + total / 8u <= avail);
+    if (failed) {
+        return 0;
+    }
+    if (!has_total || !has_avail) {
+        return 1;
+    }
+    need = total / 8u + scan.sum;
+    return need <= avail && size <= avail - need;
 }
 
 volatile sig_atomic_t vr_hold;
