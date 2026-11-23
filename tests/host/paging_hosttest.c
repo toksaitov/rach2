@@ -86,6 +86,15 @@
  * lock; and a walk over two regions of a space takes write access from
  * both with one flush of the span it changed, as paging.h says.
  *
+ * Two rows give a /proc reader's `paging_access` with
+ * PAGING_ACCESS_KILLABLE a page of a shared file that is not present,
+ * whose share runs with the regions' lock let go while another thread
+ * takes it to write and keeps it (mmap_lock_host.c's `host_write_held`).
+ * SIGKILL reaches the reader while it waits to take the lock again, or
+ * before, during the share; each access returns -EINTR without the lock
+ * and with no take that would wait for ever, as Linux's GUP takes the lock
+ * again with mmap_read_lock_killable.
+ *
  * Returns 0 when every row passes, 1 otherwise.
  */
 
@@ -273,16 +282,17 @@ int pc_fault(uintptr_t fault_address, int write)
     return window_fills;
 }
 
-/** Nothing: no row maps a file. */
+/** Count a reference to `f`, so that a row can see the fault give back
+ * what it took. */
 void vm_file_get(struct vm_file *f)
 {
-    (void)f;
+    f->refs++;
 }
 
-/** Nothing: no row maps a file. */
+/** Count a reference to `f` given back. */
 void vm_file_put(struct vm_file *f)
 {
-    (void)f;
+    f->refs--;
 }
 
 /** NULL: no row maps a device object. */
@@ -1198,6 +1208,121 @@ static void fault_race_rows(void)
     free(dir);
 }
 
+/* ---- a killable access whose fault lets the regions' lock go ---- */
+
+/* What another thread does while the regions' lock is let go and while a
+ * take of it waits (mmap_lock_host.c). */
+extern struct mm *host_write_held;
+extern int host_stuck;
+extern void (*host_held_wait)(struct mm *mm);
+extern int (*host_killed)(void);
+
+/* The reader of the killed-access rows, its process, the space it reads,
+ * the shares of its file, the SIGKILLs sent, and whether the share sends
+ * SIGKILL itself rather than while the reader waits. */
+static process_t kill_reader;
+static struct tgroup kill_group;
+static struct mm kill_mm;
+static struct vm_file kill_file;
+static int kill_shares, kills_sent, kill_in_share;
+
+/** Send the reader SIGKILL, as another thread would. */
+static void kill_post(struct mm *mm)
+{
+    (void)mm;
+    kill_group.pending |= KSIG_BIT(SIGKILL);
+    kills_sent++;
+}
+
+/** Whether the reader has SIGKILL pending. */
+static int kill_pending(void)
+{
+    return (kill_group.pending & KSIG_BIT(SIGKILL)) != 0;
+}
+
+/** The page of `kill_file`, `RACE_FRAME`, given while the regions' lock is
+ * let go: meanwhile another thread takes that lock to write and keeps it,
+ * as its own mmap would, and sends the reader SIGKILL, here or while the
+ * reader waits for the lock again. */
+static int kill_share(struct vm_file *f, uint32_t pgoff, uintptr_t *phys)
+{
+    (void)f;
+    (void)pgoff;
+    kill_shares++;
+    check(!mmap_held(&kill_mm, 0), "the fault lets the regions' lock go across the share");
+    host_write_held = &kill_mm;
+    if (kill_in_share) {
+        kill_post(&kill_mm);
+    } else {
+        host_held_wait = kill_post;
+    }
+    *phys = RACE_FRAME;
+    return 0;
+}
+
+/**
+ * A /proc reader's `paging_access` with PAGING_ACCESS_KILLABLE of a page of
+ * a shared file that is not present: the fault lets the regions' lock go
+ * across the file's share, another thread takes it to write meanwhile, and
+ * SIGKILL reaches the reader, once while it waits to take the lock again
+ * and once before, which ends the access without the wait, as Linux's GUP
+ * asks fatal_signal_pending and takes the lock with
+ * mmap_read_lock_killable after a fault let it go. Either way the access
+ * returns -EINTR with the lock not held, no take that would wait for ever
+ * (`host_stuck`), no entry made, the file's references given back, and the
+ * reader's marks of a killable access cleared.
+ */
+static void killed_access_rows(void)
+{
+    static vma_t vma;
+    page_dir_t *dir = calloc(1, sizeof(*dir));
+    page_table_t *table = calloc(1, sizeof(*table));
+    uintptr_t addr = USER_ADDR_MIN + 0x800000u;
+    pte_t *e = &table->pages[MMU_INDEX(addr)];
+    process_t *was = cpu_table[0].current;
+    char byte;
+    int pass, rc;
+
+    dir->logical_page_tables[(uint32_t)addr / PAGE_SIZE / 1024u] = table;
+    kill_mm.dir = dir;
+    vma.start = addr;
+    vma.end = addr + PAGE_SIZE;
+    vma.prot = VM_PROT_READ | VM_PROT_WRITE;
+    vma.type = VM_SHARED;
+    vma.file = &kill_file;
+    kill_mm.vm.first = kill_mm.vm.last = &vma;
+    kill_file.share = kill_share;
+    race_vma = &vma;
+    race_space = &kill_mm.vm;
+    kill_reader.tg = &kill_group;
+    kill_reader.mm = &kill_mm;
+    cpu_table[0].current = &kill_reader;
+    host_killed = kill_pending;
+    for (pass = 0; pass < 2; pass++) {
+        kill_in_share = pass;
+        kill_shares = kills_sent = host_stuck = 0;
+        kill_group.pending = 0;
+        kill_file.refs = 1;
+        rc = paging_access(&kill_mm, addr, &byte, 1, PAGING_ACCESS_KILLABLE);
+        check(rc == -EINTR && kill_shares == 1 && kills_sent == 1,
+              pass ? "a killable access sent SIGKILL across its fault's share returns EINTR"
+                   : "a killable access whose take of the lock again SIGKILL ends returns EINTR");
+        check(!mmap_held(&kill_mm, 0) && host_stuck == 0 && *e == 0 && kill_file.refs == 1,
+              "with the lock not held, no wait for ever, no entry and the file given back");
+        check(!kill_reader.access_mm && !kill_reader.access_killed,
+              "and the reader's marks of a killable access cleared");
+        host_write_held = NULL;
+        host_held_wait = NULL;
+    }
+    host_killed = NULL;
+    kill_group.pending = 0;
+    cpu_table[0].current = was;
+    race_vma = 0;
+    race_space = 0;
+    free(table);
+    free(dir);
+}
+
 /** The protection keys are off in the host test, as on a processor without
  * them. */
 int fpu_pkeys(void)
@@ -1254,6 +1379,7 @@ int main(void)
     recovered_rows();
     cow_race_rows();
     fault_race_rows();
+    killed_access_rows();
     give_way_rows();
     check(boot_carves == 0, "no row reached the boot allocator after the heap exists");
 

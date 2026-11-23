@@ -146,6 +146,14 @@ void down_read(struct rwsem *s)
     rw_downs++;
 }
 
+/** Count a read take, which no signal ends in the host test. */
+int down_read_killable(struct rwsem *s)
+{
+    (void)s;
+    rw_downs++;
+    return 0;
+}
+
 /** Count a read take that needs no wait. */
 int down_read_trylock(struct rwsem *s)
 {

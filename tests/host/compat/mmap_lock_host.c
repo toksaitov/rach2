@@ -16,9 +16,17 @@
  * outside an address space (`mm_read_begin`) may run a row's
  * `host_read_begin` before it takes the lock and `host_read_end` after it
  * gives it back, where the row keeps the walk's user's count, as mm.c does,
- * and runs what another thread does while the walk waits.
+ * and runs what another thread does while the walk waits. A row may name an
+ * address space another thread holds to write for the whole row
+ * (`host_write_held`): a take of its lock waits, and runs the row's
+ * `host_held_wait`, what another thread does meanwhile, such as send the
+ * taker SIGKILL; a killable take then fails with -EINTR when the row's
+ * `host_killed` says the taker has SIGKILL pending, as that ends the wait
+ * on the machine, and any other take, which would wait for ever, is counted
+ * in `host_stuck` and given the lock, so that the row goes on.
  */
 #include "../../../rach2/sys/mm/mm.h"
+#include "../../../rach2/sys/lib/kerrno.h"
 
 /* The address space whose regions' lock another thread holds until a write
  * lock waits for it, or NULL; and what that thread does meanwhile, or NULL. */
@@ -34,6 +42,14 @@ void (*host_ptl_after)(struct mm *mm);
  * gives it back, or NULL. */
 void (*host_read_begin)(struct mm *mm);
 void (*host_read_end)(struct mm *mm);
+/* The address space another thread holds to write, or NULL; the takes of
+ * its lock that would have waited for ever; what another thread does while
+ * a take of it waits, or NULL; and whether the taker has SIGKILL pending,
+ * NULL for never. */
+struct mm *host_write_held;
+int host_stuck;
+void (*host_held_wait)(struct mm *mm);
+int (*host_killed)(void);
 
 /* The holds of the one thread: the address space, its depth and whether the
  * first hold was to write. Two at once, as on the machine. */
@@ -77,10 +93,41 @@ static void host_take(struct mm *mm, int write)
     host_holds[i].write = write;
 }
 
-/** Take `mm`'s regions' lock to read: count the hold. */
+/** Wait for `host_write_held`'s lock when `mm` is it and the test holds it
+ * not: run `host_held_wait`, then 1 when `killable` and `host_killed` says
+ * SIGKILL ended the wait, else count the take in `host_stuck` and 0. */
+static int host_wait_held(struct mm *mm, int killable)
+{
+    if (mm != host_write_held || host_hold(mm) >= 0) {
+        return 0;
+    }
+    if (host_held_wait) {
+        host_held_wait(mm);
+    }
+    if (killable && host_killed && host_killed()) {
+        return 1;
+    }
+    host_stuck++;
+    return 0;
+}
+
+/** Take `mm`'s regions' lock to read: count the hold, after the wait for
+ * `host_write_held`'s (`host_wait_held`). */
 void mmap_read_lock(struct mm *mm)
 {
+    (void)host_wait_held(mm, 0);
     host_take(mm, 0);
+}
+
+/** Take `mm`'s regions' lock to read, as `mmap_read_lock`: 0, or -EINTR
+ * with no hold when SIGKILL ended the wait for `host_write_held`'s. */
+int mmap_read_lock_killable(struct mm *mm)
+{
+    if (host_wait_held(mm, 1)) {
+        return -EINTR;
+    }
+    host_take(mm, 0);
+    return 0;
 }
 
 /** Take `mm`'s regions' lock to read if that needs no wait: always 1. */
@@ -101,6 +148,17 @@ void mmap_write_lock(struct mm *mm)
         }
     }
     host_take(mm, 1);
+}
+
+/** Take `mm`'s regions' lock to write, as `mmap_write_lock`: 0, or -EINTR
+ * with no hold when SIGKILL ended the wait for `host_write_held`'s. */
+int mmap_write_lock_killable(struct mm *mm)
+{
+    if (host_wait_held(mm, 1)) {
+        return -EINTR;
+    }
+    mmap_write_lock(mm);
+    return 0;
 }
 
 /** Take `mm`'s regions' lock to write if that needs no wait: 0 under a
@@ -192,6 +250,23 @@ void mm_read_begin(struct mm *mm)
         host_read_begin(mm);
     }
     mmap_read_lock(mm);
+}
+
+/** `mm_read_begin` with the killable take: 0, or -EINTR after
+ * `host_read_end`, where the row gives the walk's count back, as mm.c puts
+ * it. */
+int mm_read_begin_killable(struct mm *mm)
+{
+    if (host_read_begin) {
+        host_read_begin(mm);
+    }
+    if (mmap_read_lock_killable(mm) != 0) {
+        if (host_read_end) {
+            host_read_end(mm);
+        }
+        return -EINTR;
+    }
+    return 0;
 }
 
 /** End what `mm_read_begin` began, then run `host_read_end`. */

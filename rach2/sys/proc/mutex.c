@@ -550,6 +550,29 @@ void down_read(struct rwsem *s)
     }
 }
 
+/** The wait condition of `down_read_killable`: no writer holds or waits for
+ * `arg`, or the caller has SIGKILL pending. */
+static int rwsem_readable_or_killed(void *arg)
+{
+    return rwsem_readable(arg) || mutex_killed();
+}
+
+/** A reader that SIGKILL ends leaves no trace in `s`: a waiting reader is
+ * not counted, so no other waiter needs a wake. */
+int down_read_killable(struct rwsem *s)
+{
+    DEP_ACQUIRE(&s->dep);
+    while (!read_take(s)) {
+        if (mutex_killed()) {
+            DEP_RELEASE(&s->dep);
+            return -EINTR;
+        }
+        (void)wq_wait_event_killable(&s->wq, rwsem_readable_or_killed, s,
+                                     "rwsem_down_read_slowpath");
+    }
+    return 0;
+}
+
 /** Take `s` to write if nobody holds it, keeping RWSEM_WAITING as it is:
  * 1 when taken. */
 static int write_take(struct rwsem *s)

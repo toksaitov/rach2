@@ -9,7 +9,9 @@
  * overlapping range; the search by address and the test of overlap; the
  * four cases of munmap (full cover, left trim, right trim, middle split);
  * the growth of a stack; node allocation past what it starts with; the
- * merging of neighbours; mprotect's splits and merges, the charge
+ * merging of neighbours; mprotect's and mlock's splits and merges, with
+ * the bytes of all the regions, of each type and of the locked ones kept
+ * beside them and checked against a walk after each change; the charge
  * (VM_PROT_ACCOUNT) a private region takes when mprotect first makes it
  * writable and keeps after once a page of it was written (`anon`), or
  * loses when anonymous memory never written stops being writable, `anon`
@@ -26,8 +28,8 @@
  * mmap's MAP_FIXED makes it, a removal of a mapped range and the insertion
  * of a new region there, against another thread that comes in while the
  * pages go: a fault at an address of the range, which must find a region
- * there, and a reader of /proc/PID/status, which must find the address
- * space's size unchanged. The other thread takes the regions' lock to read
+ * there, and a reader of /proc/PID/maps, which must find the regions'
+ * bytes unchanged. The other thread takes the regions' lock to read
  * as the fault and the reader do, and a model of the lock makes it wait
  * for a writer, running it when the writer lets go. With the big lock
  * taken out of a change and no regions' lock in its place, the other
@@ -335,13 +337,15 @@ static unsigned int tree_height(const vma_t *r, const vma_t *parent)
     return 1 + (l > h ? l : h);
 }
 
-/** Check ordered links, the cached byte count and a logarithmic tree height. */
+/** Check ordered links, the cached byte counts, the whole, of each type and
+ * of the locked regions, and a logarithmic tree height. */
 static void tree_check(vm_space_t *vm)
 {
     const vma_t *r, *prev = NULL;
-    uintptr_t total = 0;
+    uintptr_t total = 0, locked = 0, types[VM_TYPES] = {0};
     uint32_t count = 0, n = vm->count;
     unsigned int bound = 0;
+    int type;
 
     for (r = vm_first(vm); r; r = vm_next(r)) {
         CHECK(r->prev == prev);
@@ -349,8 +353,15 @@ static void tree_check(vm_space_t *vm)
         CHECK(vm_find(vm, r->start) == r);
         CHECK(vm_find(vm, r->end - 1) == r);
         total += r->end - r->start;
+        types[r->type] += r->end - r->start;
+        if (r->prot & VM_PROT_LOCKED) {
+            locked += r->end - r->start;
+        }
         count++;
         prev = r;
+    }
+    for (type = 0; type < VM_TYPES; type++) {
+        CHECK(types[type] == vm_type_total(vm, (vm_type_t)type));
     }
     while (n) {
         bound += 2;
@@ -358,6 +369,7 @@ static void tree_check(vm_space_t *vm)
     }
     CHECK(tree_height(vm->root, NULL) <= bound);
     CHECK(count == vm->count && total == vm_total(vm) && prev == vm->last);
+    CHECK(locked == vm_locked(vm));
 }
 
 /** Insert in descending and permuted order, split and merge the middle,
@@ -389,6 +401,10 @@ static void tree_rows(void)
         at = 0x100000u + j * 4 * PG;
         CHECK(vm_protect(&vm, at + PG, at + 2 * PG, VM_PROT_WRITE) == 0);
         CHECK(vm.count == 258 && vm_total(&vm) == 256 * 3 * PG);
+        tree_check(&vm);
+        CHECK(vm_lock(&vm, at, at + 2 * PG, VM_PROT_LOCKED) == 0 && vm_locked(&vm) == 2 * PG);
+        tree_check(&vm);
+        CHECK(vm_lock(&vm, at, at + 2 * PG, 0) == 0 && vm_locked(&vm) == 0 && vm.count == 258);
         tree_check(&vm);
         CHECK(vm_protect(&vm, at + PG, at + 2 * PG, VM_PROT_READ) == 0);
         CHECK(vm.count == 256 && vm_find(&vm, at) == saved[j]);
@@ -556,6 +572,7 @@ static void run_mapping_edges(void)
         CHECK(vm_insert(&s, 0x200000, 0x201000, VM_PROT_READ | VM_PROT_WRITE, VM_STACK) == 0);
         CHECK(vm_grow_stack(&s, 0x20000 + VM_STACK_GUARD_GAP - PG, 0xFFFFFFFFu) == 0);
         CHECK(vm_grow_stack(&s, 0x20000 + VM_STACK_GUARD_GAP, 0xFFFFFFFFu) == 1);
+        tree_check(&s);
         vm_free(&s);
     }
 }
@@ -681,9 +698,9 @@ static void other_fault(void)
     other_found = vm_find(&space.vm, 0x52000) != NULL;
 }
 
-/** What the other thread does as a reader of /proc/PID/status: the size of
- * the address space, which a replacement of equal length keeps. */
-static void other_status(void)
+/** What the other thread does as a reader of /proc/PID/maps: the bytes of
+ * the regions it walks, which a replacement of equal length keeps. */
+static void other_maps(void)
 {
     other_size = vm_total(&space.vm);
 }
@@ -767,7 +784,7 @@ static void regions_rows(void)
 {
     replace_against(other_fault);
     CHECK(other_found);
-    replace_against(other_status);
+    replace_against(other_maps);
     CHECK(other_size == 0x5000);
 }
 

@@ -577,6 +577,49 @@ int vm_reserve(vm_space_t *vm, uint32_t n)
     return vm_nodes_reserve(vm, n);
 }
 
+/** Count `bytes` more covered by regions of type `type` and protection
+ * `prot` in `vm`. */
+static void vm_grew(vm_space_t *vm, vm_type_t type, uint32_t prot, uintptr_t bytes)
+{
+    vm->total += bytes;
+    vm->type_total[type] += bytes;
+    if (prot & VM_PROT_LOCKED) {
+        vm->locked += bytes;
+    }
+}
+
+/** Count `bytes` fewer covered by regions of type `type` and protection
+ * `prot` in `vm`. */
+static void vm_shrank(vm_space_t *vm, vm_type_t type, uint32_t prot, uintptr_t bytes)
+{
+    vm->total -= bytes;
+    vm->type_total[type] -= bytes;
+    if (prot & VM_PROT_LOCKED) {
+        vm->locked -= bytes;
+    }
+}
+
+/** Give the region `r` of `vm` the protection `prot`, keeping the count of
+ * locked bytes. */
+static void vm_set_prot(vm_space_t *vm, vma_t *r, uint32_t prot)
+{
+    vm_shrank(vm, r->type, r->prot, r->end - r->start);
+    r->prot = prot;
+    vm_grew(vm, r->type, r->prot, r->end - r->start);
+}
+
+/** Count no byte covered by any region of `vm`. */
+static void vm_uncounted(vm_space_t *vm)
+{
+    int type;
+
+    vm->total = 0;
+    vm->locked = 0;
+    for (type = 0; type < VM_TYPES; type++) {
+        vm->type_total[type] = 0;
+    }
+}
+
 /** Insert a region from a reserved node, taking its file reference; its
  * policy is the default. */
 static vma_t *vm_link(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type,
@@ -623,7 +666,7 @@ static vma_t *vm_link(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t p
     }
     *link = r;
     vm->count++;
-    vm->total += end - start;
+    vm_grew(vm, type, prot, end - start);
     vm_file_get(file);
     vm_balance(vm, parent);
     return r;
@@ -665,7 +708,7 @@ static void vm_delete(vm_space_t *vm, vma_t *r, int hold)
         vm->last = r->prev;
     }
     vm->count--;
-    vm->total -= r->end - r->start;
+    vm_shrank(vm, r->type, r->prot, r->end - r->start);
     vm_policy_put(r->policy);
     r->policy = NULL;
     if (hold) {
@@ -690,7 +733,7 @@ static vma_t *vm_split(vm_space_t *vm, vma_t *r, uintptr_t at)
     vma_t *upper;
 
     r->end = at;
-    vm->total -= end - at;
+    vm_shrank(vm, r->type, r->prot, end - at);
     upper = vm_link(vm, at, end, r->prot, r->type, r->file, pgoff);
     upper->policy = vm_policy_get(r->policy);
     upper->anon = r->anon;
@@ -754,7 +797,7 @@ static int vm_merge(vm_space_t *vm, vma_t *r)
         r->anon_forked = s->anon_forked;
     }
     vm_delete(vm, s, 0); /* r holds its file still */
-    vm->total += end - r->end;
+    vm_grew(vm, r->type, r->prot, end - r->end);
     r->end = end;
     return 1;
 }
@@ -820,7 +863,7 @@ void vm_init(vm_space_t *vm)
     }
     vm->root = vm->first = vm->last = NULL;
     vm->count = 0;
-    vm->total = 0;
+    vm_uncounted(vm);
     vm->nguards = 0;
     vm->gap_len = 0;
     vm->heap_start = vm->brk = vm->stack_limit = vm->mmap_base = 0;
@@ -893,7 +936,7 @@ int vm_copy(vm_space_t *dst, const vm_space_t *src)
     dst->guards = NULL;
     dst->nguards = dst->guard_cap = 0;
     dst->count = dst->cap = dst->held = 0;
-    dst->total = 0;
+    vm_uncounted(dst);
     dst->gap_len = 0;
     dst->def_prot = 0;
     if (vm_nodes_reserve(dst, src->count) != 0) {
@@ -1043,7 +1086,7 @@ int vm_detach(vm_space_t *vm, uintptr_t start, uintptr_t end)
         guard_cut(vm, start, end);
         vm_detach_piece(vm, r, start, end);
         (void)vm_split(vm, r, end);
-        vm->total -= r->end - start;
+        vm_shrank(vm, r->type, r->prot, r->end - start);
         r->end = start;
         return 0;
     }
@@ -1059,13 +1102,13 @@ int vm_detach(vm_space_t *vm, uintptr_t start, uintptr_t end)
             vm_delete(vm, r, 1);
         } else if (start <= r->start) {
             vm_detach_piece(vm, r, r->start, end);
-            vm->total -= end - r->start;
+            vm_shrank(vm, r->type, r->prot, end - r->start);
             r->pgoff += (uint32_t)((end - r->start) >> VM_PAGE_SHIFT);
             r->start = end;
             break;
         } else {
             vm_detach_piece(vm, r, start, r->end);
-            vm->total -= r->end - start;
+            vm_shrank(vm, r->type, r->prot, r->end - start);
             r->end = start;
         }
         r = next;
@@ -1180,7 +1223,7 @@ static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t ma
             (void)vm_split(vm, r, end);
         }
         if (!(r->prot & skip)) {
-            r->prot = vm_change_prot(r, mask, bits, opts);
+            vm_set_prot(vm, r, vm_change_prot(r, mask, bits, opts));
         }
     }
     r = first->prev ? first->prev : first;
@@ -1277,7 +1320,7 @@ void vm_lock_all(vm_space_t *vm, uint32_t bits)
 
     for (r = vm->first; r; r = r->next) {
         if (!(r->prot & (VM_PROT_IO | VM_PROT_SECRET))) {
-            r->prot = (r->prot & ~(uint32_t)VM_PROT_LOCKS) | (bits & VM_PROT_LOCKS);
+            vm_set_prot(vm, r, (r->prot & ~(uint32_t)VM_PROT_LOCKS) | (bits & VM_PROT_LOCKS));
         }
     }
     r = vm->first;
@@ -1309,15 +1352,7 @@ uintptr_t vm_locked_in(const vm_space_t *vm, uintptr_t start, uintptr_t end)
 
 uintptr_t vm_locked(const vm_space_t *vm)
 {
-    uintptr_t total = 0;
-    const vma_t *r;
-
-    for (r = vm->first; r; r = r->next) {
-        if (r->prot & VM_PROT_LOCKED) {
-            total += r->end - r->start;
-        }
-    }
-    return total;
+    return vm->locked;
 }
 
 uintptr_t vm_find_free(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t hi)
@@ -1406,6 +1441,11 @@ uintptr_t vm_total(const vm_space_t *vm)
     return vm->total;
 }
 
+uintptr_t vm_type_total(const vm_space_t *vm, vm_type_t type)
+{
+    return vm->type_total[type];
+}
+
 int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
 {
     vma_t *r = vm_lower(vm, page);
@@ -1423,7 +1463,7 @@ int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
     if (vm->total > as_limit || growth > as_limit - vm->total) {
         return 0;
     }
-    vm->total += growth;
+    vm_grew(vm, r->type, r->prot, growth);
     r->start = page;
     r->pgoff -= (uint32_t)(growth >> VM_PAGE_SHIFT);
     return 1;

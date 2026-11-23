@@ -1466,6 +1466,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "rwsem_kill",
+          "checks": "tests/host/rwsem_kill_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "sb16",
           "checks": "tests/host/sb16_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

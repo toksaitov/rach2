@@ -847,10 +847,13 @@ void paging_user_count(struct mm *mm, uintptr_t start, uintptr_t end, unsigned l
 
 struct mm;
 
-/* The flags of `paging_access`: a write, not a read; and Linux's FOLL_FORCE,
- * which ptrace and /proc/PID/mem give and nothing else. */
-#define PAGING_ACCESS_WRITE 1
-#define PAGING_ACCESS_FORCE 2
+/* The flags of `paging_access`: a write, not a read; Linux's FOLL_FORCE,
+ * which ptrace and /proc/PID/mem give and nothing else; and a wait for the
+ * regions' lock that SIGKILL ends, as access_remote_vm's, which /proc's
+ * readers of another process's memory give. */
+#define PAGING_ACCESS_WRITE    1
+#define PAGING_ACCESS_FORCE    2
+#define PAGING_ACCESS_KILLABLE 4
 
 /**
  * Read or write `len` bytes at `addr` of the address space `mm`, which need
@@ -867,6 +870,13 @@ struct mm;
  * Returns 0, -EIO, or -ENOMEM when no temporary mapping was free. It may
  * sleep, bringing a page in or releasing a file a region let go of
  * meanwhile, and looks each page up again after a sleep.
+ *
+ * With PAGING_ACCESS_KILLABLE, as Linux's access_remote_vm and
+ * __get_user_pages (mm/gup.c), SIGKILL ends every wait for `mm`'s regions'
+ * lock, the first and each take again after a fill, a balance or a stack's
+ * growth let it go, and a SIGKILL pending before a page, or before a take
+ * again, ends the access there: -EINTR, the pages before it read or
+ * written. Without the flag each wait is for the lock alone.
  */
 int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int flags);
 
