@@ -87,6 +87,7 @@
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/statfs.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
@@ -1172,24 +1173,35 @@ static int ext2_aligned(int fd)
 
 /**
  * Check that msync of `m`, a shared mapping of two pages of `fd`, a file on
- * ext2, succeeds, and then that a store in it is written back by a sync(2)
- * from a child in a mount namespace of its own that binds the file's
- * directory over itself and remounts the bind read-only, as a sandbox seals
- * what it sees: the seal is the bind's alone, and the write-back judges the
- * file system, so msync and fsync then succeed here and pread finds the
- * byte. Returns 0 with the first row reported, or 1 once the failure is
- * reported.
+ * ext2, succeeds, and then that a store in a third page, a hole the file
+ * grows by, is written back by a sync(2) from a child in a mount namespace
+ * of its own that binds the file's directory over itself and remounts the
+ * bind read-only, as a sandbox seals what it sees: the seal is the bind's
+ * alone, and the write-back judges the file system. The write-back gives
+ * the hole its blocks, as Linux's ext2 does at writepage, so the file's
+ * st_blocks grows before anything here writes back; pread then finds the
+ * byte and msync and fsync succeed. The file is cut back to its two pages.
+ * Returns 0 with the first row reported, or 1 once the failure is reported.
  */
 static int ext2_synced(int fd, char *m)
 {
+    struct stat before, after;
+    char *h = MAP_FAILED;
     char c = 0;
     pid_t pid;
+    int rc = 0;
 
+    memset(&after, 0, sizeof(after));
     if (msync(m, 2 * PAGE, MS_SYNC) != 0) {
         return fail("msync of a shared mapping of a file on the root");
     }
     row_held();
-    m[300] = 'V';
+    if (ftruncate(fd, 3 * PAGE) != 0 || fstat(fd, &before) != 0 ||
+        (h = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 2 * PAGE)) == MAP_FAILED) {
+        rc = fail("grow a file on the root by a hole and map it shared");
+        goto out;
+    }
+    h[300] = 'V';
     pid = fork();
     if (pid == 0) {
         if (unshare(CLONE_NEWNS) != 0 || mount("/tmp", "/tmp", NULL, MS_BIND, NULL) != 0 ||
@@ -1199,13 +1211,26 @@ static int ext2_synced(int fd, char *m)
         sync();
         _exit(0);
     }
-    if (!wait_ok(pid) || msync(m, 2 * PAGE, MS_SYNC) != 0 || fsync(fd) != 0 ||
-        pread(fd, &c, 1, 300) != 1 || c != 'V') {
-        return fail("a sync in a mount namespace that sealed a private bind read-only did not "
-                    "write back another namespace's store in a shared mapping of a file on the "
-                    "root");
+    if (!wait_ok(pid) || fstat(fd, &after) != 0 || after.st_blocks <= before.st_blocks ||
+        pread(fd, &c, 1, 2 * PAGE + 300) != 1 || c != 'V' || msync(h, PAGE, MS_SYNC) != 0 ||
+        fsync(fd) != 0) {
+        int err = errno;
+
+        printf("mapmusl: st_blocks %ld before the sync, %ld after\n", (long)before.st_blocks,
+               (long)after.st_blocks);
+        errno = err;
+        rc = fail("a sync in a mount namespace that sealed a private bind read-only did not "
+                  "write back another namespace's store in a shared mapping of a file on the "
+                  "root");
     }
-    return 0;
+out:
+    if (h != MAP_FAILED) {
+        munmap(h, PAGE);
+    }
+    if (ftruncate(fd, 2 * PAGE) != 0 && rc == 0) {
+        rc = fail("cut a file on the root back to two pages");
+    }
+    return rc;
 }
 
 /**
