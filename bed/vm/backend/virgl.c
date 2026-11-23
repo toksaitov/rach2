@@ -112,6 +112,12 @@ struct vr {
     char own[OWN_CLIENTS][80];
     uint32_t nown;
     int own_unknown;
+    /* The drm-client-id of a DRM file opened just after that reading, or
+     * 0 when no DRM node gives one (`client_mark`): Linux numbers every
+     * DRM file from one counter as it opens, so a client of this process
+     * with a smaller ID was open at the start, and one the start's reading
+     * missed (`own_learn`). */
+    uint64_t own_mark;
 };
 
 static void own_clients(struct vr *r);
@@ -516,12 +522,24 @@ static int op_transfer(void *c, const struct vd_transfer *t)
         t->id, t->ctx, t->level, t->stride, t->layer_stride, VIRGL_BOX(&box), t->offset, 0, 0));
 }
 
-/** Create a blob resource: guest memory in the region, or a context's. */
+/**
+ * Create a blob resource: guest memory in the region, or a context's. A
+ * blob of a context's memory is charged to the account at its size,
+ * rounded up to a page, as a create is (`admit_add`), so that the
+ * judgments until the account's next reading count it: the context made
+ * its storage at a submission or in Venus's workers, after that reading
+ * perhaps, and it may have no pages yet. It is not judged, since the
+ * storage exists already and a refusal would free none of it. One the
+ * ledger has no place for is refused with ERR_OUT_OF_MEMORY, as a create
+ * is.
+ */
 static int op_blob(void *c, const struct vd_blob *a, struct iovec *iov, uint32_t n)
 {
     struct virgl_renderer_resource_create_blob_args args;
+    struct vr *r = c;
+    uint64_t bytes;
+    int err;
 
-    (void)c;
     memset(&args, 0, sizeof(args));
     args.res_handle = a->id;
     args.ctx_id = a->ctx;
@@ -531,7 +549,20 @@ static int op_blob(void *c, const struct vd_blob *a, struct iovec *iov, uint32_t
     args.size = a->size;
     args.iovecs = iov;
     args.num_iovs = n;
-    return resp(virgl_renderer_resource_create_blob(&args));
+    if ((err = virgl_renderer_resource_create_blob(&args)) != 0) {
+        return resp(err);
+    }
+    if (a->mem == VIRGL_RENDERER_BLOB_MEM_GUEST) {
+        return 0;
+    }
+    bytes = a->size > UINT64_MAX - 4095u ? UINT64_MAX : (a->size + 4095u) & ~(uint64_t)4095u;
+    if (admit_add(r, a->id, bytes) != 0) {
+        virgl_renderer_resource_unref(a->id);
+        fprintf(stderr, "backend: blob: resource %u: refused: the account's ledger is full\n",
+                (unsigned)a->id);
+        return VD_RESP_ERR_OUT_OF_MEMORY;
+    }
+    return 0;
 }
 
 /** Return the slot of Venus context ctx, or of a free one for ctx 0;
@@ -885,6 +916,7 @@ static int op_pages(void *c, struct vd_pages *q)
 /* A DRM client that a scan counted, by its ID. */
 struct gpu_client {
     char key[80];   /* "drm-pdev drm-client-id" */
+    uint64_t id;    /* its drm-client-id */
     uint64_t bytes; /* the largest figure its descriptors gave */
 };
 
@@ -923,7 +955,8 @@ static void scan_fail(struct gpu_scan *s, const char *path, int err)
  * later one holds those made since. A client's place is made with realloc;
  * its failure fails s at path with ENOMEM.
  */
-static void client_count(struct gpu_scan *s, const char *path, const char *key, uint64_t bytes)
+static void client_count(struct gpu_scan *s, const char *path, const char *key, uint64_t id,
+                         uint64_t bytes)
 {
     size_t i;
 
@@ -948,6 +981,7 @@ static void client_count(struct gpu_scan *s, const char *path, const char *key, 
         s->cap = cap;
     }
     snprintf(s->seen[s->nseen].key, sizeof(s->seen[s->nseen].key), "%s", key);
+    s->seen[s->nseen].id = id;
     s->seen[s->nseen++].bytes = bytes;
     s->sum += bytes;
 }
@@ -1028,7 +1062,7 @@ static void unbacked_of(const char *path, struct gpu_scan *s)
         return;
     }
     snprintf(key, sizeof(key), "%s %llu", pdev, id);
-    client_count(s, path, key, bytes);
+    client_count(s, path, key, id, bytes);
 }
 
 /**
@@ -1161,16 +1195,96 @@ static int gpu_unbacked(struct gpu_scan *s)
 }
 
 /**
+ * Set *id to the drm-client-id that fdinfo file `path` gives, or to 0 when
+ * it gives none. Returns 0, or -1 when the file cannot be opened or read.
+ */
+static int client_id_of(const char *path, uint64_t *id)
+{
+    unsigned long long n = 0;
+    char line[160];
+    FILE *f = fopen(path, "r");
+    int bad;
+
+    *id = 0;
+    if (f == 0) {
+        return -1;
+    }
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "drm-client-id:", 14) == 0 && sscanf(line + 14, "%llu", &n) == 1) {
+            *id = n;
+            break;
+        }
+    }
+    bad = ferror(f);
+    fclose(f);
+    return bad ? -1 : 0;
+}
+
+/**
+ * Open a DRM file of its own and close it again, to read the client ID
+ * Linux gives it (drm_file_alloc numbers every DRM file of every device
+ * from one counter as it opens), which is larger than the ID of every DRM
+ * file open before. Render nodes are tried first and the card nodes after
+ * them, since a card node's first opener is its master while it is open.
+ * Sets *mark to that ID and returns 0. Sets it to 0 and returns 0 when
+ * /dev/dri holds no DRM node, or when every node opens and none gives an
+ * ID, since only a driver's own fdinfo gives one (drm_show_fdinfo), as
+ * i915's does and vkms's does not, and no reading then names a client or
+ * counts a figure. Returns -1 when no node gives an ID and one cannot be
+ * opened or its fdinfo read.
+ */
+static int client_mark(uint64_t *mark)
+{
+    static const char *const kinds[] = {"renderD", "card"};
+    char path[300], info[64];
+    struct dirent *e;
+    struct stat st;
+    unsigned int k;
+    int fd, failed = 0;
+    DIR *dir;
+
+    *mark = 0;
+    for (k = 0; k < sizeof(kinds) / sizeof(kinds[0]) && *mark == 0; k++) {
+        if ((dir = opendir("/dev/dri")) == 0) {
+            return errno == ENOENT ? 0 : -1;
+        }
+        while (*mark == 0 && (e = readdir(dir)) != 0) {
+            if (strncmp(e->d_name, kinds[k], strlen(kinds[k])) != 0) {
+                continue;
+            }
+            snprintf(path, sizeof(path), "/dev/dri/%s", e->d_name);
+            if ((fd = open(path, O_RDWR | O_CLOEXEC | O_NOCTTY)) < 0) {
+                failed = 1;
+                continue;
+            }
+            if (fstat(fd, &st) != 0) {
+                failed = 1;
+            } else if (S_ISCHR(st.st_mode) && major(st.st_rdev) == DRM_MAJOR) {
+                snprintf(info, sizeof(info), "/proc/self/fdinfo/%d", fd);
+                failed |= client_id_of(info, mark) != 0;
+            }
+            close(fd);
+        }
+        closedir(dir);
+    }
+    return *mark == 0 && failed ? -1 : 0;
+}
+
+/**
  * Name in r->own the DRM clients of this process that the renderer just
  * started holds: vrend's and Mesa's, which virgl_renderer_init opens and
  * which stay open until virgl_renderer_cleanup, and GBM's, open for the
  * backend's life. Every resource a create makes takes its storage through
  * one of them. Clients opened later, a native context's or the probe's
  * Vulkan, are not named, since none holds a create's storage and one that
- * closes would make every later reading count the ledger. A reading that
- * fails, names more than OWN_CLIENTS or reads a figure with no client ID
- * sets r->own_unknown, so that every judgment of the epoch counts the
- * ledger (`ledger_held`).
+ * closes would make every later reading count the ledger. Then the mark
+ * is taken (`client_mark`): a client of this process that a later reading
+ * reads with an ID below it was open at the start, and missed by this
+ * reading if not named, as when another thread moved its descriptor
+ * across the walk, and the later reading names it (`own_learn`). A
+ * reading that fails, names more than OWN_CLIENTS or reads a figure with
+ * no client ID, or a mark that cannot be taken, sets r->own_unknown, so
+ * that every judgment of the epoch counts the ledger (`ledger_held`).
  */
 static void own_clients(struct vr *r)
 {
@@ -1179,7 +1293,8 @@ static void own_clients(struct vr *r)
 
     memset(&s, 0, sizeof(s));
     scan_fds(&s, (long)getpid());
-    r->own_unknown = s.failed != 0 || s.anon != 0 || s.nseen > OWN_CLIENTS;
+    r->own_unknown =
+        s.failed != 0 || s.anon != 0 || s.nseen > OWN_CLIENTS || client_mark(&r->own_mark) != 0;
     r->nown = 0;
     for (i = 0; i < s.nseen && i < OWN_CLIENTS; i++) {
         snprintf(r->own[r->nown++], sizeof(r->own[0]), "%s", s.seen[i].key);
@@ -1188,6 +1303,44 @@ static void own_clients(struct vr *r)
     if (r->own_unknown) {
         fprintf(stderr, "backend: counts: the renderer's clients are not all named: "
                         "every create is counted at its bound\n");
+    }
+}
+
+/**
+ * Name in r->own each client of this process that reading s read, that
+ * the start's reading did not name and whose ID is below the start's mark
+ * (`client_mark`): it was open at the start, and the start's reading
+ * missed it, so that a later reading that misses it counts the ledger
+ * (`ledger_held`). A client opened since, a native context's or the
+ * probe's, is above the mark and stays unnamed. One more than OWN_CLIENTS
+ * hold sets r->own_unknown. Each name added is printed, since a reading
+ * misses a client only when another thread moves its descriptor.
+ */
+static void own_learn(struct vr *r, const struct gpu_scan *s)
+{
+    uint32_t i;
+    size_t j;
+
+    for (j = 0; j < s->nown && !r->own_unknown; j++) {
+        if (s->seen[j].id >= r->own_mark) {
+            continue;
+        }
+        for (i = 0; i < r->nown && strcmp(r->own[i], s->seen[j].key) != 0; i++) {
+        }
+        if (i < r->nown) {
+            continue;
+        }
+        if (r->nown == OWN_CLIENTS) {
+            r->own_unknown = 1;
+            fprintf(stderr, "backend: counts: the renderer's clients are not all named: "
+                            "every create is counted at its bound\n");
+            break;
+        }
+        snprintf(r->own[r->nown++], sizeof(r->own[0]), "%s", s->seen[j].key);
+        fprintf(stderr,
+                "backend: counts: client %s of the renderer's start, missed then, "
+                "is named\n",
+                s->seen[j].key);
     }
 }
 
@@ -1315,6 +1468,7 @@ static int mem_read(struct vr *r)
         free(scan.seen);
         return -1;
     }
+    own_learn(r, &scan);
     r->read_sum = scan.sum + ledger_held(r, &scan);
     free(scan.seen);
     r->have_reading = 1;
@@ -1339,12 +1493,15 @@ static int mem_read(struct vr *r)
  * bounds of the creates admitted since (`since`), which the reading does
  * not hold; MemAvailable is read at each judgment, after the objects, so
  * that one made resident since the reading is counted twice, which refuses
- * early, and never not at all. A judgment that would leave less room than
- * another eighth of the VM's memory, the margin, or would refuse, reads
- * the objects afresh and judges again, since the renderer makes GPU
- * objects by other paths too, at submissions, blob creates and in Venus's
- * workers, which only a new reading counts: the margin holds those made
- * since the last reading. The first judgment of an epoch reads them too.
+ * early, and never not at all; a blob of a context's memory is charged to
+ * `since` at its creation too (`op_blob`). A judgment that would leave
+ * less room than another eighth of the VM's memory, the margin, or would
+ * refuse, reads the objects afresh and judges again, since the renderer
+ * also makes GPU objects that no command it serves names, at submissions
+ * and in Venus's workers, which only a new reading counts. The margin is
+ * no bound on those: nothing limits what they make between two readings,
+ * as on Linux, where i915 judges none of them. The first judgment of an
+ * epoch reads them too.
  * main has the C library give back at once what llvmpipe frees. 0 when
  * the objects cannot be read (`mem_read`); 1 when the VM has no
  * /proc/meminfo or it lacks either count; 0 when it cannot be opened for
