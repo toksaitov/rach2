@@ -284,7 +284,7 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
     off.limits.max_queue = 256;
     off.features = (1ULL << VD_F_VIRGL) | (1ULL << VD_F_EDID) | (1ULL << VD_F_BLOB) |
                    (1ULL << VD_F_CONTEXT_INIT);
-    off.transport_features = VGS_TF_DOORBELL | VGS_TF_PAGES | VGS_TF_BACKING;
+    off.transport_features = VGS_TF_DOORBELL | VGS_TF_PAGES | VGS_TF_BACKING | VGS_TF_PARTS;
     off.peer = 1;
     off.num_scanouts = 1;
     off.num_capsets = 2;

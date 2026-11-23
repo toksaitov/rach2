@@ -160,10 +160,20 @@ static void res_clear(struct vd_res *r)
     memset(r, 0, sizeof(*r));
 }
 
+/** Drop the stream being joined from parts, if any. */
+static void join_drop(struct vd *d)
+{
+    free(d->join);
+    d->join = 0;
+    d->join_len = d->join_total = 0;
+    d->join_err = d->join_ctx = 0;
+    d->join_open = 0;
+}
+
 /**
  * End every object of the old epoch, in the renderer and the table, drop
- * the fenced commands of its queues, and write the offer for the driver's
- * new epoch, every field before the state.
+ * the fenced commands of its queues and a stream half joined, and write the
+ * offer for the driver's new epoch, every field before the state.
  */
 static void offer(struct vd *d, const struct vgs_driver *drv)
 {
@@ -171,6 +181,7 @@ static void offer(struct vd *d, const struct vgs_driver *drv)
     uint32_t i;
 
     d->ops->reset(d->cookie);
+    join_drop(d);
     for (i = 0; i < VD_OBJS; i++) {
         res_clear(&d->res[i]);
     }
@@ -244,6 +255,7 @@ void vd_fini(struct vd *d)
     for (i = 0; i < VD_OBJS; i++) {
         res_clear(&d->res[i]);
     }
+    join_drop(d);
     free(d->cmd);
     d->cmd = 0;
 }
@@ -696,14 +708,93 @@ static int cmd_ctx_resource(struct vd *d, const struct vd_hdr *h, const uint8_t 
     return 0;
 }
 
-/** SUBMIT_3D: whole dwords that follow the body, in the private copy. */
+/**
+ * VGS_CMD_PART: the next bytes of the stream a SUBMIT_3D takes whole, under
+ * VGS_TF_PARTS (vgpushm.h), copied after those before it. A part at offset
+ * 0 begins a stream, dropping one not submitted, and allocates the whole
+ * stream; a later part must follow the one before it. A part refused
+ * breaks the stream: the rest are refused alike, and so is its SUBMIT_3D.
+ * Returns 0 or the refusal: ERR_OUT_OF_MEMORY when the VM has no memory for
+ * the stream, ERR_PARAMETER for a part out of order or no stream begun.
+ */
+static int cmd_part(struct vd *d, const struct vd_hdr *h, const uint8_t *body, uint32_t blen)
+{
+    struct vgs_part p;
+    uint64_t n = blen - sizeof(p);
+
+    if ((d->drv.transport_features & VGS_TF_PARTS) == 0) {
+        return VD_RESP_ERR_UNSPEC;
+    }
+    memcpy(&p, body, sizeof(p));
+    if (p.offset == 0) {
+        join_drop(d);
+        d->join_open = 1;
+        d->join_total = p.total;
+        d->join_ctx = h->ctx_id;
+        if (p.total == 0 || p.total > UINT32_MAX) {
+            d->join_err = VD_RESP_ERR_PARAMETER;
+        } else if ((d->join = malloc((size_t)p.total)) == 0) {
+            fprintf(stderr, "backend: part: refused: %llu bytes: no memory for the stream\n",
+                    (unsigned long long)p.total);
+            d->join_err = VD_RESP_ERR_OUT_OF_MEMORY;
+        }
+    }
+    if (!d->join_open) {
+        return VD_RESP_ERR_PARAMETER;
+    }
+    if (d->join_err != 0) {
+        return (int)d->join_err;
+    }
+    if (p.offset != d->join_len || p.total != d->join_total || h->ctx_id != d->join_ctx ||
+        n > p.total - p.offset) {
+        d->join_err = VD_RESP_ERR_PARAMETER;
+        return VD_RESP_ERR_PARAMETER;
+    }
+    memcpy(d->join + d->join_len, body + sizeof(p), (size_t)n);
+    d->join_len += n;
+    return 0;
+}
+
+/**
+ * SUBMIT_3D with VGS_FLAG_JOINED: the stream its parts carried, whole, in
+ * its context, and nothing after its body; the stream is dropped either
+ * way. Returns the renderer's answer, or the refusal of a broken stream,
+ * ERR_PARAMETER for one never begun, short or of another size or context.
+ */
+static int submit_joined(struct vd *d, const struct vd_hdr *h, const struct c_submit *c,
+                         uint32_t blen)
+{
+    int err;
+
+    if ((d->drv.transport_features & VGS_TF_PARTS) == 0 || !d->join_open) {
+        err = VD_RESP_ERR_PARAMETER;
+    } else if (d->join_err != 0) {
+        err = (int)d->join_err;
+    } else if (blen != sizeof(*c) || c->size % 4 != 0 || c->size != d->join_total ||
+               d->join_len != d->join_total || h->ctx_id != d->join_ctx) {
+        err = VD_RESP_ERR_PARAMETER;
+    } else {
+        err = d->ops->submit(d->cookie, h->ctx_id, d->join, c->size);
+    }
+    join_drop(d);
+    return err;
+}
+
+/** SUBMIT_3D: whole dwords that follow the body, in the private copy, or
+ * the stream joined from parts. */
 static int cmd_submit(struct vd *d, const struct vd_hdr *h, uint8_t *body, uint32_t blen)
 {
     struct c_submit c;
 
     memcpy(&c, body, sizeof(c));
     if (!ctx_live(d, h->ctx_id)) {
+        if (h->flags & VGS_FLAG_JOINED) {
+            join_drop(d);
+        }
         return VD_RESP_ERR_CONTEXT_ID;
+    }
+    if (h->flags & VGS_FLAG_JOINED) {
+        return submit_joined(d, h, &c, blen);
     }
     if (c.size > blen - sizeof(c) || c.size % 4 != 0) {
         return VD_RESP_ERR_PARAMETER;
@@ -978,6 +1069,8 @@ static long body_size(uint32_t type)
         return sizeof(struct c_map_blob);
     case VGS_CMD_BACKING:
         return sizeof(struct vgs_backing);
+    case VGS_CMD_PART:
+        return sizeof(struct vgs_part);
     default:
         return -1;
     }
@@ -1035,6 +1128,9 @@ static uint32_t run_nodata(struct vd *d, const struct vd_hdr *h, uint8_t *body, 
         break;
     case CMD_RESOURCE_UNMAP_BLOB:
         err = cmd_unmap_blob(d, body);
+        break;
+    case VGS_CMD_PART:
+        err = cmd_part(d, h, body, blen);
         break;
     default:
         err = VD_RESP_ERR_UNSPEC;
@@ -1149,8 +1245,11 @@ static int hold(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_chain
 }
 
 /**
- * Answer a command: at once, or, for a fenced command that succeeded,
- * once the renderer retires its fence on the timeline the header names.
+ * Answer a command: at once, or, for a fenced command answered with a bare
+ * header, once the renderer retires its fence on the timeline the header
+ * names. A refusal waits so too: the driver retires every earlier fence of
+ * the timeline with the answer, as Linux's virtio_gpu_fence_event_process
+ * does, and the renderer's work behind them may still be pending.
  */
 static void answer(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_chain *c,
                    uint32_t type, uint32_t len)
@@ -1178,8 +1277,8 @@ static void answer(struct vd *d, uint32_t qi, uint32_t head, const struct vgs_ch
     memcpy(d->resp, &o, sizeof(o));
     if (h.flags & VD_FLAG_FENCE) {
         per_ctx = (h.flags & VD_FLAG_INFO_RING_IDX) != 0;
-        if (type == VD_RESP_OK_NODATA && (!per_ctx || ctx_live(d, h.ctx_id)) &&
-            hold(d, qi, head, c, &h, d->resp) == 0) {
+        if ((type == VD_RESP_OK_NODATA || type >= VD_RESP_ERR_UNSPEC) &&
+            (!per_ctx || ctx_live(d, h.ctx_id)) && hold(d, qi, head, c, &h, d->resp) == 0) {
             d->n.fenced++;
             if (d->ops->fence(d->cookie, per_ctx ? h.ctx_id : 0, per_ctx, h.ring_idx, h.fence_id) ==
                 0) {
@@ -1361,6 +1460,12 @@ static int serve(struct vd *d, uint32_t qi)
             memcpy(&type, d->cmd, sizeof(type));
             fprintf(stderr, "backend: command 0x%x: refused: %u bytes: no memory for its copy\n",
                     (unsigned)type, (unsigned)c.rbytes);
+            if (type == VGS_CMD_PART) {
+                /* The stream lacks this part: its SUBMIT_3D is refused. */
+                join_drop(d);
+                d->join_open = 1;
+                d->join_err = VD_RESP_ERR_OUT_OF_MEMORY;
+            }
             memset(d->resp, 0, sizeof(struct vd_hdr));
             answer(d, qi, head, &c, VD_RESP_ERR_OUT_OF_MEMORY, sizeof(struct vd_hdr));
             continue;
