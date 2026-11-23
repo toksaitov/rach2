@@ -463,6 +463,14 @@ void wq_wake_all(wait_queue_t *wq)
     check(!reader || !reader->busy, "wake follows description release");
 }
 
+/** Report a sleeper as possible, so that the give always reaches the
+ * checked wake, as it did before it learned to skip an empty queue. */
+int wq_active(const wait_queue_t *wq)
+{
+    (void)wq;
+    return 1;
+}
+
 /** No row opens a pidfd, so a freed record has none to wake. */
 void pidfd_id_gone(process_t *p)
 {
