@@ -1195,7 +1195,6 @@ static void admission_rows(void)
     k_memset(&st, 0, sizeof(st));
     k_memset(&h, 0, sizeof(h));
     h.node = &file;
-    h.cursor = ~0u;
     lock_held_elsewhere();
     check(admit_fallocate(&mount, &h, 0, 0, 4096) == 0 && writers_at_wait == 0,
           "a fallocate sleeps on the file's lock before admission");

@@ -108,8 +108,8 @@ int ext2_batch_pending(const struct ext2_mount *em)
 /** Whether the file-write batch holds node `n`, whose pending pieces may
  * name blocks a free of `n` would give up, read without the batch's locks:
  * the caller holds `n`'s lock, under which alone `n` joins the batch, so a
- * 1 holds until a drain, and a drain under way meanwhile makes a 1 only a
- * drain too many. */
+ * 1 holds until a drain. The array and count are also stable under
+ * `wb->lock` or `em->batch`. */
 int ext2_writeback_holds(const struct ext2_mount *em, const struct ext2_node *n)
 {
     int i;
@@ -1083,9 +1083,10 @@ static int drain_enter(struct ext2_mount *em, int killable)
  * balanced after the lock goes (`drain_release`). A removed device fails at
  * once, also with nothing in the batch. The drain runs with or without the
  * big lock, which the cache's write side does not need (bcache.h). The
- * caller holds no `em->batch`. 0, or -errno.
+ * caller holds no `em->batch`. When `node` is given, the batch must still
+ * hold it after taking the lock. 0, or -errno.
  */
-int ext2_writeback_drain(struct ext2_mount *em)
+static int writeback_drain(struct ext2_mount *em, const struct ext2_node *node)
 {
     struct ext2_node *held[EXT2_WB_NODES];
     int count, rc;
@@ -1097,10 +1098,40 @@ int ext2_writeback_drain(struct ext2_mount *em)
     if (rc != 0) {
         return rc;
     }
+    if (node && !ext2_writeback_holds(em, node)) {
+        ext2_batch_unlock(em);
+        return 0;
+    }
     rc = drain_stages(em, held, &count);
     ext2_batch_unlock(em);
     drain_release(em, held, count);
     return rc;
+}
+
+/** Drain the mount's file-write batch. Returns 0 or a negative errno. */
+int ext2_writeback_drain(struct ext2_mount *em)
+{
+    return writeback_drain(em, NULL);
+}
+
+/** Drain a batch that holds `node` when an open description releases it.
+ * The description keeps the node alive. The membership check takes only
+ * the lists' spinlock, so an unrelated batch need not finish first.
+ * A removed device still reports its error. */
+void ext2_writeback_close(struct ext2_mount *em, const struct ext2_node *node)
+{
+    struct ext2_writeback *wb = em->wb;
+    uint32_t flags;
+    int held = 0;
+
+    if (wb && ext2_batch_pending(em)) {
+        flags = spin_lock_irqsave(&wb->lock);
+        held = ext2_writeback_holds(em, node);
+        spin_unlock_irqrestore(&wb->lock, flags);
+    }
+    if (held || (em->dev->flags & BLOCK_GONE)) {
+        (void)writeback_drain(em, node);
+    }
 }
 
 /**

@@ -427,14 +427,16 @@ static int dir_realign(struct ext2_mount *em, struct ext2_node *d, uint32_t *cur
  */
 int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent)
 {
-    struct ext2_handle *h = handle;
-    struct ext2_node *d = h->node;
+    struct ext2_handle *file = handle;
+    struct ext2_dir_handle *h;
+    struct ext2_node *d = file->node;
     struct ext2_mount *em = ext2_em_of(mnt);
     int rc, unread = 0;
 
     if ((d->mode & S_IFMT_) != S_IFDIR_) {
         return -ENOTDIR;
     }
+    h = handle;
     ext2_node_lock(d);
     rc = d->fenced ? -EIO : d->unlinked ? -ENOENT : 0;
     if (rc == 0 && (h->dir_version != d->dir_version || h->cursor != *cursor)) {

@@ -4294,8 +4294,7 @@ extern int bkl_host_free;
 extern int bkl_host_takes;
 
 /** How many of the names "busy" and "quiet" a listing of the directory
- * open at `h` finds, from its first entry; -1 for an error. The description
- * stays open, since its release drains the batch. */
+ * open at `h` finds, from its first entry; -1 for an error. */
 static int listing(void *h)
 {
     struct vfs_dirent de;
@@ -4315,15 +4314,15 @@ static int listing(void *h)
  * another description's write waits in the batch, a read and a listing
  * take no lock but the batch's own and read the pending bytes from its
  * images, a hold that is not the last is dropped without it
- * (`ext2_put_unless_last`), and a release drains the batch into the cache
- * without it too (`ext2_writeback_drain`), the cache's write side having a
- * lock of its own. Once the batch is empty a read, a listing and a release
- * take it never, and a last put takes it once (`ext2_put`).
+ * (`ext2_put_unless_last`). Only the release of a description of the busy
+ * inode drains the batch into the cache, also without the big lock. Once
+ * the batch is empty a read, a listing and a release take it never, and
+ * a last put takes it once (`ext2_put`).
  */
 static void unlocked_reader_row(void)
 {
     static unsigned char want[4096], pend[4096];
-    void *busy, *quiet, *bh = 0, *qh = 0, *rh = 0, *dh = 0;
+    void *busy, *quiet, *bh = 0, *qh = 0, *rh = 0, *dh = 0, *other = 0;
     struct vfs_stat st;
     int rc, ok;
 
@@ -4366,9 +4365,15 @@ static void unlocked_reader_row(void)
     OPS->put(&mnt, quiet);
     check(bkl_host_takes == 0, "a hold that is not the last is dropped without the big lock");
     writes_made = 0;
+    check(OPS->open(&mnt, quiet, 0, &other) == 0, "the quiet file opens twice");
+    if (other) {
+        OPS->release(&mnt, other);
+    }
+    check(bkl_host_takes == 0 && writes_made == 0,
+          "a release of another file leaves the busy file's batch pending");
     OPS->release(&mnt, rh);
     check(bkl_host_takes == 0 && writes_made > 0,
-          "a release beside a busy batch drains it without the big lock");
+          "a release of the busy file drains the batch without the big lock");
 
     bkl_host_takes = 0;
     writes_made = 0;
