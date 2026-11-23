@@ -122,9 +122,14 @@ uint32_t kirq_save(void)
     return 0;
 }
 
+static void (*irq_restore_hook)(void);
+
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
+    if (irq_restore_hook) {
+        irq_restore_hook();
+    }
 }
 
 /** The scheduler, which never runs here: the driver's sleeps are waits
@@ -183,7 +188,7 @@ void drm_file_locks_init(struct drm_file *file)
 /* ---- the driver's buffer objects: a few, bound in the aperture by the
  * pin, which counts what it is asked ---- */
 
-#define NBO    21
+#define NBO    23
 #define NREMAP 4
 
 const struct drm_gem_object_funcs i915_gem_object_funcs;
@@ -193,6 +198,7 @@ static struct i915_vma remap_vma[NBO][NREMAP]; /* each object's remapped views *
 static int pins, unpins, flushes;
 static uint32_t pin_align;
 static uint64_t flush_start, flush_end;
+extern void (*i915_gem_lock_host_hook)(void);
 
 /** The GGTT address the pin binds object `i` at, and its remapped view in
  * slot `j`. */
@@ -796,14 +802,45 @@ static void row_flip(void)
 
 static struct i915_hw_ops crossing_ops;
 static const struct i915_hw_ops *saved_ops;
+static uint32_t crossing_surface, crossing_sequence;
 
 /** Latch the new surface between its MMIO write and event arming. */
 static void cross_on_surface(struct i915_hw *hw, uint32_t reg, uint32_t value)
 {
     saved_ops->write32(hw, reg, value);
-    if (reg == DSPSURF(0)) {
+    if (reg == DSPSURF(0) && value == crossing_surface) {
         i915_model_pipe_vblank(&model, 0);
+        crossing_sequence = (uint32_t)pa->base.vblank.count + intel_get_vblank_counter(&pa->base) -
+                            pa->base.vblank.last;
     }
+}
+
+/** Show the console buffer on the panel when running the timing rows alone. */
+static void crossing_console(void)
+{
+    if (!fb_con) {
+        uint32_t h = bo_new(0, 5504u * 768u, I915_TILING_NONE, 0);
+
+        fb_con = addfb(h, 1366, 768, DRM_FORMAT_XRGB8888, 5504, NO_MODIFIER);
+        CHECK(setcrtc(&pa->hw.mode, fb_con) == 0, "crossing: take over the panel");
+        frame();
+    }
+}
+
+/** Run the model to the last three scanlines before the vertical blank. */
+static void reach_evasion_window(void)
+{
+    int32_t line = 0, start = pa->cfg.mode.vdisplay;
+    int step;
+
+    for (step = 0; step < 4096; step++) {
+        line = crtc_scanline(pa, pa->cfg.mode.vtotal);
+        if (line >= start - 3 && line < start) {
+            break;
+        }
+        i915_delay_us(&gpu.hw, 5);
+    }
+    CHECK(line >= start - 3 && line < start, "evasion: the model reached the guard window");
 }
 
 /** A vblank just after DSPSURF delivers the event in that frame. A flip
@@ -811,15 +848,9 @@ static void cross_on_surface(struct i915_hw *hw, uint32_t reg, uint32_t value)
 static void row_vblank_crossing(void)
 {
     uint32_t fb, h, before;
-    int32_t line = 0, start = pa->cfg.mode.vdisplay;
-    int n0, step;
+    int n0;
 
-    if (!fb_con) {
-        h = bo_new(0, 5504u * 768u, I915_TILING_NONE, 0);
-        fb_con = addfb(h, 1366, 768, DRM_FORMAT_XRGB8888, 5504, NO_MODIFIER);
-        CHECK(setcrtc(&pa->hw.mode, fb_con) == 0, "crossing: take over the panel");
-        frame();
-    }
+    crossing_console();
     h = bo_new(20, 5504u * 768u, I915_TILING_NONE, 0);
     fb = addfb(h, 1366, 768, DRM_FORMAT_XRGB8888, 5504, NO_MODIFIER);
     n0 = nsent;
@@ -827,6 +858,7 @@ static void row_vblank_crossing(void)
     saved_ops = gpu.hw.ops;
     crossing_ops = *saved_ops;
     crossing_ops.write32 = cross_on_surface;
+    crossing_surface = BO_GGTT(20);
     gpu.hw.ops = &crossing_ops;
     CHECK(page_flip(fb, DRM_MODE_PAGE_FLIP_EVENT, 0x3504) == 0, "crossing: PAGE_FLIP");
     gpu.hw.ops = saved_ops;
@@ -839,14 +871,7 @@ static void row_vblank_crossing(void)
               sent[n0].sequence == (uint32_t)pa->base.vblank.count,
           "crossing: the first vblank delivered the event with its own count");
 
-    for (step = 0; step < 4096; step++) {
-        line = crtc_scanline(pa, pa->cfg.mode.vtotal);
-        if (line >= start - 3 && line < start) {
-            break;
-        }
-        i915_delay_us(&gpu.hw, 5);
-    }
-    CHECK(line >= start - 3 && line < start, "evasion: the model reached the guard window");
+    reach_evasion_window();
     before = intel_get_vblank_counter(&pa->base);
     n0 = nsent;
     CHECK(page_flip(fb_con, DRM_MODE_PAGE_FLIP_EVENT, 0x3505) == 0, "evasion: PAGE_FLIP");
@@ -869,6 +894,187 @@ static void take_then_sleep(wq_cond_fn cond, void *arg)
     if (!cond(arg)) {
         sleep_frames(cond, arg);
     }
+}
+
+static uint32_t stale_frame, stale_fb;
+
+/** Arm a flip in the next hardware frame while this IRQ's counted frame
+ * still awaits i915 completion. */
+static void flip_during_irq(void)
+{
+    if (gpu.drm.event_lock.locked || pa->base.vblank.last != stale_frame) {
+        return;
+    }
+    irq_restore_hook = NULL;
+    i915_model_pipe_vblank(&model, 0);
+    CHECK(page_flip(stale_fb, DRM_MODE_PAGE_FLIP_EVENT, 0x3506) == 0, "stale IRQ: arm the flip");
+}
+
+/** A counted vblank from before the arm cannot complete the new flip. */
+static void row_stale_irq(uint32_t fb)
+{
+    int n0 = nsent;
+
+    CHECK(drm_crtc_vblank_get(&pa->base) == 0, "stale IRQ: hold vblanks");
+    stale_fb = fb;
+    stale_frame = intel_get_vblank_counter(&pa->base) + 1u;
+    irq_restore_hook = flip_during_irq;
+    frame();
+    CHECK(!irq_restore_hook && nsent == n0 && pa->event && pa->event_frame == stale_frame + 1u,
+          "stale IRQ: the newer flip remains armed");
+    irq_restore_hook = NULL;
+    frame();
+    CHECK(nsent == n0 + 1 && sent[n0].user_data == 0x3506 &&
+              pa->base.vblank.last == stale_frame + 2u &&
+              i915_model_pipes(&model)->pipe[0].primary.surf == BO_GGTT(21),
+          "stale IRQ: the vblank that showed the buffer sent its event");
+    drm_crtc_vblank_put(&pa->base);
+}
+
+static uint32_t guard_frame, old_wm;
+
+/** Take the imminent vblank while the commit waits outside the event lock. */
+static void take_guard_vblank(struct i915_model *m)
+{
+    follow_clock(m);
+    if (!gpu.drm.event_lock.locked && intel_get_vblank_counter(&pa->base) != guard_frame) {
+        m->on_delay = follow_clock;
+        take_messages();
+        CHECK(i915_model_pipes(m)->pipe[0].sprite.ctl & SPRITE_ENABLE,
+              "watermarks: the old sprite still scans out");
+        CHECK(reg(WM0_PIPE_ILK(0)) == old_wm,
+              "watermarks: the guard vblank kept the sprite's watermark");
+    }
+}
+
+/** The guard vblank must leave the old sprite's watermarks in place. */
+static void row_watermark_evasion(void)
+{
+    static const struct place at = {0, 0, 64, 64, 10, 20, 64, 64};
+    uint32_t h = bo_new(22, 64u * 64u * 4u, I915_TILING_NONE, 0);
+    uint32_t fb = addfb(h, 64, 64, DRM_FORMAT_XRGB8888, 256, NO_MODIFIER);
+
+    CHECK(plane_commit(&pa->sprite, fb, &at, 0) == 0, "watermarks: show the sprite");
+    frame();
+    old_wm = reg(WM0_PIPE_ILK(0));
+    CHECK((old_wm >> WM0_PIPE_SPRITE_SHIFT) & 0xffu, "watermarks: the sprite needs a watermark");
+    reach_evasion_window();
+    guard_frame = intel_get_vblank_counter(&pa->base);
+    model.on_delay = take_guard_vblank;
+    CHECK(plane_commit(&pa->sprite, 0, &at, DRM_MODE_ATOMIC_NONBLOCK) == 0,
+          "watermarks: disable the sprite");
+    CHECK(model.on_delay == follow_clock && reg(WM0_PIPE_ILK(0)) == old_wm && pa->wm_pending,
+          "watermarks: the disable still needs the intermediate watermarks");
+    model.on_delay = follow_clock;
+    frame();
+    CHECK(!pa->wm_pending && !((reg(WM0_PIPE_ILK(0)) >> WM0_PIPE_SPRITE_SHIFT) & 0xffu) &&
+              !(i915_model_pipes(&model)->pipe[0].sprite.ctl & SPRITE_ENABLE),
+          "watermarks: the smaller watermark follows the sprite disable");
+}
+
+/** A vblank after the first modeset surface write delivers its event. */
+static void row_modeset_crossing(uint32_t fb)
+{
+    struct drm_mode_modeinfo small = pa->hw.mode;
+    struct drm_property_blob *blob;
+    struct req r;
+    void (*wait)(wq_cond_fn cond, void *arg) = model_wait;
+    int32_t err;
+    int n0 = nsent, old_sleeps = sleeps;
+
+    small.hdisplay = 1024;
+    drm_mode_set_name(&small);
+    blob = drm_property_create_blob(&gpu.drm, sizeof(small), &small, &err);
+    CHECK(blob != NULL, "modeset crossing: the mode blob is made");
+    if (!blob) {
+        return;
+    }
+    k_memset(&r, 0, sizeof(r));
+    req_add(&r, &pa->base.base, mc->prop_mode_id, blob->base.id);
+    req_add(&r, &pa->primary.base, mc->prop_fb_id, fb);
+    saved_ops = gpu.hw.ops;
+    crossing_ops = *saved_ops;
+    crossing_ops.write32 = cross_on_surface;
+    crossing_surface = BO_GGTT(21);
+    crossing_sequence = 0;
+    gpu.hw.ops = &crossing_ops;
+    model_wait = take_then_sleep;
+    CHECK(req_commit(&r, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_PAGE_FLIP_EVENT) == 0,
+          "modeset crossing: change the transcoder input and show the new buffer");
+    model_wait = wait;
+    gpu.hw.ops = saved_ops;
+    drm_property_blob_put(blob);
+    CHECK(crossing_sequence && nsent == n0 + 1 && sent[n0].sequence == crossing_sequence &&
+              sleeps == old_sleeps && i915_model_pipes(&model)->pipe[0].primary.surf == BO_GGTT(21),
+          "modeset crossing: the first vblank delivered its event");
+}
+
+static uint32_t old_source, old_fitter;
+static struct drm_property_blob *fastset_blob;
+
+/** Latch a vblank while the new primary buffer is still being prepared. */
+static void vblank_during_prepare(void)
+{
+    if (pa->base.state->mode_blob != fastset_blob) {
+        return;
+    }
+    i915_gem_lock_host_hook = NULL;
+    frame();
+    CHECK(reg(PIPESRC(0)) == old_source && reg(PF_WIN_SZ(0)) == old_fitter &&
+              i915_model_pipes(&model)->pipe[0].primary.surf == BO_GGTT(21),
+          "fastset: buffer preparation left the old pipe source and fitter in place");
+}
+
+/** The fastset's pipe writes follow the framebuffer's preparation. */
+static void row_fastset_crossing(void)
+{
+    struct drm_mode_modeinfo small = pa->hw.mode;
+    struct drm_property_blob *blob;
+    struct req r;
+    int32_t err;
+
+    small.hdisplay = 640;
+    small.vdisplay = 480;
+    drm_mode_set_name(&small);
+    blob = drm_property_create_blob(&gpu.drm, sizeof(small), &small, &err);
+    CHECK(blob != NULL, "fastset crossing: the mode blob is made");
+    if (!blob) {
+        return;
+    }
+    old_source = reg(PIPESRC(0));
+    old_fitter = reg(PF_WIN_SZ(0));
+    k_memset(&r, 0, sizeof(r));
+    req_add(&r, &pa->base.base, mc->prop_mode_id, blob->base.id);
+    req_add(&r, &pa->primary.base, mc->prop_fb_id, fb_con);
+    req_add(&r, &gpu.display.connector.base, gpu.display.connector.scaling_mode_property,
+            DRM_MODE_SCALE_CENTER);
+    fastset_blob = blob;
+    i915_gem_lock_host_hook = vblank_during_prepare;
+    CHECK(req_commit(&r, 0) == 0, "fastset crossing: smaller source without ALLOW_MODESET");
+    CHECK(!i915_gem_lock_host_hook, "fastset crossing: the new buffer was prepared");
+    i915_gem_lock_host_hook = NULL;
+    fastset_blob = NULL;
+    drm_property_blob_put(blob);
+    frame();
+    CHECK(reg(PIPESRC(0)) == (639u << 16 | 479u) && reg(PF_WIN_SZ(0)) != old_fitter &&
+              i915_model_pipes(&model)->pipe[0].primary.surf == BO_GGTT(0),
+          "fastset crossing: the live plane and the new pipe configuration agree");
+}
+
+/** Run the crossings through page flip, sprite disable, modeset and fastset. */
+static void row_commit_crossings(void)
+{
+    uint32_t h, fb;
+
+    crossing_console();
+    h = bo_new(21, 5504u * 768u, I915_TILING_NONE, 0);
+    fb = addfb(h, 1366, 768, DRM_FORMAT_XRGB8888, 5504, NO_MODIFIER);
+    row_stale_irq(fb);
+    row_watermark_evasion();
+    CHECK(page_flip(fb_con, 0, 0) == 0, "modeset crossing: restore the console buffer");
+    frame();
+    row_modeset_crossing(fb);
+    row_fastset_crossing();
 }
 
 /* The blocking async atomic commits row_async_atomic makes. */
@@ -2045,6 +2251,10 @@ int main(int argc, char **argv)
         row_vblank_crossing();
         goto done;
     }
+    if (argc == 2 && strcmp(argv[1], "--commit-crossings") == 0) {
+        row_commit_crossings();
+        goto done;
+    }
     row_readout();
     row_adopt();
     row_adopt_wm();
@@ -2072,6 +2282,7 @@ int main(int argc, char **argv)
     row_modeset();
     row_link_retry();
     row_vblank_crossing();
+    row_commit_crossings();
 done:
     row_fini();
     if (fw_obj && fw_obj->refs == 0) {

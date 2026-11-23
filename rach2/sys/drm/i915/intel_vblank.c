@@ -59,43 +59,6 @@ void intel_trace_pipe(struct intel_crtc *c, enum drm_frame_event event, uint64_t
 }
 #endif
 
-void intel_pipe_update_start(struct intel_crtc *c)
-{
-    struct i915_hw *hw = &c->i915->hw;
-    const struct drm_mode_modeinfo *mode = &c->cfg.mode;
-    uint32_t frame, frame_us, waited;
-
-    c->update_frame = 0;
-    if (!c->cfg.active || mode->clock == 0 || mode->htotal == 0 || mode->vtotal == 0) {
-        return;
-    }
-    /* A frame's length rounded up to the millisecond, kept in 32 bits. */
-    frame_us = ((uint32_t)mode->htotal * mode->vtotal / mode->clock + 1u) * 1000u;
-    frame = i915_read(hw, PIPE_FRMCOUNT_G4X(c->pipe));
-    for (waited = 0; waited < 3u * frame_us + 1000u; waited += 20u) {
-        if (i915_read(hw, PIPE_FRMCOUNT_G4X(c->pipe)) != frame) {
-            break;
-        }
-        i915_delay_us(hw, 20);
-    }
-    c->update_frame = i915_read(hw, PIPE_FRMCOUNT_G4X(c->pipe)) + 1u;
-}
-
-void intel_pipe_update_end(struct intel_crtc *c)
-{
-    uint32_t frame;
-
-    if (c->update_frame == 0) {
-        return;
-    }
-    frame = i915_read(&c->i915->hw, PIPE_FRMCOUNT_G4X(c->pipe));
-    if (frame + 1u != c->update_frame) {
-        klog(KLOG_WARN, "i915", "display: pipe %c update: crossed %u vblanks", 'A' + c->pipe,
-             (unsigned)(frame + 1u - c->update_frame));
-    }
-    c->update_frame = 0;
-}
-
 /**
  * The line `c` scans, Linux's __intel_get_crtc_scanline: PIPEDSL, read
  * again for up to 100 us while it gives 0, which Haswell's may just before
@@ -311,7 +274,7 @@ void intel_crtc_arm_event(struct intel_crtc *c, struct drm_crtc_state *cs, uint3
     /* A pipe has one commit in flight, which the core's stall keeps so;
      * one left over is sent before the new is held. */
     intel_crtc_send_event(c);
-    if (cs->active && drm_crtc_vblank_get(&c->base) == 0) {
+    if (cs->active && c->cfg.active && drm_crtc_vblank_get(&c->base) == 0) {
         c->event = e;
         c->event_frame = frame;
         intel_trace_pipe(c, DRM_FRAME_ARM, frame);
@@ -478,9 +441,9 @@ void intel_display_irq_work(struct drm_i915_private *i915)
         if (iir & DE_PIPE_VBLANK_IVB(pipe)) {
             intel_wm_vblank(c);
             vblank_boost(c, 1);
-            /* The event lock keeps the vblank handler out of the pipe
-             * update, including a vblank just after the surface write. */
-            if (c->event && !c->event_async && c->base.vblank.last != c->event_frame) {
+            /* An IRQ can have counted its frame before the flip was armed. */
+            if (c->event && !c->event_async &&
+                (int32_t)(c->base.vblank.last - c->event_frame) > 0) {
                 intel_crtc_send_event(c);
             }
             /* A flip whose event the core sent ends here too. */

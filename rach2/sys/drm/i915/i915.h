@@ -1475,8 +1475,9 @@ struct intel_color {
  * all off until a commit sets it. `crc_wa` says a CRC source runs that needs
  * Linux's force-through of the fitter. The watermarks (intel_wm.c): `wm_active`
  * those the registers hold for the pipe, `wm_optimal` those of the last
- * commit's planes, made active once the frame counter passes `wm_frame` while
- * `wm_pending`, which holds a vblank reference. `vbl_on` says its vblank
+ * commit's planes, made active once the frame counter passes `wm_frame`,
+ * sampled after the plane writes, while `wm_pending`, which holds a vblank
+ * reference. `vbl_on` says its vblank
  * interrupt is unmasked. The CRC: `crc_ctl` is PIPE_CRC_CTL's value while a
  * source runs, 0 when none does, `crc_skip` the frames still to drop after it
  * starts, and `crc_res` PIPE_CRC_RES_HSW as the error interrupt read it at the
@@ -1488,9 +1489,7 @@ struct intel_color {
  * read `parked`. `planes_on` has bit INTEL_PLANE_ for each plane the hardware
  * shows. `underrun_off` says its FIFO underruns are not reported, Linux's
  * cpu_fifo_underrun_disabled, and `inherited` that it shows what the firmware
- * lit, with no commit of its own yet. `update_frame` is 1 more than the frame
- * count at which a fastset began its writes (`intel_pipe_update_start`), 0
- * while none is under way. `boosts` lists, under the interrupts'
+ * lit, with no commit of its own yet. `boosts` lists, under the interrupts'
  * masking, the requests drawing flips that the next vblank boosts if the chip
  * has not begun them, one entry for each call of
  * `intel_crtc_boost_after_vblank`, Linux's wait_rps_boost; `rps_mark` is 1 more
@@ -1521,7 +1520,6 @@ struct intel_crtc {
     uint8_t underrun_off;
     uint64_t underrun_count; /* GEN7_ERR_INT underrun latches cleared under irq.lock */
     uint8_t inherited;
-    uint32_t update_frame;
     struct intel_scanout shown[INTEL_NUM_PLANES];
     struct intel_scanout parked[INTEL_NUM_PLANES];
     uint32_t shown_from[INTEL_NUM_PLANES], shown_to[INTEL_NUM_PLANES];
@@ -3341,14 +3339,20 @@ int32_t intel_wm_compute(struct intel_crtc *crtc, struct drm_atomic_state *state
  * then does not fit. */
 int32_t intel_wm_intermediate(const struct intel_pipe_wm *old, struct intel_pipe_wm *wm);
 
-/**
- * Program `crtc`'s watermarks for the commit `state`, Linux's
- * ilk_initial_watermarks: for a mode set, those of its new configuration;
- * else the intermediate of the old planes' and the new, made the new
- * planes' alone once the vblank latched them (`intel_wm_vblank`). Inside
- * the commit, before the planes are written; may take a vblank reference.
- */
-void intel_wm_commit(struct intel_crtc *crtc, struct drm_atomic_state *state, int modeset);
+/** Check `wm` against the watermarks active on `crtc`, including any
+ * intermediate state. Updates `wm` as intel_wm_intermediate does. */
+int32_t intel_wm_check_intermediate(struct intel_crtc *crtc, struct intel_pipe_wm *wm);
+
+/** Program watermarks before the plane writes, Linux's ilk_initial_watermarks.
+ * A modeset uses `optimal` directly. A running pipe keeps the intermediate
+ * values. Returns 1 when it took a vblank reference to finish the update.
+ * In that case the caller records wm_frame after the plane writes, before
+ * releasing the DRM device's event_lock, which it holds throughout. */
+int intel_wm_update(struct intel_crtc *crtc, const struct intel_pipe_wm *optimal, int modeset);
+
+/** Compute and program the modeset's watermarks for `state`. Takes the
+ * event lock to update the shared registers. */
+void intel_wm_modeset(struct intel_crtc *crtc, struct drm_atomic_state *state);
 
 /** Program `crtc`'s new planes' watermarks once the frame counter passed
  * the commit's frame, Linux's ilk_optimize_watermarks. From the deferred
@@ -3405,18 +3409,6 @@ void intel_sprite_update(struct drm_plane *plane, struct drm_atomic_state *state
 /** Program the cursor from its prepared surface. Does not sleep. */
 void intel_cursor_update(struct drm_plane *plane, struct drm_atomic_state *state,
                          const struct intel_plane_surface *surface);
-
-/**
- * Wait until `crtc` has just passed the start of its vertical blank, where
- * its pipe's and planes' double-buffered registers latch, before writing
- * the new fitter and source size of a fastset. Polls the frame counter
- * for up to three frames. Returns at once on a pipe that is off.
- */
-void intel_pipe_update_start(struct intel_crtc *crtc);
-/** Log the commit begun by `intel_pipe_update_start` when its writes
- * crossed a vertical blank and latched in two frames, Linux's
- * intel_pipe_update_end's "Atomic update failure". */
-void intel_pipe_update_end(struct intel_crtc *crtc);
 
 /** The CRTC's `enable_vblank`: unmask the pipe's vblank. 0. Any context. */
 int32_t intel_enable_vblank(struct drm_crtc *crtc);
