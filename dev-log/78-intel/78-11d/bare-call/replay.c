@@ -6,6 +6,7 @@
  * Build: gcc -O2 -ffreestanding -static -nostdlib -fno-stack-protector -fno-pie
  *        -no-pie -o replay replay.c
  * Use:   replay [FILE [ROUNDS]]
+ *        replay FILE COUNT 1 KIND
  *
  * The program makes FILE's directory its root by chroot, as the Lenovo's
  * trials run on an ext2 root, and writes there the cache of 50 parts that
@@ -26,6 +27,12 @@
  * kind's median total and median call in nanoseconds, by the counter's rate
  * over the pass by CLOCK_MONOTONIC. Every call's result is checked, and a
  * pass prints how many differed from what the replay expects.
+ *
+ * Given KIND, as profile.sh gives barecall's, the program repeats COUNT
+ * times, untimed, one part of a pass for a profile of its kernel time:
+ * pass, the whole pass; openat, its 900 opens and the close of each pair;
+ * unlink, its 100 absent unlinks; or mkdir, its 50 mkdirs of a directory
+ * that exists.
  */
 
 #define BARECALL_LIBRARY
@@ -204,6 +211,57 @@ static void pass(void)
     }
 }
 
+/** Whether the strings A and B are equal. */
+static int same(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/** Repeat N times the part of a pass that KIND names, as the comment at the
+ * top says; 0, or -1 for a KIND it does not know. */
+static int repeat(const char *kind, unsigned long n)
+{
+    char db[128], idx[128];
+    unsigned long i;
+    int k, l, p;
+
+    if (!same(kind, "pass") && !same(kind, "openat") && !same(kind, "unlink") &&
+        !same(kind, "mkdir"))
+        return -1;
+    wrong = 0;
+    for (i = 0; i < n; i++) {
+        if (same(kind, "pass")) {
+            pass();
+            continue;
+        }
+        for (k = 0; k < NKINDS; k++)
+            count[k] = 0;
+        for (l = 0; l <= LOOKUPS; l++) {
+            for (p = 0; p < PARTS; p++) {
+                if (same(kind, "openat")) {
+                    long a = timed(K_OPEN, SYS_openat, AT_FDCWD, (long)part_path(idx, p, "mesa_cache.idx"),
+                                   O_RDWR | O_CREAT | O_CLOEXEC);
+                    long b = timed(K_OPEN, SYS_openat, AT_FDCWD, (long)part_path(db, p, "mesa_cache.db"),
+                                   O_RDWR | O_CREAT | O_CLOEXEC);
+
+                    check(timed(K_CLOSE, SYS_close, a, 0, 0), 0);
+                    check(timed(K_CLOSE, SYS_close, b, 0, 0), 0);
+                } else if (l == 0 && same(kind, "unlink")) {
+                    check(timed(K_UNLINK, SYS_unlink, (long)CACHE "/mesa_cache.db", 0, 0), -ENOENT);
+                    check(timed(K_UNLINK, SYS_unlink, (long)CACHE "/mesa_cache.idx", 0, 0), -ENOENT);
+                } else if (l == 0) {
+                    check(timed(K_MKDIR, SYS_mkdir, (long)part_path(db, p, 0), 0755, 0), -EEXIST);
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 /** Write a file of SIZE zero bytes at PATH; 0 or the error. */
 static long seed_file(const char *path, unsigned long size)
 {
@@ -307,7 +365,7 @@ void start_c(long *sp)
 
     if (pid1 && mount_volume() != 0)
         finish(pid1);
-    if (rounds > MAX_ROUNDS)
+    if (rounds > MAX_ROUNDS && argc <= 4)
         rounds = MAX_ROUNDS;
     for (n = 0; file[n] && n < sizeof(root) - 1; n++)
         root[n] = file[n];
@@ -323,6 +381,18 @@ void start_c(long *sp)
     }
     if (seed() != 0)
         finish(pid1);
+    if (argc > 4) {
+        if (repeat(argv[4], rounds) != 0) {
+            put_error("kind", -22);
+        } else {
+            put("replay: only ");
+            put(argv[4]);
+            put(" done, wrong ");
+            put_num(wrong);
+            put("\n");
+        }
+        finish(pid1);
+    }
     put("replay: root ");
     put(root);
     put(" kinds openat close fcntl flock fstat lseek read mkdir unlink, us\n");

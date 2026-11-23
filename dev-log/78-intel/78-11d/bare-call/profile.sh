@@ -9,6 +9,7 @@
 # calls after a line `== profile KIND` and `== calls KIND`, goes to
 # OUT/profile-KERNEL.log, KERNEL the first 8 digits of its SHA-256.
 # bklread.sh names the samples by the kernel's kernel.debug.
+# BARECALL_SOURCE=replay.c profiles the replay's kinds in the same way.
 set -eu
 
 [ $# -ge 3 ] || { echo 'usage: profile.sh OUT RACH2_KERNEL KIND:COUNT...' >&2; exit 2; }
@@ -24,7 +25,7 @@ test -f "$image"
 mkdir -p "$out"
 
 gcc -O2 -ffreestanding -static -nostdlib -fno-stack-protector -fno-pie -no-pie \
-    -o "$out/barecall" "$step/barecall.c"
+    -o "$out/barecall" "$step/${BARECALL_SOURCE:-barecall.c}"
 rm -rf "$out/volume"
 mkdir "$out/volume"
 head -c 65536 /dev/urandom > "$out/volume/f"
