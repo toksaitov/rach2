@@ -1,37 +1,85 @@
 """Measure Chromium's WebGPU picture under headless Weston or a supplied display."""
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager, ExitStack, suppress
+import fcntl
 import os
 from pathlib import Path
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 sys.path.insert(0, str(Path("tests/graphics/browser").resolve()))
 from run import Browser, hasvk_picture, save, server, stop
 
 
+# Weston writes each debug message straight into the subscriber's pipe and
+# blocks while it is full, so the pipe is made large and drained at once.
+PIPE_BYTES = 1 << 20
+F_SETPIPE_SZ = getattr(fcntl, "F_SETPIPE_SZ", 1031)
+
+
+def stamped(source, raw, stamps):
+    """Copy SOURCE's lines to RAW, and to STAMPS after the CLOCK_MONOTONIC ns of their read."""
+    for line in iter(source.readline, b""):
+        now = time.monotonic_ns()
+        raw.write(line)
+        stamps.write(b"%d\t" % now + line)
+    source.close()
+
+
+def drained(readers):
+    """Wait for each stamping reader to reach the end of its pipe."""
+    for reader in readers:
+        reader.join(10)
+        if reader.is_alive():
+            raise RuntimeError("Weston kept the drm-backend stream open")
+
+
 @contextmanager
 def weston_streams(out, env, client):
-    """Subscribe to the two Weston streams and close them on every exit."""
+    """Subscribe to the two Weston streams and close them on every exit.
+
+    The drm-backend stream carries no time, so its lines are also kept in
+    drm-backend.stamped behind the time each was read, which places a
+    repaint's composition mode on the clock of the other streams.
+    """
     scopes = ("timeline", "drm-backend")
     listed = subprocess.run(client(["weston-debug", "--list"]), env=env, check=True,
                             capture_output=True, text=True, timeout=10)
     available = listed.stdout + listed.stderr
     if any(scope not in available for scope in scopes):
         raise RuntimeError("Weston lacks a required log scope: " + available)
+    readers = []
     with ExitStack() as stack:
         for scope in scopes:
-            output = stack.enter_context((out / scope).open("w"))
             error = stack.enter_context((out / (scope + ".err")).open("w"))
+            if scope == "timeline":
+                output = stack.enter_context((out / scope).open("w"))
+                process = subprocess.Popen(client(["weston-debug", scope]), env=env,
+                                           stdout=output, stderr=error, start_new_session=True)
+                stack.callback(stop, process)
+                continue
+            raw = stack.enter_context((out / scope).open("wb"))
+            stamps = stack.enter_context((out / (scope + ".stamped")).open("wb"))
+            # Callbacks run last first: stop weston-debug, whose leaving
+            # makes Weston close the pipe, then wait for the reader's end of
+            # it before the files close.
+            stack.callback(drained, readers)
             process = subprocess.Popen(client(["weston-debug", scope]), env=env,
-                                       stdout=output, stderr=error, start_new_session=True)
+                                       stdout=subprocess.PIPE, stderr=error, start_new_session=True)
             stack.callback(stop, process)
+            with suppress(OSError):
+                fcntl.fcntl(process.stdout.fileno(), F_SETPIPE_SZ, PIPE_BYTES)
+            reader = threading.Thread(target=stamped, args=(process.stdout, raw, stamps),
+                                      daemon=True)
+            reader.start()
+            readers.append(reader)
         yield
-        for scope in scopes:
-            if not (out / scope).stat().st_size:
-                raise RuntimeError("Weston's " + scope + " stream was empty")
+    for scope in scopes:
+        if not (out / scope).stat().st_size:
+            raise RuntimeError("Weston's " + scope + " stream was empty")
 
 
 def tids(path):

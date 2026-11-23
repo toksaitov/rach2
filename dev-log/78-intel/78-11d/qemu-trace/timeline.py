@@ -1,4 +1,8 @@
-"""Join Chromium, Weston and the kernel on guest CLOCK_MONOTONIC."""
+"""Join Chromium, Weston and the kernel on guest CLOCK_MONOTONIC.
+
+A capture from Debian has no drm.bin, and its timeline joins Chromium and
+Weston alone.
+"""
 import argparse
 from decimal import Decimal
 import gzip
@@ -100,11 +104,83 @@ def weston(path, log):
     return rows
 
 
+def compositions(path):
+    """Read each repaint's composition from the stamped drm-backend stream.
+
+    Weston's assign_planes() writes "preparing state" when a repaint begins
+    and, once it has chosen the mode, one line for each view: on which
+    plane, or by the renderer. The row's time is the read of the first line.
+    """
+    rows, current = [], None
+    for line in path.read_text(errors="replace").splitlines():
+        ns, _, text = line.partition("\t")
+        if "[repaint] preparing state for output" in text:
+            current = {"mode": None, "planes": [], "renderer": 0}
+            rows.append((int(ns), "weston", "composition", current))
+        elif current is None:
+            continue
+        elif (found := re.search(r"\[repaint\] Using (.+) composition", text)):
+            current["mode"] = found[1]
+        elif (found := re.search(r"\[repaint\] view \S+ on (\S+) plane", text)):
+            current["planes"].append(found[1])
+        elif "[repaint] view" in text and "using renderer composition" in text:
+            current["renderer"] += 1
+    return [row for row in rows if row[3]["mode"]]
+
+
+def stamped_stream(run, out):
+    """Return the capture's stamped drm-backend stream, or None for an older capture."""
+    for path in (run / "drm-backend.stamped", out / "drm-backend.stamped"):
+        if path.exists():
+            return path
+    return None
+
+
+def modes(run, out, marks, picture):
+    """Print composition changes beside the page's lag steps and late gaps."""
+    stamped = stamped_stream(run, out)
+    if stamped is None:
+        raise ValueError("the capture has no drm-backend.stamped")
+    repaints = compositions(stamped)
+    if not repaints:
+        raise ValueError("no composition in " + str(stamped))
+    times, starts = picture["frameTimes"], picture["frameStarts"]
+    lag = [starts[i] - times[i] for i in range(len(times))]
+
+    def frame_at(ns):
+        """Return the last page frame whose callback mark is at or before NS."""
+        before = [i for i, mark in marks.items() if mark <= ns]
+        return max(before) if before else -1
+
+    def kind(row):
+        """Name a repaint's composition and where its views went."""
+        detail = row[3]
+        return "%s; planes %s; renderer views %d" % (
+            detail["mode"], ",".join(detail["planes"]) or "-", detail["renderer"])
+
+    print("# composition changes: monotonic_ns, page frame, composition")
+    last = None
+    for row in repaints:
+        if kind(row) != last:
+            last = kind(row)
+            print(row[0], frame_at(row[0]), last, sep="\t")
+    print("# lag steps over 3 ms and gaps over 25 ms: frame, gap ms, lag before and after ms, composition")
+    for i in range(1, len(times)):
+        gap = times[i] - times[i - 1]
+        if abs(lag[i] - lag[i - 1]) > 3 or gap > 25:
+            ns = marks[i]
+            current = [row for row in repaints if row[0] <= ns]
+            print(i - 1, "%.1f" % gap, "%.1f" % lag[i - 1], "%.1f" % lag[i],
+                  kind(current[-1]) if current else "-", sep="\t")
+
+
 def main():
-    """Print the joined timeline, or the window around one callback gap."""
+    """Print the joined timeline, the window around one callback gap, or the compositions."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("capture", type=Path)
     parser.add_argument("--after-frame", type=int, help="show four refreshes around this gap")
+    parser.add_argument("--modes", action="store_true",
+                        help="show Weston's composition changes beside the page's lag steps")
     args = parser.parse_args()
     run = args.capture
     out = run / "out"
@@ -112,10 +188,22 @@ def main():
     if not display_log.exists():
         display_log = run.parent / "display/weston.log"
     stream = out / "timeline" if (out / "timeline").exists() else run / "timeline"
-    rows, (start, stop, lost) = kernel(run / "drm.bin")
     browser, picture, marks = chromium(out)
+    if args.modes:
+        modes(run, out, marks, picture)
+        return
+    rows = []
+    if (run / "drm.bin").exists():
+        rows, (start, stop, lost) = kernel(run / "drm.bin")
     rows.extend(browser)
     rows.extend(weston(stream, display_log))
+    if stamped_stream(run, out):
+        rows.extend(compositions(stamped_stream(run, out)))
+    if (run / "drm.bin").exists():
+        print("# DRM coverage %d to %d ns, %d records lost" % (start, stop, lost))
+    else:
+        print("# no DRM trace")
+        start, stop = min(row[0] for row in rows), max(row[0] for row in rows)
     lo, hi = start, stop
     if args.after_frame is not None:
         index = args.after_frame
@@ -124,7 +212,6 @@ def main():
         lo, hi = marks[index] - 33334000, marks[index + 1] + 33334000
         gap = picture["frameTimes"][index + 1] - picture["frameTimes"][index]
         print("# animation timestamp gap %.3f ms after frame %d" % (gap, index))
-    print("# DRM coverage %d to %d ns, %d records lost" % (start, stop, lost))
     print("monotonic_ns\tsource\tevent\tdetail")
     for ns, source, name, details in sorted(rows, key=lambda row: row[0]):
         if lo <= ns <= hi:
