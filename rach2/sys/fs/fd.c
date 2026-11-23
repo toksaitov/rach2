@@ -1358,11 +1358,15 @@ int fd_held_elsewhere(fd_table_t *table, int fd)
 
 int fd_close_claim(fd_table_t *table, int fd, fd_entry_t **claimed)
 {
-    uint32_t flags = fd_table_lock(table);
+    uint32_t flags;
     fd_entry_t *e;
     int rc;
 
-    if (fd < 0 || fd >= table->cap) {
+    if (!table || fd < 0) {
+        return -EBADF;
+    }
+    flags = fd_table_lock(table);
+    if (fd >= table->cap) {
         fd_table_unlock(table, flags);
         return -EBADF;
     }
