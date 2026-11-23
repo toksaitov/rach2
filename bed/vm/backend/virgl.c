@@ -825,13 +825,19 @@ static int op_pages(void *c, struct vd_pages *q)
     return pin_runs(r, p, q);
 }
 
+/* A DRM client that a scan counted, by its ID. */
+struct gpu_client {
+    char key[80];   /* "drm-pdev drm-client-id" */
+    uint64_t bytes; /* the largest figure its descriptors gave */
+};
+
 /*
  * A scan of the GPU objects the renderer holds with no pages yet
  * (`gpu_unbacked`), each DRM client counted once.
  */
 struct gpu_scan {
-    uint64_t sum;     /* bytes of the objects counted */
-    char (*seen)[80]; /* "drm-pdev drm-client-id" of each client counted */
+    uint64_t sum;            /* bytes of the objects counted */
+    struct gpu_client *seen; /* each client with an ID read so far */
     size_t nseen, cap;
     int failed;      /* the errno that stopped the scan, or 0 */
     char where[512]; /* the file or directory the scan failed on */
@@ -852,6 +858,42 @@ static void scan_fail(struct gpu_scan *s, const char *path, int err)
 }
 
 /**
+ * Count `bytes` for the client named `key` in s, once however many of its
+ * descriptors give a figure: the largest of them stands, since each
+ * descriptor's fdinfo gives the client's objects at its own reading and a
+ * later one holds those made since. A client's place is made with realloc;
+ * its failure fails s at path with ENOMEM.
+ */
+static void client_count(struct gpu_scan *s, const char *path, const char *key, uint64_t bytes)
+{
+    size_t i;
+
+    for (i = 0; i < s->nseen; i++) {
+        if (strcmp(s->seen[i].key, key) == 0) {
+            if (bytes > s->seen[i].bytes) {
+                s->sum += bytes - s->seen[i].bytes;
+                s->seen[i].bytes = bytes;
+            }
+            return;
+        }
+    }
+    if (s->nseen == s->cap) {
+        size_t cap = s->cap ? s->cap * 2 : 16;
+        struct gpu_client *seen = realloc(s->seen, cap * sizeof(*seen));
+
+        if (seen == 0) {
+            scan_fail(s, path, ENOMEM);
+            return;
+        }
+        s->seen = seen;
+        s->cap = cap;
+    }
+    snprintf(s->seen[s->nseen].key, sizeof(s->seen[s->nseen].key), "%s", key);
+    s->seen[s->nseen++].bytes = bytes;
+    s->sum += bytes;
+}
+
+/**
  * Add to s the bytes of system memory that the DRM client of fdinfo file
  * `path` holds in GPU objects with no pages yet, as Linux's drm-usage stats
  * give them: drm-total-system0 less drm-resident-system0, or the whole
@@ -859,17 +901,16 @@ static void scan_fail(struct gpu_scan *s, const char *path, int err)
  * pages at its first use, not at its creation, so these are bytes the VM's
  * counts do not hold yet and the renderer will take. A client that
  * drm-client-id and drm-pdev name is counted once however many descriptors
- * share it, since every descriptor of one struct drm_file gives the same
- * figures. A file of any other kind adds nothing, nor does one whose
- * descriptor or process ended before it was read (ENOENT, ESRCH); any other
- * failure to open or read it fails the scan.
+ * share it, at the largest figure they give (`client_count`). A file of any
+ * other kind adds nothing, nor does one whose descriptor or process ended
+ * before it was read (ENOENT, ESRCH); any other failure to open or read it
+ * fails the scan.
  */
 static void unbacked_of(const char *path, struct gpu_scan *s)
 {
-    unsigned long long n, id = 0, total = 0, resident = 0;
+    unsigned long long n, id = 0, total = 0, resident = 0, bytes;
     int has_total = 0, has_resident = 0, has_id = 0, bad, err;
     char line[160], unit[8], pdev[40] = "", key[80];
-    size_t i;
     FILE *f = fopen(path, "r");
 
     if (f == 0) {
@@ -920,27 +961,13 @@ static void unbacked_of(const char *path, struct gpu_scan *s)
     if (!has_total) {
         return;
     }
-    if (has_id) {
-        snprintf(key, sizeof(key), "%s %llu", pdev, id);
-        for (i = 0; i < s->nseen; i++) {
-            if (strcmp(s->seen[i], key) == 0) {
-                return;
-            }
-        }
-        if (s->nseen == s->cap) {
-            size_t cap = s->cap ? s->cap * 2 : 16;
-            char (*seen)[80] = realloc(s->seen, cap * sizeof(*seen));
-
-            if (seen == 0) {
-                scan_fail(s, path, ENOMEM);
-                return;
-            }
-            s->seen = seen;
-            s->cap = cap;
-        }
-        memcpy(s->seen[s->nseen++], key, sizeof(key));
+    bytes = has_resident ? (total > resident ? total - resident : 0) : total;
+    if (!has_id) {
+        s->sum += bytes;
+        return;
     }
-    s->sum += has_resident ? (total > resident ? total - resident : 0) : total;
+    snprintf(key, sizeof(key), "%s %llu", pdev, id);
+    client_count(s, path, key, bytes);
 }
 
 /**
