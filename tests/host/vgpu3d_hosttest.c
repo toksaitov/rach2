@@ -329,16 +329,16 @@ static void submissions(uint32_t h)
           "multi-page command bytes reach the host exactly");
     w.handle = h;
     w.flags = VIRTGPU_WAIT_NOWAIT;
-    CHECK(vgpu_wait_ioctl(dev, &w, &file) == -EBUSY, "WAIT_NOWAIT reports outstanding work");
+    CHECK(wait_unlocked(dev, &w, &file) == -EBUSY, "WAIT_NOWAIT reports outstanding work");
     answer_at(1);
     CHECK(dma_fence_is_signaled(first) && dma_fence_is_signaled(second),
           "a later fence response retires prior points on its ordered timeline");
     CHECK(dma_fence_is_signaled(syncs[0].fence), "the output syncobj timeline reaches its point");
     answer_at(0);
     gpu.answer = ANSWER_KICK;
-    CHECK(vgpu_wait_ioctl(dev, &w, &file) == 0, "WAIT_NOWAIT sees the completed resource");
+    CHECK(wait_unlocked(dev, &w, &file) == 0, "WAIT_NOWAIT sees the completed resource");
     w.flags = 0;
-    CHECK(vgpu_wait_ioctl(dev, &w, &file) == 0, "blocking WAIT sees completion");
+    CHECK(wait_unlocked(dev, &w, &file) == 0, "blocking WAIT sees completion");
     foreign = kzalloc(sizeof(*foreign));
     dma_fence_init(foreign, &model_fence_ops, dma_fence_context_alloc(1), 1);
     foreign_fd = sync_file_create(foreign, "foreign");
@@ -442,7 +442,7 @@ static void reset_pending(uint32_t h)
           "old mapping takes its page again after reset");
     w.handle = h;
     w.flags = 0;
-    CHECK(vgpu_wait_ioctl(dev, &w, &file) == -ENODEV &&
+    CHECK(wait_unlocked(dev, &w, &file) == -ENODEV &&
               vgpu_execbuffer_ioctl(dev, &a, &file) == -ENODEV,
           "old handles reject waits and submissions");
     reset_file_ops->close(&e);

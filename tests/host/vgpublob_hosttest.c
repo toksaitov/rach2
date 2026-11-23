@@ -621,8 +621,8 @@ static void host_release(uint32_t ha)
               log_find(VIRTIO_GPU_CMD_RESOURCE_UNREF, before) < MAX_LOG,
           "a placed blob is unmapped before its UNREF");
     CHECK(at < MAX_LOG && gpu.fence[at] == 0 &&
-              gpu.fence[log_find(VIRTIO_GPU_CMD_RESOURCE_UNREF, before)] != 0,
-          "the UNMAP_BLOB carries no fence, as Linux sends it, and the UNREF one");
+              gpu.fence[log_find(VIRTIO_GPU_CMD_RESOURCE_UNREF, before)] == 0,
+          "the UNMAP_BLOB and the UNREF carry no fence, as Linux sends them");
     CHECK(gpu.windows == 1, "its window goes with it");
     CHECK(blob(VIRTGPU_BLOB_MEM_HOST3D, VIRTGPU_BLOB_FLAG_USE_MAPPABLE, PAGE_SIZE, 10, &hd) == 0 &&
               vgpu_bo(obj_of(hd))->hv_offset == 0,
@@ -1178,10 +1178,14 @@ static void row_copied(void)
     CHECK(copy_submit(&file2, 2, -1) == 84 + 96 + 100, "a virgl2 submission counts the same");
     CHECK(copy_submit(&file2, 4, -1) == 0, "a Venus submission counts nothing");
     /* The ioctl's allocations refused one at a time, the first, then the
-     * second, until one is refused that the submission does without: the
-     * count's table, whose submission is taken and counts nothing. */
-    for (k = 0; k < 16 && got == (uint64_t)-1; k++) {
+     * second, until the count's table is refused, whose submission is
+     * taken and counts nothing. A refusal before it fails the submission,
+     * or, for a payload page the submission waits for and takes again
+     * (`payload_run`), counts all. */
+    for (k = 0; k < 16 && got != 0; k++) {
         got = copy_submit(&file2, 1, k);
+        CHECK(got == (uint64_t)-1 || got == 0 || got == 84 + 96 + 100,
+              "a refusal before the table's fails the submission or counts all");
     }
     CHECK(got == 0, "without memory for the table the submission is taken and counts nothing");
     blob_unbind("the copy row leaves nothing");

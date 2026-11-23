@@ -552,6 +552,20 @@ void bkl_exit(void)
     bkl_out = 1;
 }
 
+/** Call VIRTGPU_WAIT as the DRM core calls its DRM_UNLOCKED row, without
+ * the big lock, which the handler must not leave held. */
+static int32_t wait_unlocked(struct drm_device *d, struct drm_virtgpu_3d_wait *w,
+                             struct drm_file *f)
+{
+    int32_t rc;
+
+    bkl_out = 1;
+    rc = vgpu_wait_ioctl(d, w, f);
+    CHECK(bkl_out, "VIRTGPU_WAIT returns without the big lock");
+    bkl_out = 0;
+    return rc;
+}
+
 /** One thread: interrupts need no masking. */
 uint32_t kirq_save(void)
 {
@@ -2614,13 +2628,13 @@ static void row_ioctls(void)
     k_memset(&w, 0, sizeof(w));
     w.handle = rc.bo_handle;
     w.flags = VIRTGPU_WAIT_NOWAIT;
-    CHECK(vgpu_wait_ioctl(dev, &w, &file) == -EBUSY,
+    CHECK(wait_unlocked(dev, &w, &file) == -EBUSY,
           "a 2D buffer of RESOURCE_CREATE is busy until its attach is answered, as on Linux");
     bo = dumb(64, 64, &h);
     CHECK(bo != NULL, "a dumb buffer while nothing is answered");
     if (bo) {
         w.handle = h;
-        CHECK(vgpu_wait_ioctl(dev, &w, &file) == 0, "a dumb buffer's attach is not fenced");
+        CHECK(wait_unlocked(dev, &w, &file) == 0, "a dumb buffer's attach is not fenced");
         drm_gem_object_put(&bo->shmem.base);
         CHECK(drm_gem_handle_delete(&file, h) == 0, "the dumb buffer's handle is closed");
     }
@@ -2631,7 +2645,7 @@ static void row_ioctls(void)
     vgpu_reap(vg);
     gpu.answer = ANSWER_KICK;
     w.handle = rc.bo_handle;
-    CHECK(vgpu_wait_ioctl(dev, &w, &file) == 0, "and idle once it is");
+    CHECK(wait_unlocked(dev, &w, &file) == 0, "and idle once it is");
     CHECK(res_find(rc.res_handle) && res_find(rc.res_handle)->format == rc.format,
           "the host has it in its format");
     rc.target = 3;
@@ -2656,11 +2670,14 @@ static void row_ioctls(void)
     k_memset(&w, 0, sizeof(w));
     w.handle = rc.bo_handle;
     w.flags = VIRTGPU_WAIT_NOWAIT;
-    CHECK(vgpu_wait_ioctl(dev, &w, &file) == -EBUSY, "WAIT NOWAIT while the transfer is out");
+    CHECK(wait_unlocked(dev, &w, &file) == -EBUSY, "WAIT NOWAIT while the transfer is out");
     gpu.q[0].flight[gpu.q[0].nflight - 1].answered = 1;
-    CHECK(vgpu_wait_ioctl(dev, &w, &file) == 0, "WAIT once it is answered, which its reap takes");
+    CHECK(wait_unlocked(dev, &w, &file) == -EBUSY,
+          "WAIT NOWAIT reaps nothing: an answer waits for its interrupt");
+    (void)virtqueue_reap(vg->ctrlq); /* the interrupt */
+    CHECK(wait_unlocked(dev, &w, &file) == 0, "WAIT NOWAIT once the answer's interrupt is taken");
     w.flags = 0;
-    CHECK(vgpu_wait_ioctl(dev, &w, &file) == 0, "a waiting WAIT on an idle buffer");
+    CHECK(wait_unlocked(dev, &w, &file) == 0, "a waiting WAIT on an idle buffer");
     gpu.answer = ANSWER_KICK;
     vgpu_reap(vg);
     CHECK(vgpu_execbuffer_ioctl(dev, NULL, &file) == -ENOSYS &&
