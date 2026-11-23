@@ -21,8 +21,10 @@
  * count says a change is under way until it ends; that the capture of the
  * walk under the big lock (`vfs_name_capture`) is not refused; and that a
  * type without `hold` and `put` gets no record. The parent's holds and its
- * mount's references are counted by models of the VFS's calls; the test
- * returns the number of failed checks.
+ * mount's references are counted by models of the VFS's calls. Every
+ * change of names stands for another thread's (`walkseq_host_other`),
+ * since fs/walkseq.c hides a thread's own changes from its own walks. The
+ * test returns the number of failed checks.
  */
 #include "fs/name.h"
 #include "fs/vfs.h"
@@ -31,6 +33,7 @@
 #include "lib/kstring.h"
 
 int printf(const char *format, ...);
+void walkseq_host_other(int on);
 
 static int fails;
 
@@ -198,6 +201,7 @@ int main(int argc, char **argv)
     bare_type.ops = &bare_ops;
     held_mnt.type = &held_type;
     bare_mnt.type = &bare_type;
+    walkseq_host_other(1);
     rename_walk();
     if (argc == 2 && __builtin_strcmp(argv[1], "--rename-walk-only") == 0) {
         return fails;
