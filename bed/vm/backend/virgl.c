@@ -317,7 +317,7 @@ static int resp(int err)
     return VD_RESP_ERR_UNSPEC;
 }
 
-static int mem_room(uint64_t size);
+static int mem_room(uint64_t size, int create);
 
 /* Gallium's targets of a 3D texture, whose depth halves at each level, and
  * of a cube map, which has six faces. */
@@ -339,8 +339,9 @@ static int mem_room(uint64_t size);
  * for a cube, and its samples, and rounded up to a 4 KiB page. A bound, not
  * the driver's size: it judges only this create, since once the renderer
  * has the resource the VM's counts and i915's hold its storage
- * (`gpu_unbacked`), and an error of one create lies within the eighth of
- * the VM that `mem_room` keeps.
+ * (`gpu_unbacked`), and the bound itself until the next scan (`mem_room`),
+ * and an error of one create lies within the eighth of the VM that
+ * `mem_room` keeps.
  */
 static uint64_t create_bytes(const struct vd_create *a)
 {
@@ -390,7 +391,7 @@ static int op_create(void *c, const struct vd_create *a)
     uint64_t bytes = create_bytes(a);
 
     (void)c;
-    if (!mem_room(bytes)) {
+    if (!mem_room(bytes, 1)) {
         fprintf(stderr,
                 "backend: create: resource %u: refused: %llu bytes: no room in the VM's counts\n",
                 (unsigned)a->id, (unsigned long long)bytes);
@@ -1044,39 +1045,60 @@ static int gpu_unbacked(struct gpu_scan *s)
     return s->failed ? -1 : 0;
 }
 
+/* How long a scan of the GPU objects (`gpu_unbacked`) stands for the
+ * judgments after it (`mem_room`), in nanoseconds. A scan reads the fdinfo
+ * of every descriptor of every process of the backend's cgroup, which took
+ * 2.0 to 2.5 ms of the serving thread for each create and backing on the
+ * Lenovo under Crysis. */
+#define VR_SCAN_NS 250000000ull
+
+/* The last scan and the bounds of the creates admitted since, which it
+ * does not hold; the serving thread's alone. */
+static struct {
+    uint64_t at;  /* the monotonic time of the scan, in ns; 0 for none */
+    uint64_t sum; /* its bytes, and the creates' bounds since */
+} last_scan;
+
+/** Return the monotonic clock in nanoseconds. */
+static uint64_t mono_ns(void)
+{
+    struct timespec t;
+
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
+}
+
+/** Scan the GPU objects into last_scan; 0, or -1 after the scan's line. */
+static int scan_now(void)
+{
+    struct gpu_scan scan;
+
+    if (gpu_unbacked(&scan) != 0) {
+        last_scan.at = 0;
+        fprintf(stderr, "backend: counts: %s: %s\n", scan.where, strerror(scan.failed));
+        return -1;
+    }
+    last_scan.at = mono_ns();
+    last_scan.sum = scan.sum;
+    return 0;
+}
+
 /**
- * Whether the VM has room for `size` bytes more, of a backing or of a
- * resource's storage: its available memory, as /proc/meminfo counts it,
- * holds them, the bytes the renderer's GPU objects will yet take
- * (`gpu_unbacked`), and an eighth of the VM's memory besides, so that a
- * guest that asks for more than the VM has is refused, as a Linux guest's
- * allocation fails when its RAM runs out, before the pin's reclaim, or
- * i915's at an object's first use, stalls the VM and every answer with it
- * or wakes its OOM killer. Creates (`op_create`) and backings (`back_new`)
- * are judged so against one account: a create's GPU object counts here
- * from its creation until it has its pages, and in MemAvailable after. The
- * objects are read before MemAvailable, so that one made resident between
- * the two readings is counted twice, which refuses early, and never not at
- * all. main has the C library give back at once what llvmpipe frees. 0,
- * with `backend: counts: PATH: ERROR`, when the objects cannot be read; 1
- * when the VM has no /proc/meminfo or it lacks either count; 0 when it
- * cannot be opened for want of memory or its read fails, as seq_file's
- * does when it cannot allocate its buffer. MemAvailable reads 0, not less,
- * when the free pages are down to the watermarks, which is no room.
+ * Whether MemAvailable holds `size` bytes more, `unbacked` bytes and an
+ * eighth of the VM's memory besides, as `mem_room` judges it: 1 when the VM
+ * has no /proc/meminfo or it lacks either count; 0 when it cannot be opened
+ * for want of memory or its read fails, as seq_file's does when it cannot
+ * allocate its buffer. MemAvailable reads 0, not less, when the free pages
+ * are down to the watermarks, which is no room.
  */
-static int mem_room(uint64_t size)
+static int meminfo_room(uint64_t size, uint64_t unbacked)
 {
     unsigned long long total = 0, avail = 0, kib;
     int has_total = 0, has_avail = 0, failed;
-    struct gpu_scan scan;
     uint64_t need;
     char line[128];
     FILE *f;
 
-    if (gpu_unbacked(&scan) != 0) {
-        fprintf(stderr, "backend: counts: %s: %s\n", scan.where, strerror(scan.failed));
-        return 0;
-    }
     if ((f = fopen("/proc/meminfo", "r")) == 0) {
         return errno != ENOMEM && errno != ENFILE && errno != EMFILE;
     }
@@ -1097,8 +1119,58 @@ static int mem_room(uint64_t size)
     if (!has_total || !has_avail) {
         return 1;
     }
-    need = total / 8u + scan.sum;
+    need = total / 8u + unbacked;
     return need <= avail && size <= avail - need;
+}
+
+/**
+ * Whether the VM has room for `size` bytes more, of a backing or of a
+ * resource's storage: its available memory, as /proc/meminfo counts it,
+ * holds them, the bytes the renderer's GPU objects will yet take
+ * (`gpu_unbacked`), and an eighth of the VM's memory besides, so that a
+ * guest that asks for more than the VM has is refused, as a Linux guest's
+ * allocation fails when its RAM runs out, before the pin's reclaim, or
+ * i915's at an object's first use, stalls the VM and every answer with it
+ * or wakes its OOM killer (`meminfo_room`). Creates (`op_create`, with
+ * `create` 1) and backings (`back_new`) are judged so against one account:
+ * a create's GPU object counts here from its creation until it has its
+ * pages, and in MemAvailable after. The objects are read before
+ * MemAvailable, so that one made resident between the two readings is
+ * counted twice, which refuses early, and never not at all.
+ *
+ * A scan stands for VR_SCAN_NS, the bound of each create admitted since
+ * added to it, so that a create and its backing, which come together, and
+ * a run of creates take one scan; an object made resident since is counted
+ * twice, and one freed is still counted, which refuse early. What the scan
+ * leaves out is the objects the renderer made since for itself, not for a
+ * create, and has not used: the eighth of the VM that the room keeps
+ * covers what a renderer makes in that time. A judgment that refuses on a
+ * standing scan is made again on a new one, so that a scan's age refuses
+ * nothing. main has the C library give back at once what llvmpipe frees.
+ * 0, with `backend: counts: PATH: ERROR`, when the objects cannot be read.
+ * Serving thread only.
+ */
+static int mem_room(uint64_t size, int create)
+{
+    int fresh = 0, room;
+
+    if (last_scan.at == 0 || mono_ns() - last_scan.at >= VR_SCAN_NS) {
+        if (scan_now() != 0) {
+            return 0;
+        }
+        fresh = 1;
+    }
+    room = meminfo_room(size, last_scan.sum);
+    if (!room && !fresh) {
+        if (scan_now() != 0) {
+            return 0;
+        }
+        room = meminfo_room(size, last_scan.sum);
+    }
+    if (room && create) {
+        last_scan.sum += size;
+    }
+    return room;
 }
 
 volatile sig_atomic_t vr_hold;
@@ -1155,7 +1227,7 @@ static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
         err = ENOSPC;
         step = "no pin";
     }
-    if (err == 0 && !mem_room(q->size)) {
+    if (err == 0 && !mem_room(q->size, 0)) {
         err = ENOMEM;
         step = "no room in the VM's counts";
     }
