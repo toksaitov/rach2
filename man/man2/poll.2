@@ -157,8 +157,8 @@ The slack is Linux's: the thread's timer slack, 50 microseconds unless
 of
 .Xr prctl 2
 changed it, or a thousandth of the timeout when that is more, a
-two-hundredth at a positive nice value, up to 100 ms; a thread under a
-real-time or deadline policy has none.
+two-hundredth at a positive nice value, up to 100 ms; a thread whose timer
+slack is zero, as under a real-time or deadline policy, has none.
 A timeout of 1 ms thus ends within 1.05 ms.
 Where no interrupt between ticks can be armed, as while the local APIC
 timer is not the tick, a timeout ends at the first 4 ms timer tick at
