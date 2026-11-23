@@ -1,0 +1,300 @@
+/*
+ * Time bare x86-64 system calls with no C library, so that Linux and Rach2
+ * run the same user instructions around each syscall instruction.
+ *
+ * Build: gcc -O2 -ffreestanding -static -nostdlib -fno-stack-protector -fno-pie
+ *        -no-pie -o barecall barecall.c
+ * Use:   barecall [FILE [COUNT [ROUNDS]]]
+ *
+ * Each round times COUNT calls of each kind in turn, 200000 unless given: a
+ * number no table holds, getpid, lseek(fd, 0, SEEK_CUR) and fstat on FILE's
+ * descriptor, a one-byte pread64 at 0, and an open and close of FILE. ROUNDS
+ * rounds, 9 unless given, give each kind's median, least and most, in
+ * nanoseconds a call by CLOCK_MONOTONIC.
+ *
+ * As PID 1 in a Linux initramfs it loads /virtio_blk.ko.xz, mounts devtmpfs
+ * and the ext2 volume on /dev/vda at /mnt by the ext4 driver, which takes
+ * extra_isize where Linux's ext2 mode does not, without access times; times
+ * /mnt/f, or /init when there is no module, and powers the machine off.
+ */
+
+#define SYS_read 0
+#define SYS_write 1
+#define SYS_open 2
+#define SYS_close 3
+#define SYS_fstat 5
+#define SYS_lseek 8
+#define SYS_pread64 17
+#define SYS_nanosleep 35
+#define SYS_getpid 39
+#define SYS_exit 60
+#define SYS_mount 165
+#define SYS_reboot 169
+#define SYS_clock_gettime 228
+#define SYS_finit_module 313
+#define SYS_none 1023 /* above every table: ENOSYS from dispatch */
+
+#define MS_NOATIME 1024
+#define MODULE_INIT_COMPRESSED_FILE 4
+#define KINDS 6
+#define MAX_ROUNDS 31
+
+/** System call N with three arguments; its result. */
+static long sys3(long n, long a, long b, long c)
+{
+    long r;
+
+    __asm__ volatile("syscall"
+                     : "=a"(r)
+                     : "a"(n), "D"(a), "S"(b), "d"(c)
+                     : "rcx", "r11", "memory");
+    return r;
+}
+
+/** System call N with four arguments; its result. */
+static long sys4(long n, long a, long b, long c, long d)
+{
+    long r;
+    register long r10 __asm__("r10") = d;
+
+    __asm__ volatile("syscall"
+                     : "=a"(r)
+                     : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10)
+                     : "rcx", "r11", "memory");
+    return r;
+}
+
+/** System call N with five arguments; its result. */
+static long sys5(long n, long a, long b, long c, long d, long e)
+{
+    long r;
+    register long r10 __asm__("r10") = d;
+    register long r8 __asm__("r8") = e;
+
+    __asm__ volatile("syscall"
+                     : "=a"(r)
+                     : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8)
+                     : "rcx", "r11", "memory");
+    return r;
+}
+
+/** The length of the string S. */
+static unsigned long length(const char *s)
+{
+    unsigned long n = 0;
+
+    while (s[n])
+        n++;
+    return n;
+}
+
+/** Write the string S to standard output. */
+static void put(const char *s)
+{
+    sys3(SYS_write, 1, (long)s, (long)length(s));
+}
+
+/** Write V in decimal. */
+static void put_num(unsigned long v)
+{
+    char buf[24];
+    int i = sizeof(buf);
+
+    buf[--i] = 0;
+    do {
+        buf[--i] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v && i > 0);
+    put(buf + i);
+}
+
+/** Write V/1000 with three decimals. */
+static void put_milli(unsigned long v)
+{
+    put_num(v / 1000);
+    put(".");
+    put_num(v % 1000 / 100);
+    put_num(v % 100 / 10);
+    put_num(v % 10);
+}
+
+/** The decimal number S, or DEF when S is absent, empty or 0. */
+static unsigned long parse(const char *s, unsigned long def)
+{
+    unsigned long v = 0;
+
+    if (!s || !*s)
+        return def;
+    while (*s >= '0' && *s <= '9')
+        v = v * 10 + (unsigned long)(*s++ - '0');
+    return v ? v : def;
+}
+
+/** CLOCK_MONOTONIC in nanoseconds. */
+static unsigned long now_ns(void)
+{
+    long ts[2];
+
+    sys3(SYS_clock_gettime, 1, (long)ts, 0);
+    return (unsigned long)ts[0] * 1000000000UL + (unsigned long)ts[1];
+}
+
+/** Power the machine off when PID1 is set, else exit. */
+static void finish(int pid1)
+{
+    if (pid1)
+        sys4(SYS_reboot, 0xfee1dead, 672274793, 0x4321fedc, 0);
+    sys3(SYS_exit, 0, 0, 0);
+}
+
+/**
+ * Time COUNT calls of kind K on FD, or opens and closes of PATH, and return
+ * the mean in picoseconds.
+ */
+static unsigned long run(int k, long fd, const char *path, unsigned long count)
+{
+    static long st[32];
+    unsigned long i, t0, t1;
+
+    t0 = now_ns();
+    for (i = 0; i < count; i++) {
+        switch (k) {
+        case 0:
+            sys3(SYS_none, 0, 0, 0);
+            break;
+        case 1:
+            sys3(SYS_getpid, 0, 0, 0);
+            break;
+        case 2:
+            sys3(SYS_lseek, fd, 0, 1);
+            break;
+        case 3:
+            sys3(SYS_fstat, fd, (long)st, 0);
+            break;
+        case 4:
+            sys4(SYS_pread64, fd, (long)st, 1, 0);
+            break;
+        default:
+            sys3(SYS_close, sys3(SYS_open, (long)path, 0, 0), 0, 0);
+            break;
+        }
+    }
+    t1 = now_ns();
+    return (t1 - t0) * 1000UL / count;
+}
+
+static const char *const names[KINDS] = {"enosys", "getpid", "lseek",
+                                         "fstat",  "pread1", "openclose"};
+
+/** Write that the setup call WHAT failed with the error -RC. */
+static void put_error(const char *what, long rc)
+{
+    put("barecall: ");
+    put(what);
+    put(" failed: errno ");
+    put_num((unsigned long)-rc);
+    put("\n");
+}
+
+/** Load the disk driver and mount the test volume at /mnt; 0 or -1. */
+static int mount_volume(void)
+{
+    long mod = sys3(SYS_open, (long)"/virtio_blk.ko.xz", 0, 0);
+    long ts[2] = {0, 10000000};
+    long rc = 0;
+    int i;
+
+    if (mod < 0)
+        return -1;
+    rc = sys3(SYS_finit_module, mod, (long)"", MODULE_INIT_COMPRESSED_FILE);
+    if (rc != 0)
+        put_error("finit_module", rc);
+    rc = sys5(SYS_mount, (long)"devtmpfs", (long)"/dev", (long)"devtmpfs", 0, 0);
+    if (rc != 0)
+        put_error("devtmpfs mount", rc);
+    for (i = 0; i < 500; i++) {
+        rc = sys5(SYS_mount, (long)"/dev/vda", (long)"/mnt", (long)"ext4", MS_NOATIME, 0);
+        if (rc == 0)
+            return 0;
+        sys3(SYS_nanosleep, (long)ts, 0, 0); /* while the disk appears */
+    }
+    put_error("mount", rc);
+    return -1;
+}
+
+/** Sort the first N of V in place, least first. */
+static void sort(unsigned long *v, unsigned long n)
+{
+    unsigned long a, b, t;
+
+    for (a = 1; a < n; a++)
+        for (b = a; b > 0 && v[b - 1] > v[b]; b--) {
+            t = v[b];
+            v[b] = v[b - 1];
+            v[b - 1] = t;
+        }
+}
+
+/** The program, from the stack the kernel left at SP. */
+void start_c(long *sp)
+{
+    long argc = sp[0];
+    char **argv = (char **)(sp + 1);
+    int pid1 = sys3(SYS_getpid, 0, 0, 0) == 1;
+    const char *file = argc > 1 ? argv[1] : "/init";
+    unsigned long count = parse(argc > 2 ? argv[2] : 0, 200000);
+    unsigned long rounds = parse(argc > 3 ? argv[3] : 0, 9);
+    unsigned long ps[KINDS][MAX_ROUNDS];
+    unsigned long r;
+    long fd;
+    int k;
+
+    if (pid1 && mount_volume() == 0)
+        file = "/mnt/f";
+    if (rounds > MAX_ROUNDS)
+        rounds = MAX_ROUNDS;
+    fd = sys3(SYS_open, (long)file, 0, 0);
+    if (fd < 0) {
+        put_error("open", fd);
+        finish(pid1);
+    }
+    for (k = 0; k < KINDS; k++)
+        run(k, fd, file, count / 10); /* warm the paths and the TCG blocks */
+    for (r = 0; r < rounds; r++) {
+        put("barecall: round ");
+        put_num(r);
+        for (k = 0; k < KINDS; k++) {
+            ps[k][r] = run(k, fd, file, count);
+            put(" ");
+            put_milli(ps[k][r]);
+        }
+        put("\n");
+    }
+    put("barecall: count ");
+    put_num(count);
+    put(" rounds ");
+    put_num(rounds);
+    put(" file ");
+    put(file);
+    put("\n");
+    for (k = 0; k < KINDS; k++) {
+        sort(ps[k], rounds);
+        put("barecall: ");
+        put(names[k]);
+        put(": median ");
+        put_milli(ps[k][rounds / 2]);
+        put(" ns, min ");
+        put_milli(ps[k][0]);
+        put(" ns, max ");
+        put_milli(ps[k][rounds - 1]);
+        put(" ns\n");
+    }
+    finish(pid1);
+}
+
+__asm__(".globl _start\n"
+        "_start:\n"
+        "    mov %rsp, %rdi\n"
+        "    and $-16, %rsp\n"
+        "    call start_c\n"
+        "    hlt\n");
