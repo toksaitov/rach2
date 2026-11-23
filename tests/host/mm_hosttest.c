@@ -1,8 +1,9 @@
 /**
  * Check the two counts of an address space: the users, whose last put frees
- * the memory, and the holds, which keep only the record; the program's
- * file it keeps; and a thread's holds of its regions' lock, which
- * `--lock-only` runs alone.
+ * the memory, and the holds, which keep only the record; its resident
+ * counts by kind, which the last put clears; the program's file it keeps;
+ * and a thread's holds of its regions' lock, which `--lock-only` runs
+ * alone.
  *
  * host-deps: tests/host/compat/vm_iter_host.c rach2/sys/mm/notify.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -368,6 +369,45 @@ static void live_user(void)
     rows++;
 }
 
+/** The resident counts by kind: a change counts in the space its directory
+ * names, which no running thread has here; a snapshot reads the three,
+ * which sum to the total; a count that would go below zero stays at zero,
+ * and the peak keeps the most there were; and the last user's put clears
+ * every count but the peak, so that the teardown of the tables after it
+ * counts nothing. */
+static void resident_counts(void)
+{
+    struct mm *mm = mm_new();
+    long more[MM_RSS_KINDS] = {5, 3, 2};
+    long moved[MM_RSS_KINDS] = {1, -1, 0};
+    long less[MM_RSS_KINDS] = {-2, -9, 0};
+    unsigned long got[MM_RSS_KINDS];
+
+    if (!mm) {
+        CHECK(0, "a new address space");
+        return;
+    }
+    mm_resident_add(mm->dir, more);
+    mm_resident_add(mm->dir, moved);
+    mm_rss_snapshot(mm, got);
+    CHECK(got[MM_RSS_ANON] == 6 && got[MM_RSS_FILE] == 2 && got[MM_RSS_SHMEM] == 2 &&
+              mm_resident(mm) == 10,
+          "the counts by kind take each change, a page moved from one kind to another among them");
+    mm_resident_add(mm->dir, less);
+    mm_rss_snapshot(mm, got);
+    CHECK(got[MM_RSS_ANON] == 4 && got[MM_RSS_FILE] == 0 && got[MM_RSS_SHMEM] == 2 &&
+              mm_resident(mm) == 6 && mm_resident_peak(mm) == 10,
+          "a count that would go below zero stays at zero, and the peak keeps ten");
+    mm_hold(mm);
+    mm_put(mm);
+    mm_rss_snapshot(mm, got);
+    CHECK(got[MM_RSS_ANON] == 0 && got[MM_RSS_FILE] == 0 && got[MM_RSS_SHMEM] == 0 &&
+              mm_resident(mm) == 0 && mm_resident_peak(mm) == 10,
+          "the last user's put clears every count but the peak");
+    mm_unhold(mm);
+    rows++;
+}
+
 /** A thread's end loads the kernel's directory first only when it is the
  * last user of the directory in use. */
 static void drop_switches(void)
@@ -511,13 +551,14 @@ int main(int argc, char **argv)
     hold_keeps_record();
     live_user();
     drop_switches();
+    resident_counts();
     program_file();
     lock_holds();
-    CHECK(rows == 5 && dirs == 8, "every row ran");
+    CHECK(rows == 6 && dirs == 9, "every row ran");
     if (failures) {
         return 1;
     }
     printf("mm-test: pass: a hold keeps the record, a user the memory and the program's file, "
-           "and a thread's lock holds count\n");
+           "the resident counts keep their kinds, and a thread's lock holds count\n");
     return 0;
 }
