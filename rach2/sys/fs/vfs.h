@@ -1120,6 +1120,13 @@ int vfs_unmount_record(struct vfs_mount *m);
  * so a caller need not hold the big lock. */
 struct vfs_mount *vfs_root_mount(void);
 
+/** Forget every name the cache keeps of the file system the calling
+ * process's root lies on, which a chroot or a mount namespace may have put
+ * on another than entry zero's. The names' nodes that nothing else holds
+ * leave memory. May sleep; the caller holds no spinlock and no namespace
+ * lock. */
+void vfs_root_forget_names(void);
+
 /** Add `delta` to the count of inotify watches on the base mount `m`
  * (`inotify_watched`), whose record the table holds; under the big lock. */
 void vfs_mount_watches(const struct vfs_mount *m, int delta);

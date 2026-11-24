@@ -1065,6 +1065,19 @@ static void walk_root_drop(struct vfs_ref *r)
     }
 }
 
+void vfs_root_forget_names(void)
+{
+    struct vfs_ref root;
+
+    bkl_enter();
+    if (vfs_root_mounted()) {
+        walk_root_take(&root);
+        dcache_forget_mount(mount_base(root.mnt));
+        walk_root_drop(&root);
+    }
+    bkl_exit();
+}
+
 /*
  * The check of one attempt of the full walk: the walk sequence it began at,
  * read with no other thread's change under way (walkseq.h), and whether it

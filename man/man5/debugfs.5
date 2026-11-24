@@ -658,9 +658,10 @@ root, for the thread PID, use up nothing, which the walk answers with
 makes the next read of the block cache from a device, for the thread PID,
 fail as an I/O error.
 .Ql cold
-writes every dirty block, forgets the names the root mount's cache holds
-and gives back every clean block no one holds, so that the next walk of
-the root reads the disk.
+writes every dirty block, forgets the cached names of the file system the
+calling process's root lies on
+and gives back every clean block no one holds, so that the next walk from
+that root reads the disk.
 .Ql off
 lets the stopped thread go, ends the counting, the fault, the failed read
 and the changes the gate holds.
