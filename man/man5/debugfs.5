@@ -661,7 +661,7 @@ fail as an I/O error.
 writes every dirty block, forgets the cached names of the file system the
 calling process's root lies on
 and gives back every clean block no one holds, so that the next walk from
-that root reads the disk.
+that root, when it is on a disk, reads the disk.
 .Ql off
 lets the stopped thread go, ends the counting, the fault, the failed read
 and the changes the gate holds.

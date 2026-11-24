@@ -465,12 +465,13 @@ static int gate_once_text(const char *line, uint32_t n, int *armed)
 }
 
 /**
- * Leave the next walk of the calling process's root to read the disk: the
- * dirty blocks of every mount written (`vfs_sync_all`), the names of the
- * file system the root lies on forgotten (`vfs_root_forget_names`), which
- * puts back the nodes only they held, and every clean block the cache
- * holds for no one given back. A test's way to make a lookup cold, as
- * Linux's `echo 3 > /proc/sys/vm/drop_caches` does. May sleep.
+ * Leave the next walk of the calling process's root, when the root is on a
+ * disk, to read the disk: the dirty blocks of every mount written
+ * (`vfs_sync_all`), the names of the file system the root lies on forgotten
+ * (`vfs_root_forget_names`), which puts back the nodes only they held, and
+ * every clean block the cache holds for no one given back. A test's way to
+ * make a lookup cold, as Linux's `echo 3 > /proc/sys/vm/drop_caches` does.
+ * May sleep.
  */
 static void gate_cold(void)
 {
