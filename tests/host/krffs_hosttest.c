@@ -4236,6 +4236,38 @@ static void disk_failure_rows(void)
     header_failure_rows();
 }
 
+/** Change the owner of a file whose uid falls across a block, by every byte
+ * and by one byte on one side of the line. */
+static void owner_across_row(void)
+{
+    krffs_mount_t mount = mount_over(&memory_backend, image, IMAGE_SIZE);
+
+    make_image(image, IMAGE_SIZE);
+    check(krffs_create_at(&mount, "/spacer") == 0, "a file to place the next one");
+    check(krffs_truncate_at(&mount, "/spacer", 3110, (uint64_t *)0) == 0,
+          "grown so the next node's owner field falls across a block");
+    check(krffs_create_at(&mount, "/across") == 0, "and the file that lands there");
+    {
+        uint64_t across = krffs_walk(&mount, "/across");
+        krffs_attrs_t set = {0};
+        krffs_node_t head;
+
+        check(across != KRFFS_NO_NODE, "the file is there");
+        check(across + KRFFS_FIELD_UID == 4093,
+              "and its owner field ends one byte into the next block");
+        mount.grain = 4096;
+        set.uid = 0x01020304u;
+        check(krffs_set_attrs_at(&mount, across, KRFFS_SET_UID, &set) == 0 &&
+                  krffs_head(&mount, across, &head) == 0 && head.uid == 0x01020304u,
+              "an owner whose every byte changes is stored");
+        set.uid = 0x01020305u;
+        check(krffs_set_attrs_at(&mount, across, KRFFS_SET_UID, &set) == 0 &&
+                  krffs_head(&mount, across, &head) == 0 && head.uid == 0x01020305u,
+              "an owner that changes one byte on one side of the line is stored");
+        mount.grain = 0;
+    }
+}
+
 /** Run the image and namespace cases. */
 static int image_rows(void)
 {
@@ -4424,28 +4456,7 @@ static int image_rows(void)
     check(krffs_reap_orphans_at(&mount) == 0, "and finds nothing the next time");
     check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after reaping");
 
-    make_image(image, IMAGE_SIZE);
-    check(krffs_create_at(&mount, "/spacer") == 0, "a file to place the next one");
-    check(krffs_truncate_at(&mount, "/spacer", 3110, (uint64_t *)0) == 0,
-          "grown so the next node's owner field falls across a block");
-    check(krffs_create_at(&mount, "/across") == 0, "and the file that lands there");
-    {
-        uint64_t across = krffs_walk(&mount, "/across");
-        krffs_node_t head;
-
-        check(across != KRFFS_NO_NODE, "the file is there");
-        check(across + KRFFS_FIELD_UID == 4093,
-              "and its owner field ends one byte into the next block");
-        mount.grain = 4096;
-        check(krffs_set_owner_at(&mount, across, 0x01020304u, 0, KRFFS_SET_UID) != 0,
-              "an owner whose every byte changes is refused");
-        check(krffs_head(&mount, across, &head) == 0 && head.uid == 0,
-              "and nothing of it reached the medium");
-        check(krffs_set_owner_at(&mount, across, 5, 0, KRFFS_SET_UID) == 0,
-              "an owner that changes one byte on one side of the line is written");
-        check(krffs_head(&mount, across, &head) == 0 && head.uid == 5, "and it is there");
-        mount.grain = 0;
-    }
+    owner_across_row();
 
     make_image(image, IMAGE_SIZE);
     check(krffs_create_at(&mount, "/spacer") == 0, "a file to place the next one");
@@ -4967,8 +4978,320 @@ static void free_resize_row(void)
     resize_cuts(before, sizeof(before));
 }
 
-/** Arrange a private file for both sets of fsck replay rows. */
-static void resize_order_rows(void)
+/* The bytes of the attribute fixture, and the place of its one node. */
+#define ATTR_IMAGE_SIZE 8192u
+static uint32_t attr_at;
+static uint16_t attr_kind; /* the type bits the node keeps in its mode */
+static int attr_what;      /* the KRFFS_SET_ bits of the call under test */
+static int attr_by_fsck;   /* whether a cut goes to fsck.krffs too */
+static int attr_between;   /* an edge lies between two owner fields, cutting none */
+
+/* The call's values; every byte of each differs from the fixture's. */
+static const krffs_attrs_t attr_set = {0151,
+                                       0xa1b2c3d4u,
+                                       0xb1c2d3e4u,
+                                       {0x1112131415161718, 0x21222324},
+                                       {0x3132333435363738, 0x31323334}};
+
+/** Lay the fixture: a root that ends where the node at `attr_at` begins,
+ * which holds three bytes, has a mode of 06624, and fills the image. */
+static void make_attr_image(void)
+{
+    const struct unlink_extent layout[] = {{0, NULL}, {attr_at, "victim"}};
+    krffs_node_t *head = (krffs_node_t *)(disk_image + attr_at);
+
+    make_extent_image(disk_image, ATTR_IMAGE_SIZE, layout, 2);
+    head->mode = (uint16_t)(attr_kind | 06624);
+    head->uid = 0x01020304u;
+    head->gid = 0x05060708u;
+    head->access_time.seconds = 0x0102030405060708;
+    head->access_time.nanoseconds = 0x01020304;
+    head->modification_time = head->access_time;
+    head->attribute_change_time = head->access_time;
+    if (attr_kind != KRFFS_S_IFDIR) {
+        fill_fixture_file(attr_at, 3, 'v');
+    } else {
+        head->data_size = 0;
+        head->id = krffs_mix_id(KRFFS_ROOT_ID, "victim");
+    }
+}
+
+/** A volume over the fixture, with the units of the block backend. */
+static krffs_mount_t attr_mount(const krffs_backend_t *backend, void *ctx, uint32_t phase)
+{
+    krffs_mount_t fs = mount_over(backend, ctx, ATTR_IMAGE_SIZE);
+
+    fs.grain = 4096;
+    fs.sector = 512;
+    fs.sector_phase = phase;
+    return fs;
+}
+
+/** Whether `head` has the fixture's mode, owner and times, or with `set`
+ * those the call gives it. */
+static int attr_head_is(const krffs_node_t *head, int set)
+{
+    int what = set ? attr_what : 0;
+    int64_t old = 0x0102030405060708;
+    uint16_t mode = (uint16_t)(attr_kind | ((what & KRFFS_SET_MODE) ? attr_set.mode : 06624));
+
+    return head->mode == mode &&
+           head->uid == ((what & KRFFS_SET_UID) ? attr_set.uid : 0x01020304u) &&
+           head->gid == ((what & KRFFS_SET_GID) ? attr_set.gid : 0x05060708u) &&
+           head->access_time.seconds == ((what & KRFFS_SET_ATIME) ? attr_set.atime.seconds : old) &&
+           head->modification_time.seconds ==
+               ((what & KRFFS_SET_MTIME) ? attr_set.mtime.seconds : old) &&
+           head->attribute_change_time.seconds == (set ? fake_seconds : old);
+}
+
+/** Whether a recovered cut keeps the node, its bytes, and each of its mode,
+ * uid and gid whole, old or new, with no new owner beside the old mode but
+ * where an edge cuts no field, whose plain stores have no barrier. */
+static int attr_contents(krffs_mount_t *fs)
+{
+    krffs_node_t head;
+    uint16_t was = (uint16_t)(attr_kind | 06624);
+    uint16_t set = (uint16_t)(attr_kind | attr_set.mode);
+    int newer;
+
+    if (!krffs_chain_is_valid(fs) || krffs_walk(fs, "/victim") != attr_at ||
+        krffs_head(fs, attr_at, &head) != 0 ||
+        (attr_kind != KRFFS_S_IFDIR && !holds_bytes(fs, attr_at, "vvv", 3))) {
+        return 0;
+    }
+    newer = head.uid != 0x01020304u || head.gid != 0x05060708u;
+    return (head.mode == was || head.mode == set) &&
+           (head.uid == 0x01020304u || head.uid == attr_set.uid) &&
+           (head.gid == 0x05060708u || head.gid == attr_set.gid) &&
+           (!newer || attr_between || !(attr_what & KRFFS_SET_MODE) || head.mode == set);
+}
+
+/** Recover copies of one cut by the volume's check, and with `attr_by_fsck`
+ * by the host checker. */
+static int attr_cut(uint8_t *state, uint32_t size)
+{
+    static uint8_t copy[ATTR_IMAGE_SIZE];
+    krffs_mount_t fs = attr_mount(&memory_backend, copy, 0);
+    int marked = ((krffs_node_t *)(state + attr_at))->type == KRFFS_RESIZING_NODE;
+
+    k_memcpy(copy, state, size);
+    if ((marked && krffs_chain_is_walkable(&fs)) ||
+        krffs_chain_walk(&fs, KRFFS_WALK_RECOVERY) != 1 ||
+        krffs_repair_at(&fs, NULL, NULL, NULL) != 0 || !legacy_walk(&fs) || !attr_contents(&fs)) {
+        return 0;
+    }
+    if (!attr_by_fsck) {
+        return 1;
+    }
+    k_memcpy(copy, state, size);
+    return fsck_cut(copy, size) && !krffs_is_dirty(&fs) && legacy_walk(&fs) && attr_contents(&fs);
+}
+
+/** Stop again at each write of the repair of the marked state after
+ * `prefix` writes, with the marked field's bytes torn. */
+static void attr_repair_cuts(const uint8_t *before, int prefix)
+{
+    static uint8_t torn[ATTR_IMAGE_SIZE];
+    krffs_mount_t fs = attr_mount(&recording_backend, disk_image, 0);
+    krffs_node_t *head = (krffs_node_t *)(torn + attr_at);
+
+    build(torn, before, prefix, ATTR_IMAGE_SIZE);
+    if (krffs_record_kind(head->previous_node_size) == KRFFS_RECORD_UID) {
+        head->uid = (head->uid & ~0xffffu) | (attr_set.uid & 0xffffu);
+    }
+    k_memcpy(disk_image, torn, ATTR_IMAGE_SIZE);
+    recorded_count = sync_count = 0;
+    recording = 1;
+    check(krffs_repair_at(&fs, NULL, NULL, NULL) == 0, "the recorded repair ends a marked change");
+    recording = 0;
+    check(every_unit_cut_is_sound(torn, ATTR_IMAGE_SIZE, 512, attr_cut) &&
+              every_unit_cut_is_sound(torn, ATTR_IMAGE_SIZE, 4096, attr_cut),
+          "a second stop during the repair keeps the attributes whole");
+}
+
+/** Run one call at `attr_at`, judge its answer and every cut of its writes,
+ * then, when an edge cuts a field, fail each write and sync in turn. */
+static void attr_case(uint32_t phase)
+{
+    static uint8_t before[ATTR_IMAGE_SIZE];
+    krffs_mount_t fs = attr_mount(&recording_backend, disk_image, phase);
+    krffs_node_t head;
+    int events, i, marker = -1, cut = 0;
+
+    make_attr_image();
+    k_memcpy(before, disk_image, ATTR_IMAGE_SIZE);
+    recorded_count = sync_count = writes_seen = 0;
+    recording = 1;
+    check(krffs_set_attrs_at(&fs, attr_at, attr_what, &attr_set) == 0,
+          "a change of attributes is stored at every place");
+    recording = 0;
+    events = writes_seen;
+    check(krffs_head(&fs, attr_at, &head) == 0 && attr_head_is(&head, 1) && !fs.halted &&
+              !fs.check_owed && krffs_chain_is_valid(&fs),
+          "every attribute has its new value and the ring is whole");
+    check(phase_cuts_are_sound(before, ATTR_IMAGE_SIZE, 512, phase, attr_cut) &&
+              phase_cuts_are_sound(before, ATTR_IMAGE_SIZE, 4096, 0, attr_cut),
+          "every sector and page cut leaves the owner and the mode whole");
+    for (i = 0; i < recorded_count && marker < 0; i++) {
+        if (recorded[i].offset == attr_at + KRFFS_FIELD_TYPE &&
+            recorded[i].bytes[0] == KRFFS_RESIZING_NODE) {
+            marker = i;
+        }
+    }
+    for (i = 0; i < recorded_count; i++) {
+        cut |= recorded[i].size > sizeof(krffs_node_time_t);
+    }
+    for (i = 0; cut && i < events; i++) {
+        int j, marked = 0;
+
+        fs = attr_mount(&recording_backend, disk_image, phase);
+        make_attr_image();
+        recorded_count = sync_count = writes_seen = 0;
+        refused_write = refused_sync = i;
+        recording = 1;
+        check(krffs_set_attrs_at(&fs, attr_at, attr_what, &attr_set) != 0 &&
+                  krffs_head(&fs, attr_at, &head) == 0 && attr_head_is(&head, 0),
+              "a failed write or sync changes no attribute");
+        recording = 0;
+        refused_write = refused_sync = -1;
+        for (j = 0; j < recorded_count; j++) {
+            marked |= recorded[j].offset == attr_at + KRFFS_FIELD_TYPE;
+        }
+        check(!marked || (fs.halted && fs.check_owed),
+              "a failure once a marker was stored halts the mount and owes a check");
+    }
+    if (marker >= 0) {
+        krffs_mount_t again = attr_mount(&recording_backend, disk_image, phase);
+
+        make_attr_image();
+        recorded_count = sync_count = 0;
+        recording = 1;
+        krffs_set_attrs_at(&again, attr_at, attr_what, &attr_set);
+        recording = 0;
+        attr_repair_cuts(before, marker + 1);
+    }
+}
+
+/** Stamp the directory at `attr_at` as an entry change and as a chmod do;
+ * with `refuse`, refuse the store, which changes neither time. */
+static void attr_stamp_case(int refuse)
+{
+    krffs_mount_t fs = attr_mount(&recording_backend, disk_image, 0);
+    krffs_node_t head;
+
+    make_attr_image();
+    writes_seen = 0;
+    refused_write = refuse ? 0 : -1;
+    check((krffs_stamp_at(&fs, attr_at, KRFFS_STAMP_DATA) != 0) == refuse &&
+              krffs_head(&fs, attr_at, &head) == 0 &&
+              (head.modification_time.seconds == fake_seconds) == !refuse &&
+              (head.attribute_change_time.seconds == fake_seconds) == !refuse &&
+              (head.modification_time.nanoseconds == fake_nanoseconds) == !refuse,
+          "an entry change's stamp stores both times or neither");
+    refused_write = -1;
+    make_attr_image();
+    check(krffs_stamp_at(&fs, attr_at, KRFFS_STAMP_ATTR) == 0 &&
+              krffs_head(&fs, attr_at, &head) == 0 &&
+              head.attribute_change_time.seconds == fake_seconds &&
+              head.attribute_change_time.nanoseconds == fake_nanoseconds &&
+              head.modification_time.seconds == 0x0102030405060708,
+          "a change stamp is stored at every place");
+}
+
+/** Make an entry in the directory at `attr_at`, which is stamped. */
+static void attr_entry_case(void)
+{
+    static const struct unlink_extent free_after[] = {{0, NULL}, {1000, "victim"}, {3000, NULL}};
+    krffs_mount_t fs = mount_over(&memory_backend, disk_image, DISK_IMAGE_SIZE);
+    struct unlink_extent layout[3];
+    krffs_node_t head;
+
+    k_memcpy(layout, free_after, sizeof(layout));
+    layout[1].start = attr_at;
+    layout[2].start = attr_at + 2 * (uint32_t)sizeof(head);
+    make_unlink_image(layout, 3);
+    ((krffs_node_t *)(disk_image + attr_at))->mode = KRFFS_S_IFDIR | 0755;
+    ((krffs_node_t *)(disk_image + attr_at))->data_size = 0;
+    ((krffs_node_t *)(disk_image + attr_at))->id = krffs_mix_id(KRFFS_ROOT_ID, "victim");
+    fs.grain = 4096;
+    fs.sector = 512;
+    check(krffs_create_at(&fs, "/victim/entry") == 0 && krffs_head(&fs, attr_at, &head) == 0 &&
+              head.modification_time.seconds == fake_seconds &&
+              head.attribute_change_time.seconds == fake_seconds,
+          "a directory at every place is stamped by a new entry");
+}
+
+/**
+ * Change a time, a mode, a uid, a gid, and all of them in one call, with
+ * each edge of a block and of a sector at each byte of each field, and at
+ * the bytes between them; and once on a volume whose sector and block edges
+ * cut the mode and the uid both. A call that no edge cuts goes by the plain
+ * stores, the mode's and the change time's.
+ */
+static void attr_rows(void)
+{
+    static const uint32_t edges[] = {4096, 3584};
+    static const int calls[] = {
+        KRFFS_SET_MODE, KRFFS_SET_UID, KRFFS_SET_GID, KRFFS_SET_ATIME | KRFFS_SET_MTIME,
+        KRFFS_SET_MODE | KRFFS_SET_UID | KRFFS_SET_GID | KRFFS_SET_ATIME | KRFFS_SET_MTIME};
+    int64_t seconds = fake_seconds;
+    krffs_mount_t fs;
+    uint32_t i, j, cut;
+    int was = fails;
+
+    fake_seconds = 0x4142434445464748;
+    fake_nanoseconds = 0x31323334;
+    for (i = 0; i < 2; i++) {
+        for (cut = KRFFS_FIELD_MODE + 1; cut < KRFFS_FIELD_SIZE; cut++) {
+            attr_at = edges[i] - cut;
+            attr_between = cut == KRFFS_FIELD_UID || cut == KRFFS_FIELD_GID;
+            for (j = 0; j < sizeof(calls) / sizeof(calls[0]); j++) {
+                attr_what = calls[j];
+                attr_by_fsck = cut < KRFFS_FIELD_ATIME && j != 3;
+                attr_kind = 0;
+                attr_case(0);
+                attr_kind = KRFFS_S_IFDIR;
+                attr_by_fsck = 0;
+                attr_case(0);
+            }
+            attr_stamp_case(0);
+            attr_stamp_case(1);
+            attr_entry_case();
+            if (fails != was) {
+                printf("krffs_hosttest: attributes cut at header byte %u of the edge %u\n", cut,
+                       edges[i]);
+                break;
+            }
+        }
+    }
+    attr_kind = 0;
+    attr_by_fsck = 0;
+    attr_between = 0;
+    attr_at = 4095 - KRFFS_FIELD_MODE;
+    for (j = 0; j < sizeof(calls) / sizeof(calls[0]); j++) {
+        attr_what = calls[j];
+        attr_case(508);
+    }
+    /* A block's edge between the mode and the uid, a sector's in the atime. */
+    attr_at = 4096 - KRFFS_FIELD_UID;
+    attr_case(498);
+    attr_at = 2048 + 100;
+    attr_what = KRFFS_SET_MODE;
+    make_attr_image();
+    fs = attr_mount(&recording_backend, disk_image, 0);
+    recorded_count = 0;
+    recording = 1;
+    check(krffs_set_attrs_at(&fs, attr_at, attr_what, &attr_set) == 0 && recorded_count == 2 &&
+              recorded[0].offset == attr_at + KRFFS_FIELD_MODE && recorded[0].size == 2 &&
+              recorded[1].offset == attr_at + KRFFS_FIELD_CTIME && recorded[1].size == 16,
+          "a chmod that no edge cuts is the store of the mode and that of the change time");
+    recording = 0;
+    fake_seconds = seconds;
+    fake_nanoseconds = 0;
+}
+
+/** Arrange a private file for the fsck replay rows. */
+static void resize_order_rows(int attrs_only)
 {
     const char *tmp = getenv("TMPDIR");
     int n = snprintf(cut_path, sizeof(cut_path), "%s/krffs-cut-%d.img",
@@ -4977,8 +5300,11 @@ static void resize_order_rows(void)
         check(0, "registered the private checker image");
         return;
     }
-    terminal_resize_row();
-    free_resize_row();
+    if (!attrs_only) {
+        terminal_resize_row();
+        free_resize_row();
+    }
+    attr_rows();
 }
 
 /** Reach the largest spare extents for allocation, shrink and growth. */
@@ -5094,12 +5420,17 @@ int main(int argc, char **argv)
         printf("krffs-hosttest: timestamp rows: %d failures\n", fails);
         return fails != 0;
     }
+    if (argc == 2 && __builtin_strcmp(argv[1], "attributes") == 0) {
+        resize_order_rows(1);
+        printf("krffs-hosttest: attribute rows: %d failures\n", fails);
+        return fails != 0;
+    }
     disk_failure_rows();
     if (argc == 2 && __builtin_strcmp(argv[1], "failures") == 0) {
         printf("krffs-hosttest: failure rows: %d failures\n", fails);
         return fails != 0;
     }
-    resize_order_rows();
+    resize_order_rows(0);
     extent_bounds_row();
     locked_extent_row(0x00ffffffu, 65536, 2, 0);
     locked_extent_row(0x02ffffffu, (1u << 24) + 329, 1, 0);

@@ -86,8 +86,18 @@ typedef enum {
     KRFFS_ROOT_NODE,     /* The first node, which is the root directory */
     KRFFS_FREE_NODE,     /* Free space (available for allocation) */
     KRFFS_RESERVED_NODE, /* A file, a directory, a FIFO or a socket file */
-    KRFFS_RESIZING_NODE  /* Target size and ordinary type in previous_node_size */
+    KRFFS_RESIZING_NODE  /* A field changes under the record in previous_node_size */
 } krffs_node_type_t;
+
+/* The record in `previous_node_size` of a KRFFS_RESIZING_NODE: the value of
+ * one field in bits 0 to 31, the ordinary type in bits 32 to 39, and from
+ * bit 40 the kind, which says the field. A size's is the target, and the
+ * value of the others is the old one, which the repair puts back. */
+#define KRFFS_RECORD_KIND_SHIFT 40
+#define KRFFS_RECORD_SIZE       0u
+#define KRFFS_RECORD_MODE       1u
+#define KRFFS_RECORD_UID        2u
+#define KRFFS_RECORD_GID        3u
 
 /* Node timestamp, packed for on-disk compatibility. */
 #pragma pack(push, 1)
@@ -117,7 +127,7 @@ typedef struct krffs_node {
     krffs_node_time_t modification_time;       /* Last modification time */
     krffs_node_time_t attribute_change_time;   /* Last attribute change time */
     uint64_t size;                             /* Total node size (header + data space) */
-    uint64_t previous_node_size;               /* Backward link, or resize shadow */
+    uint64_t previous_node_size;               /* Backward link, or a marker's record */
     uint64_t data_size;                        /* Actual data bytes used */
     uint64_t parent_id; /* id of the containing directory (KRFFS_ROOT_ID at the root) */
 } krffs_node_t;
@@ -328,32 +338,31 @@ int krffs_chain_is_walkable(krffs_mount_t *mount);
 /* Which of the attributes a caller is setting. */
 #define KRFFS_SET_UID   1
 #define KRFFS_SET_GID   2
-#define KRFFS_SET_ATIME 1
-#define KRFFS_SET_MTIME 2
+#define KRFFS_SET_ATIME 4
+#define KRFFS_SET_MTIME 8
+#define KRFFS_SET_MODE  16
+
+/* The values of a `krffs_set_attrs_at`. */
+typedef struct krffs_attrs {
+    uint16_t mode; /* the permission, set-id and sticky bits */
+    uint32_t uid;
+    uint32_t gid;
+    krffs_node_time_t atime;
+    krffs_node_time_t mtime;
+} krffs_attrs_t;
 
 /**
- * Store the permission, set-id and sticky bits of `mode` in the node at
- * `offset`, keeping its type bits, so a directory stays a directory. 0, or
- * -1 when the header cannot be read or the store fails. The caller
- * stamps the change time, and does not pass the root, whose mode has the
- * dirty flag.
+ * Store the attributes of `set` that the KRFFS_SET_ bits of `what` select in
+ * the reserved node at `offset`, wherever its header lies, keep the mode's
+ * type bits, so a directory stays a directory, and stamp the change time.
+ * The caller does not pass the root, whose mode has the dirty flag. Return
+ * 0, or -1 when the header cannot be read, the medium fails or the node is
+ * free. A call with a field whose changed bytes a sector's or a block's edge
+ * cuts stores all or, on a failure, none, and halts the mount when part of
+ * a change may have reached the medium; in any other the stores before a
+ * failed one stay. A cut among the owner and mode bytes sleeps in barriers.
  */
-int krffs_set_mode_at(krffs_mount_t *mount, uint64_t offset, uint16_t mode);
-
-/**
- * Store `uid`, `gid` or both in the node at `offset`, as the KRFFS_SET_UID
- * and KRFFS_SET_GID bits of `which` select; 0, or -1 when a store fails.
- */
-int krffs_set_owner_at(krffs_mount_t *mount, uint64_t offset, uint32_t uid, uint32_t gid,
-                       int which);
-
-/**
- * Store the access time of the node at `offset` for a `which` of
- * KRFFS_SET_ATIME, and its modification time otherwise; 0, or -1 when the
- * store fails.
- */
-int krffs_set_time_at(krffs_mount_t *mount, uint64_t offset, int which, int64_t seconds,
-                      int64_t nanoseconds);
+int krffs_set_attrs_at(krffs_mount_t *mount, uint64_t offset, int what, const krffs_attrs_t *set);
 
 /**
  * The most nodes the region can hold, which bounds every walk: its size in
@@ -663,8 +672,9 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount);
  * and change times for `what` KRFFS_STAMP_DATA, what a write does, and the
  * change time alone for any other `what`, what a chmod does. KRFFS_NO_NODE
  * is left alone. Return 0 on success or for KRFFS_NO_NODE, and a nonzero
- * result on the first failed store. A completed modification-time store
- * stands if the change-time store fails.
+ * result, with a log record, on the first failed store. A completed
+ * modification-time store stands if the change-time store fails, unless an
+ * edge cuts either on a volume, when they are one store.
  *
  * The access time is never stamped. KRFFS is reached through a write-back
  * cache, the page cache under a root in the window and the buffer cache
@@ -674,6 +684,11 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount);
  * a `noatime` mount; krffs.Readme.md states the rule.
  */
 int krffs_stamp_at(krffs_mount_t *mount, uint64_t offset, int what);
+
+/** Stamp the directory of the node at `offset`, whose entries a caller
+ * changes, as `krffs_stamp_at` does with KRFFS_STAMP_DATA. A failure leaves
+ * the directory's times and is logged. */
+void krffs_stamp_parent(krffs_mount_t *mount, uint64_t offset);
 
 /**
  * Allocate a reserved node with room for `size` bytes of data, first fit,

@@ -20,7 +20,8 @@ struct krffs_file_system;
  * order is fixed: `KRFFS_Root_Node` (0) is the root directory, the first node
  * of the region; `KRFFS_Free_Node` (1) is free space; and
  * `KRFFS_Reserved_Node` (2) is a file, directory, FIFO or socket.
- * `KRFFS_Resizing_Node` (3) publishes a size held in the backward link.
+ * `KRFFS_Resizing_Node` (3) marks a node one of whose fields is changing
+ * under the record in its backward link.
  */
 enum krffs_node_type {
     KRFFS_Root_Node,
@@ -28,6 +29,16 @@ enum krffs_node_type {
     KRFFS_Reserved_Node,
     KRFFS_Resizing_Node,
 };
+
+/**
+ * The kinds of that record, the kernel's of the same names: a resize's
+ * target size, or the old mode, uid or gid, which a check puts back.
+ */
+#define KRFFS_RECORD_KIND_SHIFT 40
+#define KRFFS_RECORD_SIZE       0u
+#define KRFFS_RECORD_MODE       1u
+#define KRFFS_RECORD_UID        2u
+#define KRFFS_RECORD_GID        3u
 
 /**
  * The dirty flag, a bit of the root node's `mode`, which the kernel sets while
@@ -89,8 +100,9 @@ struct krffs_node {
     struct krffs_node_time attribute_change_time;
     /** Bytes of header and data space: the step to the next node. */
     uint64_t size;
-    /** Backward link, or while resizing, target size in bits 0..31 and
-     * ordinary node type in bits 32..63. */
+    /** Backward link, or while the type is `KRFFS_Resizing_Node`, a record:
+     * a field's value in bits 0..31, the ordinary node type in bits 32..39
+     * and the field's `KRFFS_RECORD_` kind from bit 40. */
     uint64_t previous_node_size;
     /** Bytes of data in use, at most `size` less the header. */
     uint64_t data_size;

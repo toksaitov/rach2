@@ -307,22 +307,53 @@ static int krffs_clear_dirty(struct krffs_file_system *file_system, bool was_dir
     return 0;
 }
 
-/**
- * Finish a marked resize from its validated shadow. The size must be on
- * disk before the ordinary type, and that type before link repair can
- * overwrite the shadow. Return -1 if either barrier fails.
- */
-static int krffs_finish_resize(struct krffs_file_system *fs, struct krffs_node *node)
+/** Whether a marker's `record` is one the kernel writes: a resize of a free
+ * or reserved node, or a reserved node's old mode, uid or gid. */
+static bool krffs_record_is_valid(uint64_t record)
 {
-    node->size = (uint32_t)node->previous_node_size;
+    uint32_t type = (uint32_t)(record >> 32) & 0xff;
+    uint32_t kind = (uint32_t)(record >> KRFFS_RECORD_KIND_SHIFT);
+
+    if (kind == KRFFS_RECORD_SIZE) {
+        return type == KRFFS_Free_Node || type == KRFFS_Reserved_Node;
+    }
+    return type == KRFFS_Reserved_Node && kind <= KRFFS_RECORD_GID &&
+           (kind != KRFFS_RECORD_MODE || (uint32_t)record <= UINT16_MAX);
+}
+
+/**
+ * Finish a marked change from its validated record: a resize's target size,
+ * or the old mode, uid or gid. The value must be on disk before the
+ * ordinary type, and that type before link repair can overwrite the record.
+ * Return -1 if either barrier fails.
+ */
+static int krffs_finish_marked(struct krffs_file_system *fs, struct krffs_node *node)
+{
+    uint64_t record = node->previous_node_size;
+    uint32_t value = (uint32_t)record;
+
+    switch ((uint32_t)(record >> KRFFS_RECORD_KIND_SHIFT)) {
+    case KRFFS_RECORD_SIZE:
+        node->size = value;
+        break;
+    case KRFFS_RECORD_MODE:
+        node->mode = (uint16_t)value;
+        break;
+    case KRFFS_RECORD_UID:
+        node->uid = value;
+        break;
+    default:
+        node->gid = value;
+        break;
+    }
     if (krffs_barrier_image(fs) != 0) {
         return -1;
     }
-    node->type = (uint8_t)(node->previous_node_size >> 32);
+    node->type = (uint8_t)(record >> 32);
     return krffs_barrier_image(fs);
 }
 
-/** Finish interrupted sizes and rebuild the validated chain's backward
+/** Finish interrupted marked changes and rebuild the validated chain's backward
  * links. Return 0, or -1 if a resize could not reach the disk. */
 static int krffs_rebuild_links(struct krffs_file_system *fs)
 {
@@ -331,8 +362,8 @@ static int krffs_rebuild_links(struct krffs_file_system *fs)
     while (at < (uint64_t)fs->size) {
         struct krffs_node *node = krffs_node_at(fs, at);
 
-        if (node->type == KRFFS_Resizing_Node && krffs_finish_resize(fs, node) != 0) {
-            fprintf(stderr, "fsck.krffs: cannot finish resize at %" PRIu64 "\n", at);
+        if (node->type == KRFFS_Resizing_Node && krffs_finish_marked(fs, node) != 0) {
+            fprintf(stderr, "fsck.krffs: cannot finish the change at %" PRIu64 "\n", at);
             return -1;
         }
         if (at && node->previous_node_size != previous) {
@@ -368,7 +399,8 @@ static int krffs_rebuild_links(struct krffs_file_system *fs)
  * image is left as it was.
  *
  * An interrupted resize restores the target size and ordinary type from
- * its backward link before any links are rebuilt. Other repairs cover
+ * its backward link before any links are rebuilt, and an interrupted change
+ * of a mode, uid or gid the old value and the type. Other repairs cover
  * the dirty flag; an orphan, a reserved node with no name, which a crash
  * leaves when the last descriptor of an unlinked file was never closed; a
  * file whose `parent_id` names no directory, which a rename stopped within
@@ -575,14 +607,20 @@ int main(int argc, char **argv)
         size = node->size;
         type = node->type;
         if (type == KRFFS_Resizing_Node) {
-            type = (uint32_t)(node->previous_node_size >> 32);
-            size = (uint32_t)node->previous_node_size;
-            if (!was_dirty || (type != KRFFS_Free_Node && type != KRFFS_Reserved_Node)) {
-                fprintf(stderr, "fsck.krffs: invalid resize record at %" PRIu64 "\n", position);
+            uint64_t record = node->previous_node_size;
+
+            type = (uint32_t)(record >> 32) & 0xff;
+            if (!was_dirty || !krffs_record_is_valid(record)) {
+                fprintf(stderr, "fsck.krffs: invalid marker record at %" PRIu64 "\n", position);
                 exit_status = KRFFS_Node_Size_Error;
                 break;
             }
-            printf("Unfinished resize at %" PRIu64 " to %" PRIu64 " bytes.\n", position, size);
+            if ((record >> KRFFS_RECORD_KIND_SHIFT) == KRFFS_RECORD_SIZE) {
+                size = (uint32_t)record;
+                printf("Unfinished resize at %" PRIu64 " to %" PRIu64 " bytes.\n", position, size);
+            } else {
+                printf("Unfinished change of mode or owner at %" PRIu64 ".\n", position);
+            }
         }
         if (size < sizeof(struct krffs_node) || size > file_system.size - position) {
             printf("- node at position %" PRIu64 ": a size of %" PRIu64 " bytes in "

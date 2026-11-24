@@ -103,7 +103,7 @@ static int krffs_root_in_reap;
  * memory; 0 on success. */
 static int (*krffs_root_flush)(void);
 
-/** Read the on-disk header, including any unfinished resize. */
+/** Read the on-disk header, including any unfinished marked change. */
 static int krffs_raw_head(krffs_mount_t *mount, uint64_t offset, krffs_node_t *out)
 {
     if (!mount || !out || offset > mount->size || mount->size - offset < sizeof(krffs_node_t)) {
@@ -112,25 +112,46 @@ static int krffs_raw_head(krffs_mount_t *mount, uint64_t offset, krffs_node_t *o
     return mount->backend->read(mount->ctx, offset, out, (uint32_t)sizeof(krffs_node_t));
 }
 
-/** Return the ordinary type recorded with the target size, or -1. */
-static int krffs_resize_type(uint64_t shadow)
-{
-    uint32_t type = (uint32_t)(shadow >> 32);
+/* The field a marker's record holds the value of, by the record's kind. */
+static const struct {
+    uint32_t field;
+    uint32_t size;
+} krffs_records[] = {
+    {KRFFS_FIELD_SIZE, 8}, {KRFFS_FIELD_MODE, 2}, {KRFFS_FIELD_UID, 4}, {KRFFS_FIELD_GID, 4}};
 
-    return type == KRFFS_FREE_NODE || type == KRFFS_RESERVED_NODE ? (int)type : -1;
+/** The kind of a marker's record, an index of `krffs_records` when valid. */
+static uint32_t krffs_record_kind(uint64_t record)
+{
+    return (uint32_t)(record >> KRFFS_RECORD_KIND_SHIFT);
 }
 
-/** Resolve a resize in a header copy. Return zero for an invalid shadow. */
-static int krffs_decode_resize(krffs_node_t *head)
+/**
+ * Resolve a marker's `record` in a header copy: store the ordinary type in
+ * `type`, and the recorded value in `fields`, the header's bytes from the
+ * mode on. Return 0, with nothing stored, for an invalid record.
+ */
+static int krffs_decode_record(uint64_t record, uint8_t *type, uint8_t *fields)
 {
-    int type = krffs_resize_type(head->previous_node_size);
+    uint32_t kind = krffs_record_kind(record);
+    uint32_t ordinary = (uint32_t)(record >> 32) & 0xffu;
+    uint64_t value = (uint32_t)record;
 
-    if (type < 0) {
+    if (kind > KRFFS_RECORD_GID || (kind == KRFFS_RECORD_MODE && value > 0xffffu) ||
+        (ordinary != KRFFS_RESERVED_NODE &&
+         (kind != KRFFS_RECORD_SIZE || ordinary != KRFFS_FREE_NODE))) {
         return 0;
     }
-    head->type = (uint8_t)type;
-    head->size = (uint32_t)head->previous_node_size;
+    *type = (uint8_t)ordinary;
+    k_memcpy(fields + krffs_records[kind].field - KRFFS_FIELD_MODE, &value,
+             krffs_records[kind].size);
     return 1;
+}
+
+/** Resolve a marked header copy. Return 0 for an invalid record. */
+static int krffs_decode_marked(krffs_node_t *head)
+{
+    return krffs_decode_record(head->previous_node_size, &head->type,
+                               (uint8_t *)head + KRFFS_FIELD_MODE);
 }
 
 int krffs_head(krffs_mount_t *mount, uint64_t offset, krffs_node_t *out)
@@ -138,7 +159,7 @@ int krffs_head(krffs_mount_t *mount, uint64_t offset, krffs_node_t *out)
     if (krffs_raw_head(mount, offset, out) != 0) {
         return -1;
     }
-    if (out->type == KRFFS_RESIZING_NODE && !krffs_decode_resize(out)) {
+    if (out->type == KRFFS_RESIZING_NODE && !krffs_decode_marked(out)) {
         return -1;
     }
     return 0;
@@ -168,14 +189,10 @@ static int krffs_brief(krffs_mount_t *mount, uint64_t offset, krffs_brief_t *out
                              (uint32_t)(sizeof(krffs_node_t) - KRFFS_FIELD_MODE)) != 0) {
         return -1;
     }
-    if (out->type == KRFFS_RESIZING_NODE) {
-        int type = krffs_resize_type(out->previous_node_size);
-
-        if (type < 0) {
-            return -1;
-        }
-        out->type = (uint8_t)type;
-        out->size = (uint32_t)out->previous_node_size;
+    if (out->type == KRFFS_RESIZING_NODE &&
+        !krffs_decode_record(out->previous_node_size, &out->type,
+                             (uint8_t *)out + sizeof(out->type) + sizeof(out->id))) {
+        return -1;
     }
     return 0;
 }
@@ -1383,15 +1400,33 @@ static int krffs_stamp_fields(krffs_mount_t *mount, uint64_t offset, int what,
     return krffs_put(mount, offset, KRFFS_FIELD_CTIME, now, (uint32_t)sizeof(*now));
 }
 
+/**
+ * On a volume a stamp that a sector's or a block's edge cuts is one store of
+ * both times, both or neither, without the whole-unit rule: a stop between
+ * two units costs a wrong time and nothing else.
+ */
 int krffs_stamp_at(krffs_mount_t *mount, uint64_t offset, int what)
 {
-    krffs_node_time_t now;
+    krffs_node_time_t both[2];
+    uint32_t first = what == KRFFS_STAMP_DATA ? KRFFS_FIELD_MTIME : KRFFS_FIELD_CTIME;
+    int rc;
 
     if (offset == KRFFS_NO_NODE) {
         return 0;
     }
-    now = krffs_now();
-    return krffs_stamp_fields(mount, offset, what, &now);
+    both[0] = krffs_now();
+    both[1] = both[0];
+    if (mount->grain == 0 ||
+        (krffs_write_fits(mount, offset + first, both, (uint32_t)sizeof(both[0]), 1) &&
+         krffs_write_fits(mount, offset + KRFFS_FIELD_CTIME, both, (uint32_t)sizeof(both[0]), 1))) {
+        rc = krffs_stamp_fields(mount, offset, what, both);
+    } else {
+        rc = krffs_backend_field(mount, offset, first, both, KRFFS_FIELD_SIZE - first);
+    }
+    if (rc != 0) {
+        klog(KLOG_WARN, "krffs", "stamp: failed: the node at %d", (int)offset);
+    }
+    return rc;
 }
 
 /**
@@ -1441,6 +1476,19 @@ uint64_t krffs_parent_offset(krffs_mount_t *mount, uint64_t offset)
     int err;
 
     return krffs_parent_offset_err(mount, offset, &err);
+}
+
+void krffs_stamp_parent(krffs_mount_t *mount, uint64_t offset)
+{
+    int err;
+    uint64_t parent = krffs_parent_offset_err(mount, offset, &err);
+
+    if (err != 0) {
+        klog(KLOG_WARN, "krffs", "stamp: failed: the directory of the node at %d keeps its times",
+             (int)offset);
+        return;
+    }
+    krffs_stamp_at(mount, parent, KRFFS_STAMP_DATA);
 }
 
 /**
@@ -1571,13 +1619,16 @@ static int krffs_fill_copy(krffs_mount_t *mount, uint64_t offset, const krffs_fi
 }
 
 /**
- * Finish a resize whose marker and shadow are durable. Flush the size
- * before restoring the ordinary type, and the type before its shadow can
- * be overwritten. Recovery can repeat either step. Return 0 or -1.
+ * Finish a marked change whose marker and record are durable: store `value`
+ * in the field of the record's `kind` and flush it before restoring the
+ * ordinary type, and the type before its record can be overwritten.
+ * Recovery can repeat either step. Return 0 or -1.
  */
-static int krffs_finish_resize(krffs_mount_t *mount, uint64_t offset, uint64_t size, uint8_t type)
+static int krffs_finish_marked(krffs_mount_t *mount, uint64_t offset, uint32_t kind,
+                               const void *value, uint8_t type)
 {
-    if (krffs_backend_write(mount, offset + KRFFS_FIELD_SIZE, &size, sizeof(size)) != 0 ||
+    if (krffs_backend_field(mount, offset, krffs_records[kind].field, value,
+                            krffs_records[kind].size) != 0 ||
         krffs_barrier(mount) != 0 || krffs_put_u8(mount, offset, KRFFS_FIELD_TYPE, type) != 0 ||
         krffs_barrier(mount) != 0) {
         return -1;
@@ -1605,11 +1656,47 @@ static int krffs_mark_resize(krffs_mount_t *mount, uint64_t offset, uint64_t siz
     shadow = ((uint64_t)head.type << 32) | size;
     if (krffs_write_backward_link(mount, offset, shadow) != 0 || krffs_barrier(mount) != 0 ||
         krffs_put_u8(mount, offset, KRFFS_FIELD_TYPE, KRFFS_RESIZING_NODE) != 0 ||
-        krffs_barrier(mount) != 0 || krffs_finish_resize(mount, offset, size, head.type) != 0 ||
+        krffs_barrier(mount) != 0 ||
+        krffs_finish_marked(mount, offset, KRFFS_RECORD_SIZE, &size, head.type) != 0 ||
         krffs_write_backward_link(mount, offset, head.previous_node_size) != 0) {
         mount->stale_links = 1;
         krffs_halt(mount);
         return -1;
+    }
+    mount->check_owed = owed;
+    return 0;
+}
+
+/**
+ * Store `want`, the field of `kind` of the reserved node at `offset`, whose
+ * header is `head`, across a cut. The record holds the old value, which
+ * readers see while the marker stands and which the repair puts back, so a
+ * stop leaves the old value or the new one. Return 0; -1 for a failure that
+ * left the node as it was; or 1 for a failure once the marker may have
+ * reached the medium, after which the caller halts the mount.
+ */
+static int krffs_mark_attr(krffs_mount_t *mount, uint64_t offset, const krffs_node_t *head,
+                           uint32_t kind, const void *want)
+{
+    uint64_t old = 0;
+    int owed = mount->check_owed;
+
+    k_memcpy(&old, (const uint8_t *)head + krffs_records[kind].field, krffs_records[kind].size);
+    old |= ((uint64_t)kind << KRFFS_RECORD_KIND_SHIFT) | ((uint64_t)KRFFS_RESERVED_NODE << 32);
+    mount->check_owed = 1;
+    if (krffs_write_backward_link(mount, offset, old) != 0 || krffs_barrier(mount) != 0) {
+        if (krffs_write_backward_link(mount, offset, head->previous_node_size) != 0) {
+            mount->stale_links = 1;
+        }
+        mount->check_owed = owed;
+        return -1;
+    }
+    if (krffs_put_u8(mount, offset, KRFFS_FIELD_TYPE, KRFFS_RESIZING_NODE) != 0 ||
+        krffs_barrier(mount) != 0 ||
+        krffs_finish_marked(mount, offset, kind, want, KRFFS_RESERVED_NODE) != 0 ||
+        krffs_write_backward_link(mount, offset, head->previous_node_size) != 0) {
+        mount->stale_links = 1;
+        return 1;
     }
     mount->check_owed = owed;
     return 0;
@@ -2732,7 +2819,7 @@ int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode, 
         return KRFFS_EIO;
     }
 
-    krffs_stamp_at(mount, krffs_parent_offset(mount, node), KRFFS_STAMP_DATA);
+    krffs_stamp_parent(mount, node);
 
     return 0;
 }
@@ -2856,7 +2943,7 @@ int krffs_unlink_at(krffs_mount_t *mount, const char *path)
         return -1;
     }
 
-    krffs_stamp_at(mount, krffs_parent_offset(mount, node), KRFFS_STAMP_DATA);
+    krffs_stamp_parent(mount, node);
     return krffs_remove_at(mount, node);
 }
 
@@ -3499,13 +3586,13 @@ int krffs_rename_err(krffs_mount_t *mount, const char *old_path, const char *new
         mount->check_owed = owed;
         return -1;
     }
-    krffs_stamp_at(mount, krffs_parent_offset(mount, r.node), KRFFS_STAMP_DATA);
+    krffs_stamp_parent(mount, r.node);
     if (krffs_rename_run(mount, &r) != 0) {
         krffs_halt(mount);
         return -1;
     }
     mount->check_owed = owed;
-    krffs_stamp_at(mount, krffs_parent_offset(mount, r.node), KRFFS_STAMP_DATA);
+    krffs_stamp_parent(mount, r.node);
     krffs_stamp_at(mount, r.node, KRFFS_STAMP_ATTR);
     return 0;
 }
@@ -3601,7 +3688,7 @@ int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode, uint32
     if (rc != 0 || krffs_publish_name(mount, node, name) != 0) {
         return KRFFS_EIO;
     }
-    krffs_stamp_at(mount, krffs_parent_offset(mount, node), KRFFS_STAMP_DATA);
+    krffs_stamp_parent(mount, node);
     return 0;
 }
 
@@ -3632,7 +3719,7 @@ int krffs_rmdir_at(krffs_mount_t *mount, const char *path)
         scan = krffs_step(mount, scan, entry.size);
     } while (scan != 0 && ++steps < bound);
 
-    krffs_stamp_at(mount, krffs_parent_offset(mount, node), KRFFS_STAMP_DATA);
+    krffs_stamp_parent(mount, node);
     return krffs_remove_at(mount, node);
 }
 
@@ -4388,10 +4475,15 @@ static int krffs_repair_links(krffs_mount_t *mount, uint32_t *fixed)
     }
     root_link = head.previous_node_size;
     do {
-        if (head.type == KRFFS_RESIZING_NODE &&
-            (!krffs_decode_resize(&head) ||
-             krffs_finish_resize(mount, offset, head.size, head.type) != 0)) {
-            return -1;
+        if (head.type == KRFFS_RESIZING_NODE) {
+            uint32_t kind = krffs_record_kind(head.previous_node_size);
+
+            if (!krffs_decode_marked(&head) ||
+                krffs_finish_marked(mount, offset, kind,
+                                    (const uint8_t *)&head + krffs_records[kind].field,
+                                    head.type) != 0) {
+                return -1;
+            }
         }
         if (offset != 0 && head.previous_node_size != previous_size) {
             if (krffs_write_backward_link(mount, offset, previous_size) != 0) {
@@ -4527,7 +4619,7 @@ int krffs_chain_walk(krffs_mount_t *mount, int mode)
             return 0;
         }
         if (head.type == KRFFS_RESIZING_NODE &&
-            (mode != KRFFS_WALK_RECOVERY || position == 0 || !krffs_decode_resize(&head))) {
+            (mode != KRFFS_WALK_RECOVERY || position == 0 || !krffs_decode_marked(&head))) {
             return 0;
         }
         if (head.type != KRFFS_ROOT_NODE && head.type != KRFFS_FREE_NODE &&
@@ -4565,40 +4657,158 @@ int krffs_chain_is_walkable(krffs_mount_t *mount)
     return krffs_chain_walk(mount, KRFFS_WALK_FORWARD) == 1;
 }
 
-int krffs_set_mode_at(krffs_mount_t *mount, uint64_t offset, uint16_t mode)
+/**
+ * Store the owner and mode fields of `want` that differ from `head` in the
+ * node at `offset`, each whole or under a marker, the mode before the uid
+ * before the gid with a barrier between, so that a stop never leaves a new
+ * owner beside set-id bits the call clears. Return 0, or -1 with the fields
+ * and the times of `head` back in the cache: the mount is halted when a
+ * change that is not one whole field may have reached the medium.
+ */
+static int krffs_store_owner(krffs_mount_t *mount, uint64_t offset, const krffs_node_t *head,
+                             const krffs_node_t *want)
+{
+    const uint8_t *old = (const uint8_t *)head;
+    const uint8_t *now = (const uint8_t *)want;
+    uint32_t kind;
+    int begun = 0;
+    int rc = 0;
+
+    for (kind = KRFFS_RECORD_MODE; rc == 0 && kind <= KRFFS_RECORD_GID; kind++) {
+        uint32_t field = krffs_records[kind].field;
+        uint32_t size = krffs_records[kind].size;
+        uint32_t i = 0;
+
+        while (i < size && old[field + i] == now[field + i]) {
+            i++;
+        }
+        if (i == size) {
+            continue;
+        }
+        if (begun && krffs_barrier(mount) != 0) {
+            rc = -1;
+        } else if (!krffs_change_fits(mount, (uint32_t)offset + field, old + field, now + field,
+                                      size, 1)) {
+            rc = krffs_mark_attr(mount, offset, head, kind, now + field);
+        } else {
+            rc = krffs_backend_field(mount, offset, field, now + field, size);
+        }
+        begun += rc == 0;
+    }
+    if (rc == 0) {
+        return 0;
+    }
+    if (krffs_backend_field(mount, offset, KRFFS_FIELD_MODE, old + KRFFS_FIELD_MODE,
+                            KRFFS_FIELD_SIZE - KRFFS_FIELD_MODE) != 0 ||
+        begun || rc > 0) {
+        krffs_halt(mount);
+    }
+    return -1;
+}
+
+/** Whether a sector's or a block's edge cuts the changed bytes of an
+ * attribute that `want` changes in `head`, the header at `offset`. */
+static int krffs_attrs_cut(const krffs_mount_t *mount, uint64_t offset, const krffs_node_t *head,
+                           const krffs_node_t *want)
+{
+    static const uint32_t fields[] = {KRFFS_FIELD_MODE,  KRFFS_FIELD_UID,   KRFFS_FIELD_GID,
+                                      KRFFS_FIELD_ATIME, KRFFS_FIELD_MTIME, KRFFS_FIELD_CTIME,
+                                      KRFFS_FIELD_SIZE};
+    const uint8_t *old = (const uint8_t *)head;
+    const uint8_t *now = (const uint8_t *)want;
+    uint32_t i;
+
+    for (i = 0; fields[i] != KRFFS_FIELD_SIZE; i++) {
+        if (!krffs_change_fits(mount, (uint32_t)offset + fields[i], old + fields[i],
+                               now + fields[i], fields[i + 1] - fields[i], 1)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Store the attributes `what` selects, none of which an edge cuts, one
+ * store each, then the change time. The stores before a failed one stay.
+ * Return 0 or -1.
+ */
+static int krffs_put_attrs(krffs_mount_t *mount, uint64_t offset, int what,
+                           const krffs_node_t *want)
+{
+    int rc = 0;
+
+    if (what & KRFFS_SET_MODE) {
+        rc |= krffs_put_u16(mount, offset, KRFFS_FIELD_MODE, want->mode);
+    }
+    if (what & KRFFS_SET_UID) {
+        rc |= krffs_put_u32(mount, offset, KRFFS_FIELD_UID, want->uid);
+    }
+    if (what & KRFFS_SET_GID) {
+        rc |= krffs_put_u32(mount, offset, KRFFS_FIELD_GID, want->gid);
+    }
+    if (what & KRFFS_SET_ATIME) {
+        rc |= krffs_put(mount, offset, KRFFS_FIELD_ATIME, &want->access_time,
+                        (uint32_t)sizeof(want->access_time));
+    }
+    if (what & KRFFS_SET_MTIME) {
+        rc |= krffs_put(mount, offset, KRFFS_FIELD_MTIME, &want->modification_time,
+                        (uint32_t)sizeof(want->modification_time));
+    }
+    krffs_stamp_at(mount, offset, KRFFS_STAMP_ATTR);
+    return rc == 0 ? 0 : -1;
+}
+
+/**
+ * The mode, the owner and the times lie together. In a call with a field
+ * that an edge cuts they are one store, which a backend makes whole or not
+ * at all, when the changed owner and mode bytes share a unit. Otherwise the
+ * times go first, since a stop may tear them and an undo of them alone needs
+ * no order.
+ */
+int krffs_set_attrs_at(krffs_mount_t *mount, uint64_t offset, int what, const krffs_attrs_t *set)
 {
     krffs_node_t head;
+    krffs_node_t want;
+    const uint8_t *now = (const uint8_t *)&want;
 
     if (krffs_head(mount, offset, &head) != 0) {
         return -1;
     }
-    return krffs_put_u16(mount, offset, KRFFS_FIELD_MODE,
-                         (uint16_t)((head.mode & KRFFS_S_IFMT) | (mode & 07777u)));
-}
-
-int krffs_set_owner_at(krffs_mount_t *mount, uint64_t offset, uint32_t uid, uint32_t gid, int which)
-{
-    int rc = 0;
-
-    if (which & KRFFS_SET_UID) {
-        rc |= krffs_put_u32(mount, offset, KRFFS_FIELD_UID, uid);
+    want = head;
+    if (what & KRFFS_SET_MODE) {
+        want.mode = (uint16_t)((head.mode & KRFFS_S_IFMT) | (set->mode & 07777u));
     }
-    if (which & KRFFS_SET_GID) {
-        rc |= krffs_put_u32(mount, offset, KRFFS_FIELD_GID, gid);
+    if (what & KRFFS_SET_UID) {
+        want.uid = set->uid;
     }
-    return rc;
-}
+    if (what & KRFFS_SET_GID) {
+        want.gid = set->gid;
+    }
+    if (what & KRFFS_SET_ATIME) {
+        want.access_time = set->atime;
+    }
+    if (what & KRFFS_SET_MTIME) {
+        want.modification_time = set->mtime;
+    }
+    want.attribute_change_time = krffs_now();
 
-int krffs_set_time_at(krffs_mount_t *mount, uint64_t offset, int which, int64_t seconds,
-                      int64_t nanoseconds)
-{
-    krffs_node_time_t when;
-
-    when.seconds = seconds;
-    when.nanoseconds = nanoseconds;
-    return krffs_put(mount, offset,
-                     which == KRFFS_SET_ATIME ? KRFFS_FIELD_ATIME : KRFFS_FIELD_MTIME, &when,
-                     (uint32_t)sizeof(when));
+    if (!krffs_attrs_cut(mount, offset, &head, &want)) {
+        return krffs_put_attrs(mount, offset, what, &want);
+    }
+    if (head.type != KRFFS_RESERVED_NODE) {
+        return -1;
+    }
+    if (krffs_change_fits(mount, (uint32_t)offset + KRFFS_FIELD_MODE,
+                          (const uint8_t *)&head + KRFFS_FIELD_MODE, now + KRFFS_FIELD_MODE,
+                          KRFFS_FIELD_ATIME - KRFFS_FIELD_MODE, 1)) {
+        return krffs_backend_field(mount, offset, KRFFS_FIELD_MODE, now + KRFFS_FIELD_MODE,
+                                   KRFFS_FIELD_SIZE - KRFFS_FIELD_MODE);
+    }
+    if (krffs_backend_field(mount, offset, KRFFS_FIELD_ATIME, now + KRFFS_FIELD_ATIME,
+                            KRFFS_FIELD_SIZE - KRFFS_FIELD_ATIME) != 0) {
+        return -1;
+    }
+    return krffs_store_owner(mount, offset, &head, &want);
 }
 
 uint32_t krffs_count_at(krffs_mount_t *mount)
