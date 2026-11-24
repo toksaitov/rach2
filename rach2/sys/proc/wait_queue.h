@@ -240,9 +240,17 @@ void wq_wake_proc(process_t *p);
 /**
  * Make `p` runnable if it is blocked, from a record's function, which runs
  * under its queue's lock: the processor to interrupt goes to `*cpus`,
- * which the wake interrupts once the lock is let go. Returns 1 when `p` was
- * blocked, as Linux's `default_wake_function` returns whether it woke the
- * task (kernel/sched/core.c).
+ * which the wake interrupts once the lock is let go. Returns 1 when the
+ * first read of the state found `p` blocked, which uses up the turn of an
+ * exclusive record: `p` may be running still, short of its `schedule`, and
+ * the second test, under the scheduler's lock, may find that another waker
+ * made it ready. Linux's `default_wake_function` returns whether it woke
+ * the task (kernel/sched/core.c). The state is read after a full barrier, as
+ * Linux's `try_to_wake_up` reads another task's after
+ * `smp_mb__after_spinlock` (core.c), since the queue's lock was taken
+ * before the function stored what `p` tests, which the barrier that
+ * follows `p`'s BLOCKED state pairs with: either the store is seen by
+ * `p`'s test, or `p` is seen blocked here.
  */
 int wq_ready_deferred(process_t *p, uint64_t *cpus);
 

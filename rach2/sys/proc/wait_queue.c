@@ -581,6 +581,7 @@ int wq_ready_deferred(process_t *p, uint64_t *cpus)
 {
     int cpu;
 
+    sched_mb(); /* what the caller stored before the read of the state */
     if (p->state != PROC_BLOCKED) {
         return 0;
     }

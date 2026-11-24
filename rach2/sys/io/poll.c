@@ -199,10 +199,15 @@ static int deadline_passed(struct poll_deadline *d)
 /**
  * The function of a wait's record on a queue (`wq_poll_add`): the thread
  * that owns it is marked woken, so that a wait whose scan raced with the
- * wake does not sleep, and is made ready if it sleeps, as Linux's
+ * wake does not sleep, and is made ready if it is blocked, as Linux's
  * `pollwake` sets `triggered` before `default_wake_function` (fs/select.c:
- * 208-216). The record stays on its queue. Returns whether the thread was
- * asleep, which ends the turn of an exclusive record.
+ * 208-216); `wq_ready_deferred` passes a full barrier between the mark
+ * and its read of the thread's state. The record stays on its queue.
+ * Returns whether that first read of the state found the thread blocked,
+ * which uses up the turn of an exclusive record; the thread may not have
+ * called `schedule` yet, or another wake may make it ready meanwhile. A
+ * call with WQ_FREE, which `wq_wake_free` makes before it takes the record
+ * off its queue, returns 0 and neither marks nor wakes the thread.
  */
 static int poll_rec_wake(struct wq_waiter *w, uint32_t kinds, unsigned int nest, uint64_t *cpus)
 {
@@ -348,11 +353,13 @@ static uint64_t poll_slack(int64_t left)
  * Arm the current thread's timer for the end of `d`, its slack later
  * (`poll_slack`), and return 1; or return 0 for a deadline without a time
  * the timer can hold, which its tick alone ends. The interrupt between
- * ticks then wakes the sleeping thread at that time (`wakeup_ns`,
- * `proc_wake_due`), as the hrtimer of Linux's poll_schedule_timeout and
- * ep_poll wakes theirs at the latest expiry of its range
- * (`schedule_hrtimeout_range`). The slack is counted from the time left
- * now, as Linux counts it once a wait. Each sleep sets its tick
+ * ticks (`timer_hr_pass`) then wakes the sleeping thread at that time
+ * (`wakeup_ns`), or the tick does at the deadline's tick, which can come
+ * before the slack is over; both make the pass `timer_wake_pass`, which
+ * calls `proc_wake_sleepers`. The hrtimer of Linux's poll_schedule_timeout
+ * and ep_poll wakes theirs within a range, from the deadline to the slack
+ * later (`schedule_hrtimeout_range`). The slack is counted from the time
+ * left now, as Linux counts it once a wait. Each sleep sets its tick
  * (`poll_sleep`), which a signal's wake clears and the timer needs; the
  * caller ends the timed wait with `proc_wait_set(0, 0, 0, 0)`.
  */
@@ -414,18 +421,20 @@ static void poll_sleep(struct poll_deadline *d, const char *wchan)
 
 /**
  * The scan runs with interrupts on and the thread RUNNING, its woken mark
- * cleared first (`poll_woken_clear`). When it finds nothing ready, the
- * thread puts a record on every queue it named, which stay there until the
- * wait ends, and scans again, as Linux's first scan queues each entry
+ * cleared first (`poll_woken_clear`). When the first finds nothing ready
+ * and neither a signal nor the deadline ends the wait, the thread puts a
+ * record on every queue it named, which stay there until the wait ends,
+ * and scans again, as Linux's first scan queues each entry
  * before it reads that file's mask (fs/select.c, `__pollwait`): a change
  * of readiness before that scan's look is seen by it, and one after wakes
- * a record and marks the thread woken. After that, a scan that finds
- * nothing ready is followed by a sleep (`poll_sleep`), and each wake by
- * one scan. A scan that names other queues than the records are on, as a
- * descriptor another thread replaced would, moves the records to them and
- * scans again. The thread's timer is armed for the deadline before its
- * first sleep (`poll_arm`), so a wait that never sleeps takes no lock for
- * it. On return the thread is on no queue and its timer wake is cleared.
+ * a record and marks the thread woken. A scan that names other queues
+ * than the records are on, as a descriptor another thread replaced would,
+ * moves the records to them and scans again. After a scan that finds
+ * nothing ready, when neither signal work nor the deadline ends the wait
+ * and the queues are those the records are on, comes `poll_sleep`, and
+ * after it one scan. The thread's timed wait is set for the deadline
+ * before the first call of it (`poll_arm`). On return the thread is on no
+ * queue and its timer wake is cleared.
  */
 int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan)
 {
