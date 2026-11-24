@@ -674,7 +674,9 @@ EVENT being
 once the stop is used or released, W 1 while the thread sleeps there, T
 the changes the gate holds open, A all those under way, and K where the
 newest walk keep of the thread P lies in its KRFFS, the boot root or a
-mounted volume, its offset plus 1, or 0 for none.
+mounted volume, its last published offset plus 1, or 0 for none.
+A relocation under way publishes the new offset once the move has ended,
+and two file systems can give one value.
 Another text fails with
 .Er EINVAL .
 .It Pa sched/base_slice_ns
