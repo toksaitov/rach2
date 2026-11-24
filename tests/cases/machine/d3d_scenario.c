@@ -20,12 +20,18 @@ static enum etude_status vkd3d_part(struct net_case *u, struct etude_case_machin
     size_t from = 0;
 
     if (net_guest_start(u, m, argv, NULL, "d3d: units: ") == ETUDE_OK) {
-        for (n = 1; n <= total; n++) {
-            snprintf(text, sizeof(text), "\nd3d: done: %lu of %lu\n", n, total);
+        /* run.py prints its environment's line first, so a newline comes
+         * before the header; n is 0 for it. */
+        for (n = 0; n <= total; n++) {
+            if (n == 0)
+                snprintf(text, sizeof(text), "\nd3d: units: %lu\n", total);
+            else
+                snprintf(text, sizeof(text), "\nd3d: done: %lu of %lu\n", n, total);
             if (etude_guest_output_wait_from(m, text, &from) != ETUDE_OK)
                 break;
             from--; /* the newline that ends the line begins the next */
-            etude_progress(u->c, "unit", n);
+            if (n > 0)
+                etude_progress(u->c, "unit", n);
         }
     }
     return net_guest_finish(u, m, 0, "direct3d", r);
