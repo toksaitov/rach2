@@ -1,0 +1,877 @@
+sh /tmp/games/dump.sh > /tmp/dump.txt 2>&1; cat /tmp/dump.txt; echo DUMP""FINISHED
+[?2004lDUMP BEGIN 1031.88 4093.86
+0.24 0.13 0.08 1/94 1190
+T 1 1 init [S (sleeping)] wchan=do_sigtimedwait syscall=128 0x7fffffffe740 0x0 0x416280 0x8 0x0 0x0 0x7fffffffe328 0x40e219 utime,stime=0 7 voluntary_ctxt_switches=1102 nonvoluntary_ctxt_switches=2 
+T 10 10 kpsmoused [S (sleeping)] wchan=wq_wait_event_idle syscall=0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 utime,stime=0 0 voluntary_ctxt_switches=1 nonvoluntary_ctxt_switches=0 
+T 11 11 kconsoled [S (sleeping)] wchan=wq_wait_event_idle syscall=0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 utime,stime=0 1 voluntary_ctxt_switches=3 nonvoluntary_ctxt_switches=1 
+T 1187 1187 sleep [S (sleeping)] wchan=hrtimer_nanosleep syscall=230 0x0 0x0 0x7ffdb5626d00 0x7ffdb5626d30 0x0 0x0 0x7ffdb5626cb0 0x7e83d3beed12 utime,stime=0 0 voluntary_ctxt_switches=1 nonvoluntary_ctxt_switches=0 
+T 1188 1188 sh [S (sleeping)] wchan=pipe_read syscall=0 0x3 0x7fff815314b0 0x1000 0x0 0x0 0x0 0x7fff815313e0 0x7ed649bc4d12 utime,stime=0 0 voluntary_ctxt_switches=56 nonvoluntary_ctxt_switches=0 
+T 12 12 khvcd [S (sleeping)] wchan=wq_wait_event_idle syscall=0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 utime,stime=0 0 voluntary_ctxt_switches=1 nonvoluntary_ctxt_switches=0 
+T 13 13 kinputd [S (sleeping)] wchan=wq_wait_event_idle syscall=0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 utime,stime=0 0 voluntary_ctxt_switches=1 nonvoluntary_ctxt_switches=0 
+T 16 16 bash [S (sleeping)] wchan=do_wait syscall=61 0xffffffffffffffff 0x7ffca90d6fb8 0xa 0x0 0x0 0x0 0x7ffca90d6f30 0x7ebf8aa42d12 utime,stime=0 6 voluntary_ctxt_switches=103 nonvoluntary_ctxt_switches=4 
+T 17 17 busybox [S (sleeping)] wchan=do_sys_poll syscall=7 0x7eeeeb92e130 0x4 0xffffffffffffffff 0x0 0x0 0x0 0x7fff956d38e8 0x4bc26d utime,stime=0 0 voluntary_ctxt_switches=14 nonvoluntary_ctxt_switches=2 
+T 18 18 busybox [S (sleeping)] wchan=unix_wait syscall=0 0x0 0x7ede7070b198 0xff 0x0 0x0 0x0 0x7ffde9ef7688 0x4bc26d utime,stime=0 0 voluntary_ctxt_switches=25 nonvoluntary_ctxt_switches=2 
+T 19 19 sshd [S (sleeping)] wchan=do_sys_poll syscall=271 0x55c53d828ed0 0x2 0x0 0x7fffe4f1ad90 0x8 0x0 0x7fffe4f1aac0 0x7e9fe52a3d12 utime,stime=0 0 voluntary_ctxt_switches=23 nonvoluntary_ctxt_switches=1 
+T 2 2 kdrm [S (sleeping)] wchan=wq_wait_event_idle syscall=0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 utime,stime=0 0 voluntary_ctxt_switches=1 nonvoluntary_ctxt_switches=1 
+T 20 20 dbus-daemon [S (sleeping)] wchan=ep_poll syscall=232 0x3 0x7ffc2671b040 0x40 0xffffffffffffffff 0x0 0x0 0x7ffc2671afe0 0x7ecfe979ad12 utime,stime=0 2 voluntary_ctxt_switches=122 nonvoluntary_ctxt_switches=0 
+T 22 22 crond [S (sleeping)] wchan=hrtimer_nanosleep syscall=230 0x0 0x0 0x7ffea4dce0a0 0x7ffea4dce0a0 0x0 0x0 0x7ffea4dce050 0x7ed2cfb50d12 utime,stime=0 0 voluntary_ctxt_switches=109 nonvoluntary_ctxt_switches=2 
+T 23 23 busybox [S (sleeping)] wchan=do_sys_poll syscall=7 0x7e13772ebe40 0x0 0x3dc48 0x0 0x0 0x0 0x7ffddcd0cd98 0x4bc26d utime,stime=0 1 voluntary_ctxt_switches=81 nonvoluntary_ctxt_switches=2 
+T 231 231 steam.exe [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1000fee00 0x2 0x0 0x0 0x0 0x0 0x1000fe868 0x7ebf7564ad09 utime,stime=3 28 voluntary_ctxt_switches=2638 nonvoluntary_ctxt_switches=5 
+T 231 325 steam.exe [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1001fdad0 0x1 0x0 0x0 0x0 0x1001fd5a0 0x1001fd538 0x7ebf7564ad09 utime,stime=0 0 voluntary_ctxt_switches=93 nonvoluntary_ctxt_switches=0 
+T 231 342 steam.exe [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1002fdc10 0x1 0x0 0x0 0x0 0x0 0x1002fd678 0x7ebf7564ad09 utime,stime=0 0 voluntary_ctxt_switches=6 nonvoluntary_ctxt_switches=0 
+T 234 234 wineserver [S (sleeping)] wchan=ep_poll syscall=441 0x9 0x7ffee915c490 0x80 0x7ffee915c480 0x0 0x8 0x7ffee915c420 0x7e775a689d12 utime,stime=38 124 voluntary_ctxt_switches=74706 nonvoluntary_ctxt_switches=0 
+T 24 24 rach2-desktop [S (sleeping)] wchan=do_wait syscall=61 0xffffffffffffffff 0x7ffd39407db8 0x0 0x0 0x0 0x0 0x7ffd39407d30 0x7e0906aaad12 utime,stime=9 32 voluntary_ctxt_switches=1125 nonvoluntary_ctxt_switches=1 
+T 241 241 services.exe [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1000fee10 0x1 0x0 0x0 0x0 0x1 0x1000fe878 0x7e3987e88d09 utime,stime=0 2 voluntary_ctxt_switches=1886 nonvoluntary_ctxt_switches=0 
+T 241 242 wine_rpcrt4_ser [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1001fdc00 0x3 0x0 0x0 0x0 0x0 0x1001fd668 0x7e3987e88d09 utime,stime=0 0 voluntary_ctxt_switches=110 nonvoluntary_ctxt_switches=0 
+T 241 246 wine_rpcrt4_io [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1002fdc10 0x1 0x0 0x0 0x0 0x0 0x1002fd678 0x7e3987e88d09 utime,stime=0 0 voluntary_ctxt_switches=257 nonvoluntary_ctxt_switches=0 
+T 241 260 wine_rpcrt4_io [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1004fdc10 0x1 0x0 0x0 0x0 0x0 0x1004fd678 0x7e3987e88d09 utime,stime=0 0 voluntary_ctxt_switches=54 nonvoluntary_ctxt_switches=0 
+T 241 266 wine_rpcrt4_io [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1005fdc10 0x1 0x0 0x0 0x0 0x0 0x1005fd678 0x7e3987e88d09 utime,stime=0 0 voluntary_ctxt_switches=55 nonvoluntary_ctxt_switches=0 
+T 241 273 wine_rpcrt4_io [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1006fdc10 0x1 0x0 0x0 0x0 0x0 0x1006fd678 0x7e3987e88d09 utime,stime=0 1 voluntary_ctxt_switches=494 nonvoluntary_ctxt_switches=0 
+T 241 289 services.exe [S (sleeping)] wchan=pipe_read syscall=0 0x25 0x1007fd180 0x10 0x0 0x0 0x0 0x1007fd108 0x7e3987e1346e utime,stime=0 0 voluntary_ctxt_switches=17 nonvoluntary_ctxt_switches=0 
+T 241 297 wine_rpcrt4_io [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1009fdc10 0x1 0x0 0x0 0x0 0x0 0x1009fd678 0x7e3987e88d09 utime,stime=0 0 voluntary_ctxt_switches=59 nonvoluntary_ctxt_switches=0 
+T 241 331 wine_rpcrt4_io [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x100cfdc10 0x1 0x0 0x0 0x0 0x0 0x100cfd678 0x7e3987e88d09 utime,stime=0 0 voluntary_ctxt_switches=42 nonvoluntary_ctxt_switches=0 
+T 241 339 wine_rpcrt4_io [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1008fdc10 0x1 0x0 0x0 0x0 0x0 0x1008fd678 0x7e3987e88d09 utime,stime=0 0 voluntary_ctxt_switches=73 nonvoluntary_ctxt_switches=0 
+T 244 244 winedevice.exe [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1000fee00 0x4 0x0 0x0 0x0 0x1000ff4a0 0x1000fe868 0x7ee45906bd09 utime,stime=0 1 voluntary_ctxt_switches=426 nonvoluntary_ctxt_switches=0 
+T 244 248 winedevice.exe [S (sleeping)] wchan=pipe_read syscall=0 0xd 0x1001fd0c0 0x10 0x0 0x0 0x0 0x1001fd048 0x7ee458ff646e utime,stime=0 0 voluntary_ctxt_switches=755 nonvoluntary_ctxt_switches=0 
+T 244 249 wine_sechost_se [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1002fdc00 0x3 0x0 0x0 0x0 0x1002fe260 0x1002fd668 0x7ee45906bd09 utime,stime=0 0 voluntary_ctxt_switches=129 nonvoluntary_ctxt_switches=0 
+T 244 250 wine_sechost_se [S (sleeping)] wchan=futex_wait_queue syscall=202 0x7ee458d1c050 0x80 0x0 0x0 0x0 0x0 0x1003fe358 0x7ee45906bd09 utime,stime=0 0 voluntary_ctxt_switches=4 nonvoluntary_ctxt_switches=0 
+T 244 251 winedevice.exe [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1004fdcf0 0x1 0x0 0x0 0x0 0x0 0x1004fd758 0x7ee45906bd09 utime,stime=0 0 voluntary_ctxt_switches=9 nonvoluntary_ctxt_switches=0 
+T 244 252 winedevice.exe [S (sleeping)] wchan=do_sys_poll syscall=7 0x1005fe270 0x1 0xffffffffffffffff 0x0 0x0 0x0 0x1005fe1e8 0x7ee458ff646e utime,stime=0 0 voluntary_ctxt_switches=29 nonvoluntary_ctxt_switches=0 
+T 244 253 winedevice.exe [S (sleeping)] wchan=do_select syscall=270 0x0 0x0 0x0 0x0 0x1006fe320 0x0 0x1006fe2b8 0x7ee458ff646e utime,stime=2 2 voluntary_ctxt_switches=264 nonvoluntary_ctxt_switches=0 
+T 244 269 wine_nsi_notifi [S (sleeping)] wchan=wq_wait_event syscall=45 0x2d 0x1007fd360 0x1000 0x0 0x0 0x0 0x1007fd2d8 0x7ee458ff646e utime,stime=0 0 voluntary_ctxt_switches=9 nonvoluntary_ctxt_switches=0 
+T 244 270 winedevice.exe [S (sleeping)] wchan=do_sys_poll syscall=7 0x55eaf45eb240 0x1 0xffffffffffffffff 0x0 0x0 0x0 0x1008edd78 0x7ee458ff646e utime,stime=0 0 voluntary_ctxt_switches=5 nonvoluntary_ctxt_switches=0 
+T 255 255 plugplay.exe [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1000fee00 0x4 0x0 0x0 0x0 0x1000ff4a0 0x1000fe868 0x7ecd5c49dd09 utime,stime=0 4 voluntary_ctxt_switches=2076 nonvoluntary_ctxt_switches=0 
+T 255 261 plugplay.exe [S (sleeping)] wchan=pipe_read syscall=0 0xc 0x1001fd0c0 0x10 0x0 0x0 0x0 0x1001fd048 0x7ecd5c42846e utime,stime=0 0 voluntary_ctxt_switches=36 nonvoluntary_ctxt_switches=0 
+T 255 262 wine_sechost_se [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1002fdc10 0x1 0x0 0x0 0x0 0x0 0x1002fd678 0x7ecd5c49dd09 utime,stime=0 0 voluntary_ctxt_switches=32 nonvoluntary_ctxt_switches=0 
+T 255 263 wine_rpcrt4_ser [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1003fdc00 0x3 0x0 0x0 0x0 0x0 0x1003fd668 0x7ecd5c49dd09 utime,stime=0 0 voluntary_ctxt_switches=27 nonvoluntary_ctxt_switches=0 
+T 255 283 wine_rpcrt4_io [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1004fdc10 0x1 0x0 0x0 0x0 0x0 0x1004fd678 0x7ecd5c49dd09 utime,stime=0 0 voluntary_ctxt_switches=55 nonvoluntary_ctxt_switches=0 
+T 265 265 svchost.exe [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1000fee00 0x4 0x0 0x0 0x0 0x1000ff4a0 0x1000fe868 0x7e4419a87d09 utime,stime=0 0 voluntary_ctxt_switches=437 nonvoluntary_ctxt_switches=0 
+T 265 267 svchost.exe [S (sleeping)] wchan=pipe_read syscall=0 0xc 0x1001fd0c0 0x10 0x0 0x0 0x0 0x1001fd048 0x7e4419a1246e utime,stime=0 0 voluntary_ctxt_switches=37 nonvoluntary_ctxt_switches=0 
+T 265 268 wine_sechost_se [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1002fdc10 0x1 0x0 0x0 0x0 0x0 0x1002fd678 0x7e4419a87d09 utime,stime=0 0 voluntary_ctxt_switches=18 nonvoluntary_ctxt_switches=0 
+T 272 272 winedevice.exe [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1000fee00 0x4 0x0 0x0 0x0 0x1000ff4a0 0x1000fe868 0x7ea579acbd09 utime,stime=0 1 voluntary_ctxt_switches=414 nonvoluntary_ctxt_switches=0 
+T 272 274 winedevice.exe [S (sleeping)] wchan=pipe_read syscall=0 0xc 0x1001fd0c0 0x10 0x0 0x0 0x0 0x1001fd048 0x7ea579a5646e utime,stime=0 0 voluntary_ctxt_switches=666 nonvoluntary_ctxt_switches=2 
+T 272 275 wine_sechost_se [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1002fdc00 0x3 0x0 0x0 0x0 0x1002fe260 0x1002fd668 0x7ea579acbd09 utime,stime=0 0 voluntary_ctxt_switches=94 nonvoluntary_ctxt_switches=0 
+T 272 276 wine_sechost_se [S (sleeping)] wchan=futex_wait_queue syscall=202 0x7ea57977c0a8 0x80 0x0 0x0 0x0 0x0 0x1003fe358 0x7ea579acbd09 utime,stime=1 2 voluntary_ctxt_switches=1798 nonvoluntary_ctxt_switches=0 
+T 272 278 winedevice.exe [S (sleeping)] wchan=do_sys_poll syscall=7 0x1004fcf80 0x2 0xffffffffffffffff 0x0 0x0 0x0 0x1004fcd98 0x7ea579a5646e utime,stime=0 0 voluntary_ctxt_switches=6 nonvoluntary_ctxt_switches=0 
+T 272 279 winedevice.exe [S (sleeping)] wchan=hrtimer_nanosleep syscall=230 0x0 0x0 0x1005fe250 0x1005fe240 0x0 0x0 0x1005fe1c8 0x7ea579a5646e utime,stime=448 1867 voluntary_ctxt_switches=759529 nonvoluntary_ctxt_switches=6 
+T 272 281 wine_sechost_se [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1006fdc00 0x2 0x0 0x0 0x0 0x0 0x1006fd668 0x7ea579acbd09 utime,stime=0 0 voluntary_ctxt_switches=10 nonvoluntary_ctxt_switches=0 
+T 272 282 wine_sechost_se [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1007fdc00 0x2 0x0 0x0 0x0 0x0 0x1007fd668 0x7ea579acbd09 utime,stime=0 0 voluntary_ctxt_switches=12 nonvoluntary_ctxt_switches=0 
+T 272 287 winedevice.exe [S (sleeping)] wchan=do_sys_poll syscall=7 0x7ea554001700 0x2 0xea60 0x0 0x0 0x0 0x1009fe188 0x7ea579a5646e utime,stime=0 0 voluntary_ctxt_switches=18 nonvoluntary_ctxt_switches=0 
+T 272 288 libusb_event [S (sleeping)] wchan=do_sys_poll syscall=7 0x7ea563bfee30 0x2 0xffffffffffffffff 0x0 0x0 0x0 0x7ea563bfedb8 0x7ea579a5646e utime,stime=0 0 voluntary_ctxt_switches=1 nonvoluntary_ctxt_switches=0 
+T 29 29 systemd-udevd [S (sleeping)] wchan=ep_poll syscall=232 0x8 0x55c6c0d7c5b0 0x5a 0xffffffffffffffff 0x0 0x0 0x7ffcd645c450 0x7e2e3c8a3d12 utime,stime=0 6 voluntary_ctxt_switches=237 nonvoluntary_ctxt_switches=2 
+T 296 296 lsass.exe [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1000fee00 0x4 0x0 0x0 0x0 0x1000ff4a0 0x1000fe868 0x7e51f30cdd09 utime,stime=0 0 voluntary_ctxt_switches=385 nonvoluntary_ctxt_switches=0 
+T 296 299 lsass.exe [S (sleeping)] wchan=pipe_read syscall=0 0xc 0x1001fd0c0 0x10 0x0 0x0 0x0 0x1001fd048 0x7e51f305846e utime,stime=0 0 voluntary_ctxt_switches=37 nonvoluntary_ctxt_switches=0 
+T 296 300 wine_sechost_se [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1002fdc10 0x1 0x0 0x0 0x0 0x0 0x1002fd678 0x7e51f30cdd09 utime,stime=0 0 voluntary_ctxt_switches=18 nonvoluntary_ctxt_switches=0 
+T 3 3 kdrmcon [S (sleeping)] wchan=wq_wait_event_idle syscall=0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 utime,stime=0 0 voluntary_ctxt_switches=2 nonvoluntary_ctxt_switches=0 
+T 307 307 Xwayland [S (sleeping)] wchan=ep_poll syscall=232 0x0 0x7ffcb6757530 0x100 0xffffffffffffffff 0x0 0x0 0x7ffcb67574b8 0x7ed7051ec46e utime,stime=3 16 voluntary_ctxt_switches=315 nonvoluntary_ctxt_switches=1 
+T 307 310 Xwaylan:disk$0 [S (sleeping)] wchan=futex_wait_queue syscall=202 0x56207cb4dcb4 0x189 0x3 0x0 0x0 0xffffffff 0x7ed6f8046a88 0x7ed7051ec46e utime,stime=0 0 voluntary_ctxt_switches=7 nonvoluntary_ctxt_switches=4 
+T 330 330 rpcss.exe [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1000fee00 0x4 0x0 0x0 0x0 0x1000ff4a0 0x1000fe868 0x7efbebdc1d09 utime,stime=0 1 voluntary_ctxt_switches=384 nonvoluntary_ctxt_switches=0 
+T 330 332 rpcss.exe [S (sleeping)] wchan=pipe_read syscall=0 0xc 0x1001fd0c0 0x10 0x0 0x0 0x0 0x1001fd048 0x7efbebd4c46e utime,stime=0 0 voluntary_ctxt_switches=35 nonvoluntary_ctxt_switches=0 
+T 330 333 wine_sechost_se [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1002fdc10 0x1 0x0 0x0 0x0 0x0 0x1002fd678 0x7efbebdc1d09 utime,stime=0 0 voluntary_ctxt_switches=43 nonvoluntary_ctxt_switches=0 
+T 330 334 wine_rpcrt4_ser [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1003fdc00 0x5 0x0 0x0 0x0 0x0 0x1003fd668 0x7efbebdc1d09 utime,stime=0 0 voluntary_ctxt_switches=34 nonvoluntary_ctxt_switches=0 
+T 330 335 wine_rpcrt4_ser [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1004fdc00 0x3 0x0 0x0 0x0 0x0 0x1004fd668 0x7efbebdc1d09 utime,stime=0 0 voluntary_ctxt_switches=14 nonvoluntary_ctxt_switches=0 
+T 34 34 dbus-daemon [S (sleeping)] wchan=ep_poll syscall=232 0x3 0x7ffc16791ae0 0x40 0xffffffffffffffff 0x0 0x0 0x7ffc16791a80 0x7ebf7f66ed12 utime,stime=0 0 voluntary_ctxt_switches=3 nonvoluntary_ctxt_switches=0 
+T 341 341 wineboot.exe [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1000feb00 0x2 0x0 0x0 0x0 0x0 0x1000fe568 0x7e4a9baa8d09 utime,stime=1 4 voluntary_ctxt_switches=1595 nonvoluntary_ctxt_switches=0 
+T 344 344 conhost.exe [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1000fd040 0x1 0x0 0x0 0x0 0x1dd7b5333a5f880 0x1000fcaa8 0x7e97341dcd09 utime,stime=0 3 voluntary_ctxt_switches=988 nonvoluntary_ctxt_switches=0 
+T 346 346 rundll32.exe [S (sleeping)] wchan=futex_wait_multiple syscall=449 0x1000fd040 0x1 0x0 0x0 0x0 0x1dd7b5333a5f880 0x1000fcaa8 0x7ea73026bd09 utime,stime=0 2 voluntary_ctxt_switches=998 nonvoluntary_ctxt_switches=0 
+T 38 38 python3 [S (sleeping)] wchan=do_wait syscall=61 0x30 0x7ffe2f279bbc 0x0 0x0 0x0 0x0 0x7ffe2f279b50 0x7eadec2a3d12 utime,stime=4 3 voluntary_ctxt_switches=351 nonvoluntary_ctxt_switches=1 
+T 39 39 tail [S (sleeping)] wchan=do_sys_poll syscall=7 0x7ffe319f1f10 0x1 0xffffffffffffffff 0x0 0x0 0x0 0x7ffe319f1da0 0x7e637047ad12 utime,stime=0 4 voluntary_ctxt_switches=6 nonvoluntary_ctxt_switches=2 
+T 4 4 khungtaskd [S (sleeping)] wchan=wq_wait_event_idle syscall=0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 utime,stime=0 0 voluntary_ctxt_switches=9 nonvoluntary_ctxt_switches=0 
+T 41 41 weston [S (sleeping)] wchan=ep_poll syscall=232 0x4 0x7ffd9f6aef00 0x20 0xffffffffffffffff 0x0 0x0 0x7ffd9f6aee28 0x7eb08506146e utime,stime=4 14 voluntary_ctxt_switches=1395 nonvoluntary_ctxt_switches=0 
+T 41 43 weston:disk$0 [S (sleeping)] wchan=futex_wait_queue syscall=202 0x56289b51e990 0x189 0x2 0x0 0x0 0xffffffff 0x7eb076c46a88 0x7eb08506146e utime,stime=0 0 voluntary_ctxt_switches=13 nonvoluntary_ctxt_switches=4 
+T 41 44 weston:disk$0 [S (sleeping)] wchan=futex_wait_queue syscall=202 0x56289b54c690 0x189 0x0 0x0 0x0 0xffffffff 0x7eb076304a88 0x7eb08506146e utime,stime=0 0 voluntary_ctxt_switches=1 nonvoluntary_ctxt_switches=0 
+T 42 42 virtio_gpu [S (sleeping)] wchan=wq_wait_event_idle syscall=0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 utime,stime=0 2 voluntary_ctxt_switches=130 nonvoluntary_ctxt_switches=0 
+T 45 45 weston-keyboard [S (sleeping)] wchan=ep_poll syscall=232 0x0 0x7ffc849db930 0x10 0xffffffffffffffff 0x0 0x0 0x7ffc849db8d0 0x7efcd8bdad12 utime,stime=6 23 voluntary_ctxt_switches=1378 nonvoluntary_ctxt_switches=0 
+T 46 46 weston-desktop- [S (sleeping)] wchan=ep_poll syscall=232 0x0 0x7ffc61a6bd90 0x10 0xffffffffffffffff 0x0 0x0 0x7ffc61a6bd30 0x7e5c8d1bdd12 utime,stime=12 21 voluntary_ctxt_switches=1401 nonvoluntary_ctxt_switches=0 
+T 48 48 rach2-game [S (sleeping)] wchan=do_wait syscall=61 0xffffffffffffffff 0x7ffc10302ba8 0x0 0x0 0x0 0x0 0x7ffc10302b20 0x7e9056b11d12 utime,stime=0 0 voluntary_ctxt_switches=14 nonvoluntary_ctxt_switches=0 
+T 5 5 rcu_sched [S (sleeping)] wchan=wq_wait_event_idle syscall=0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 utime,stime=0 1 voluntary_ctxt_switches=3418 nonvoluntary_ctxt_switches=0 
+T 6 6 writeback [S (sleeping)] wchan=wq_wait_event_idle syscall=0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 utime,stime=0 0 voluntary_ctxt_switches=287 nonvoluntary_ctxt_switches=0 
+T 7 7 khugepaged [S (sleeping)] wchan=wq_wait_event_idle syscall=0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 utime,stime=0 0 voluntary_ctxt_switches=104 nonvoluntary_ctxt_switches=0 
+T 70 70 python3 [S (sleeping)] wchan=do_wait syscall=61 0xe7 0x7ffec5ca6c2c 0x0 0x0 0x0 0x0 0x7ffec5ca6bc0 0x7e2fe92a3d12 utime,stime=28 54 voluntary_ctxt_switches=3790 nonvoluntary_ctxt_switches=2 
+T 75 75 seatd [S (sleeping)] wchan=do_sys_poll syscall=7 0x560286a96960 0x2 0xffffffffffffffff 0x0 0x0 0x0 0x7ffc5e892820 0x7ecec29d0d12 utime,stime=0 0 voluntary_ctxt_switches=7 nonvoluntary_ctxt_switches=0 
+T 78 78 bash [S (sleeping)] wchan=do_wait syscall=61 0xffffffffffffffff 0x7ffc91af9a48 0x0 0x0 0x0 0x0 0x7ffc91af99c0 0x7e4eacd63d12 utime,stime=0 0 voluntary_ctxt_switches=1 nonvoluntary_ctxt_switches=0 
+T 8 8 vhost-net [S (sleeping)] wchan=wq_wait_event_idle syscall=0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 utime,stime=0 0 voluntary_ctxt_switches=1 nonvoluntary_ctxt_switches=0 
+T 80 80 udevadm [S (sleeping)] wchan=ep_poll syscall=232 0x3 0x55a1e9cbe330 0x6 0xffffffffffffffff 0x0 0x0 0x7ffd95758450 0x7e61f6441d12 utime,stime=0 0 voluntary_ctxt_switches=1 nonvoluntary_ctxt_switches=0 
+T 81 81 bash [S (sleeping)] wchan=pipe_read syscall=0 0x0 0x7ffc91af9666 0x1 0x0 0x0 0x0 0x7ffc91af94d0 0x7e4eacd63d12 utime,stime=0 0 voluntary_ctxt_switches=2 nonvoluntary_ctxt_switches=0 
+T 9 9 kacpid [S (sleeping)] wchan=wq_wait_event_idle syscall=0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 utime,stime=0 0 voluntary_ctxt_switches=1 nonvoluntary_ctxt_switches=0 
+F /sys/kernel/debug/bkl/calls
+kind number calls wall_us holds held_us wait_us
+syscall 0 81771 0 17394 7075 26968
+syscall 1 31129 0 2727 85801 10979
+syscall 2 2216 0 2228 37967 795
+syscall 3 47869 0 19340 16505 15164
+syscall 4 4 0 4 61 0
+syscall 5 25077 0 7609 3089 77694
+syscall 7 1862607 0 1862021 372414 114004
+syscall 8 7101 0 4648 463 8034
+syscall 9 29369 0 75227 23708 45247
+syscall 10 12511 0 12518 1553 12906
+syscall 11 6007 0 11792 11797 6774
+syscall 12 3909 0 3963 283 4816
+syscall 13 37471 0 37471 29879 13052
+syscall 14 104216 0 10 13 0
+syscall 15 2476 0 2476 4452 766
+syscall 16 7896 0 7865 21110 2488
+syscall 17 2900 0 2900 968 664
+syscall 18 2 0 2 6 0
+syscall 20 18497 0 109 4383 304
+syscall 21 19643 0 222 6888 2083
+syscall 24 42 0 0 0 0
+syscall 25 22 0 34 6 0
+syscall 28 14 0 6 3 0
+syscall 32 260 0 260 479 28
+syscall 33 7564 0 7564 7168 1996
+syscall 38 294 0 294 184 1467
+syscall 39 75629 0 0 0 0
+syscall 41 4203 0 4203 58813 1422
+syscall 42 16 0 25 73 0
+syscall 43 3 0 0 0 0
+syscall 44 145 0 131 422 65
+syscall 45 633 0 52 39 94
+syscall 46 1136 0 50 374 302
+syscall 47 2285 0 867 590 405
+syscall 48 3 0 0 0 0
+syscall 49 68 0 77 273 486
+syscall 50 10 0 2 1 0
+syscall 51 26 0 24 7 9
+syscall 52 4 0 2 1 0
+syscall 53 20 0 40 265 18
+syscall 54 101 0 72 28 94
+syscall 55 59 0 44 8 63
+syscall 56 2319 0 2319 265828 1067
+syscall 57 11 0 11 626 14
+syscall 58 2 0 2 1239 0
+syscall 59 1757 0 1982 200647 4400
+syscall 60 0 0 10 99 0
+syscall 61 6505 0 2276 65867 1880
+syscall 62 3105 0 0 0 0
+syscall 63 121 0 121 78 56
+syscall 72 21178 0 13 2 9
+syscall 73 2276 0 0 0 0
+syscall 74 2 0 2 74 0
+syscall 77 111 0 109 63 0
+syscall 79 27 0 27 11 1
+syscall 80 27 0 44 283 44
+syscall 81 277 0 373 713 31
+syscall 82 86 0 306 14755 1204
+syscall 83 387 0 405 1530 320
+syscall 84 7 0 21 548 96
+syscall 85 1 0 3 8 0
+syscall 86 15 0 15 62 148
+syscall 87 1950 0 1973 34841 402
+syscall 88 2948 0 2948 16224 112
+syscall 89 35239 0 19853 28668 55268
+syscall 90 62 0 62 1225 11
+syscall 91 64 0 64 200 647
+syscall 92 2 0 2 26 31
+syscall 93 2 0 2 3 0
+syscall 95 65 0 65 32 1429
+syscall 98 84 0 0 0 0
+syscall 99 31 0 31 512 51
+syscall 100 2 0 2 1 0
+syscall 102 1443 0 0 0 0
+syscall 104 1398 0 0 0 0
+syscall 105 5 0 5 2 0
+syscall 106 4 0 4 11 0
+syscall 107 1406 0 0 0 0
+syscall 108 1396 0 0 0 0
+syscall 109 14 0 14 25 11
+syscall 110 43 0 0 0 0
+syscall 111 12 0 0 0 0
+syscall 112 22 0 22 280 315
+syscall 116 5 0 5 5 0
+syscall 117 4 0 4 2 1
+syscall 118 16 0 0 0 0
+syscall 120 16 0 0 0 0
+syscall 124 1 0 0 0 0
+syscall 125 36 0 36 14 101
+syscall 128 1028 0 1029 3210 125
+syscall 131 61 0 61 14 0
+syscall 137 26 0 26 168 34
+syscall 138 685 0 685 437 536
+syscall 141 6 0 6 127 30
+syscall 144 4 0 4 21 0
+syscall 157 311 0 311 133 1374
+syscall 158 1846 0 1846 797 107
+syscall 162 2 0 2 1368 0
+syscall 165 2 0 3 3782 3
+syscall 186 252 0 0 0 0
+syscall 191 1856 0 1856 2822 20
+syscall 193 16 0 16 23 2
+syscall 202 2737 0 0 0 0
+syscall 203 89 0 89 619 44
+syscall 204 14 0 14 7 1
+syscall 213 1 0 1 1 0
+syscall 217 2421 0 1229 30598 288
+syscall 218 1764 0 1764 458 1430
+syscall 221 508 0 508 103 192
+syscall 230 760766 0 760769 5832487 32773
+syscall 231 0 0 2434 425524 2742
+syscall 232 484 0 55 78 946
+syscall 233 273 0 63 38 34
+syscall 234 278 0 0 0 0
+syscall 247 40 0 40 380 247
+syscall 253 2 0 2 3 0
+syscall 254 16 0 16 72 24
+syscall 257 31979 0 30788 528806 187805
+syscall 258 36 0 97 928 846
+syscall 260 11 0 11 13 79
+syscall 262 70891 0 19694 123267 20672
+syscall 263 15 0 86 1045 943
+syscall 264 20 0 20 120 122
+syscall 266 27 0 83 1112 989
+syscall 267 305 0 348 1840 967
+syscall 268 2 0 2 8 30
+syscall 270 760 0 761 598 168
+syscall 271 0 0 5 0 0
+syscall 273 4117 0 0 0 0
+syscall 280 21 0 21 33 39
+syscall 283 11 0 11 15 5
+syscall 285 21 0 21 1898 106
+syscall 286 302 0 302 574 26625
+syscall 288 3 0 0 0 0
+syscall 289 25 0 25 19 225
+syscall 290 3 0 3 3 0
+syscall 291 33 0 33 30 188
+syscall 293 866 0 866 11811 1094
+syscall 294 5 0 5 7 39
+syscall 302 1870 0 1870 1062 199
+syscall 303 10 0 10 5 2
+syscall 318 4610 0 4610 1914 3181
+syscall 319 13 0 13 98 2188
+syscall 323 13 0 13 4 0
+syscall 326 688 0 688 57857 0
+syscall 332 900 0 900 374 1236
+syscall 334 1798 0 1798 1144 103
+syscall 430 1 0 1 0 0
+syscall 434 21 0 21 32 60
+syscall 435 55 0 55 2137 3
+syscall 436 12 0 12 54 43
+syscall 439 647 0 606 2486 1104
+syscall 441 75860 0 68 29 320
+syscall 449 607 0 278 163 42
+syscall 452 18 0 18 24 115
+vector 0 0 0 2498 21281 614
+vector 14 310771 0 12750 9586 25395
+vector 32 1031500 0 249337 1092633 17925
+vector 33 3 0 0 0 0
+vector 36 10 0 7 25502 824
+vector 46 1 0 0 0 0
+vector 47 1 0 0 0 0
+vector 49 3955 0 0 0 0
+vector 50 1852 0 0 0 0
+vector 51 1360 0 0 0 0
+vector 52 2692 0 0 0 0
+vector 54 2 0 0 0 0
+vector 55 4 0 0 0 0
+vector 56 1 0 0 0 0
+vector 57 2 0 0 0 0
+vector 59 141 0 0 0 0
+take 0 0 0 5 342640 0
+take 1 0 0 766187 1556441 268984
+slept 0 0 0 4 1396 165
+slept 2 0 0 51 14646 735
+slept 3 0 0 4 58 0
+slept 16 0 0 39 81 6
+slept 20 0 0 1 1 19
+slept 21 0 0 64 3038 1506
+slept 33 0 0 1 19 0
+slept 49 0 0 8 139 177
+slept 58 0 0 2 3 0
+slept 59 0 0 258 16209 11106
+slept 74 0 0 24 889 679
+slept 80 0 0 8 108 238
+slept 82 0 0 115 1802 993
+slept 83 0 0 6 39 41
+slept 87 0 0 5 25 65
+slept 89 0 0 12 84 410
+slept 128 0 0 1028 2617 485
+slept 162 0 0 7 691 0
+slept 165 0 0 4 4252 1
+slept 203 0 0 20 35 91
+slept 230 0 0 760764 1489251 237467
+slept 231 0 0 1 126 0
+slept 254 0 0 1 6 0
+slept 257 0 0 976 15202 20578
+slept 258 0 0 7 106 21
+slept 262 0 0 393 9261 1768
+F /sys/kernel/debug/bkl/long
+clock_us age_us cpu pid comm vector syscall pc[8]
+325813 178271 0 0 - 0 -1 0xffffffff8041b4b4 0xffffffff801171c0 0xffffffff80118902 0xffffffff80118094 0xffffffff80108cc9 0xffffffff803ed728 0xffffffff801002d9 0x0
+F /sys/kernel/debug/bkl/tick
+part calls cycles us max_us
+clock 9257 77237178 18424 757
+account 225167 281199995 67079 648
+wake 9198 168673722 40236 1737
+hda 88977 399757679 95361 1001
+block_lag 88977 89612089 21376 426
+block_request 88977 69623518 16608 506
+speaker 88977 53939552 12867 242
+i915 88977 103588588 24710 262
+vkms 88977 74867775 17859 126
+vblank 88977 123172231 29382 850
+lock 8432 79782276 19031 8252
+signals 8432 2532941 604 75
+load 86164 267578511 63830 644
+netdev 86164 57395275 13691 37
+netconsole 86164 35879862 8559 100
+ath9k 86164 18370611 4382 165
+tcp 86164 209577564 49994 771
+ip_frag 86164 44621449 10644 171
+ip6 86164 141317880 33711 211
+netlink 86164 217563000 51899 662
+ip_loop 86164 94714244 22593 457
+usb 86164 62938399 15013 350
+input 86164 107636004 25676 564
+platform 86164 241023552 57495 664
+console 86164 127997100 30533 1016
+klog 86164 50926697 12148 155
+nested 499 14938518 3563 602
+F /sys/kernel/debug/bkl/profile
+samples 4993
+lost 0
+syscall 270 0xffffffff8041b4b4 0xffffffff8023175e 0xffffffff8026e6c5 0xffffffff8026eac6 1
+kernel 0 0xffffffff801015ff 0xffffffff80215ae8 0xffffffff8025ae25 0xffffffff8025b13b 33
+kernel 0 0xffffffff801015fc 0xffffffff80215ae8 0xffffffff8025ae25 0xffffffff8025b13b 10
+kernel 0 0xffffffff804834ec 0xffffffff80489733 0xffffffff80489cac 0xffffffff8048a748 1
+syscall 231 0xffffffff8027193b 0xffffffff80271acd 0xffffffff8028f800 0xffffffff80144722 3
+syscall 230 0xffffffff8011a806 0xffffffff803f2c0d 0xffffffff803f3baa 0xffffffff803f3d47 2
+syscall 230 0xffffffff8011a7f2 0xffffffff803f2c0d 0xffffffff803f3baa 0xffffffff803f3d47 4
+kernel 0 0xffffffff8041b4b4 0xffffffff8012f255 0xffffffff803f4dab 0xffffffff803f40d9 3
+syscall 217 0xffffffff80293fa7 0xffffffff8019fa8c 0xffffffff80145bd7 0xffffffff801662a5 1
+kernel 0 0xffffffff803f8672 0xffffffff80419c62 0xffffffff801e7042 0xffffffff801e7159 3
+syscall 257 0xffffffff8034779a 0xffffffff801959f8 0xffffffff8019961a 0xffffffff801a5920 1
+syscall 59 0xffffffff80392222 0xffffffff8021ab06 0xffffffff8021abb9 0xffffffff8012a721 1
+kernel 0 0xffffffff802157eb 0xffffffff80215ae8 0xffffffff8025ae25 0xffffffff8025b13b 2
+syscall 88 0xffffffff8029580a 0xffffffff801a0504 0xffffffff8014b152 0xffffffff8014b228 2
+syscall 7 0xffffffff80156f40 0xffffffff8026ea05 0xffffffff8026f180 0xffffffff8026fa29 1
+kernel 0 0xffffffff803f4dab 0xffffffff803f40d9 0xffffffff80100643 0x0 1
+syscall 262 0xffffffff802956f0 0xffffffff801a49d5 0xffffffff801a6c54 0xffffffff801a70af 1
+syscall 257 0xffffffff8041b4b4 0xffffffff8040f9ab 0xffffffff8010f6bd 0xffffffff80110b45 7
+syscall 230 0xffffffff80119891 0xffffffff8011a3ed 0xffffffff8011c8f8 0xffffffff8011c9e3 1
+syscall 56 0xffffffff80208320 0xffffffff80126db6 0xffffffff80127806 0xffffffff8012b2ea 1
+syscall 11 0xffffffff803ee706 0xffffffff801d4d15 0xffffffff801a2ea9 0xffffffff8028f8b8 1
+syscall 326 0xffffffff8041b4b4 0xffffffff80190c54 0xffffffff801d558b 0xffffffff801bfdfc 2
+syscall 257 0xffffffff8041b4b4 0xffffffff801c57a5 0xffffffff801c5c77 0xffffffff8019fb47 1
+syscall 257 0xffffffff8041b4b4 0xffffffff8040f9ab 0xffffffff8010f691 0xffffffff80110b45 10
+kernel 0 0xffffffff803ee6c2 0xffffffff80419c62 0xffffffff80418feb 0xffffffff80246801 2
+syscall 230 0xffffffff8011a287 0xffffffff8011a3ed 0xffffffff8011c8f8 0xffffffff8011c9e3 3
+syscall 7 0xffffffff80342ab5 0xffffffff8026e5a8 0xffffffff8026e7ba 0xffffffff8026ea05 11
+syscall 7 0xffffffff8026e542 0xffffffff8026e7ba 0xffffffff8026ea05 0xffffffff8026f180 2
+syscall 230 0xffffffff8041b4b4 0xffffffff80119fe9 0xffffffff8011a1f7 0xffffffff8011a3ed 10
+syscall 286 0xffffffff8011a69c 0xffffffff803f2c0d 0xffffffff803f3baa 0xffffffff803f3d47 1
+syscall 230 0xffffffff801015ff 0xffffffff80215ae8 0xffffffff8011c9a0 0xffffffff8011a819 2
+syscall 56 0xffffffff8041b4b4 0xffffffff80127806 0xffffffff8012b2ea 0xffffffff8011a819 17
+kernel 0 0xffffffff8025b122 0xffffffff8025b21d 0xffffffff803f4db3 0xffffffff803f40d9 1
+syscall 59 0xffffffff8041b611 0xffffffff803ee5a3 0xffffffff80129a81 0xffffffff8012b131 7
+syscall 262 0xffffffff802956fd 0xffffffff801a49d5 0xffffffff801a6c54 0xffffffff801a70af 1
+syscall 257 0xffffffff801db564 0xffffffff802b1e02 0xffffffff802bc620 0xffffffff802c5183 1
+kernel 0 0xffffffff80215ad1 0xffffffff8025b13b 0xffffffff8025b21d 0xffffffff803f4db3 6
+syscall 230 0xffffffff8011a1c1 0xffffffff8011a3ed 0xffffffff8011c8f8 0xffffffff8011c9e3 6
+kernel 0 0xffffffff8012f270 0xffffffff803f4dab 0xffffffff803f40d9 0xffffffff80100643 1
+vector 14 0xffffffff803ee7d7 0xffffffff8020de61 0xffffffff8020ecb8 0xffffffff8020fa3b 1
+syscall 217 0xffffffff80347b10 0xffffffff80293fc2 0xffffffff8019fa8c 0xffffffff80145bd7 1
+syscall 230 0xffffffff8010ba40 0xffffffff8011a1f7 0xffffffff8011a3ed 0xffffffff8011c8f8 1
+syscall 230 0xffffffff8010ba41 0xffffffff8011a1f7 0xffffffff8011a3ed 0xffffffff8011c8f8 1
+syscall 230 0xffffffff8011a3ed 0xffffffff8011c8f8 0xffffffff8011c9e3 0xffffffff8011a819 1
+syscall 2 0xffffffff801ad48e 0xffffffff801a4674 0xffffffff801a6c54 0xffffffff801a70af 1
+syscall 230 0xffffffff80231744 0xffffffff8011a1bf 0xffffffff8011a3ed 0xffffffff8011c8f8 1
+syscall 59 0xffffffff803ee7b4 0xffffffff801d5226 0xffffffff801bfedc 0xffffffff8019d92b 4
+syscall 59 0xffffffff803ee7b7 0xffffffff801d5226 0xffffffff801bfedc 0xffffffff8019d92b 1
+syscall 257 0xffffffff8041b4b4 0xffffffff801ad513 0xffffffff801a4674 0xffffffff801a6c54 1
+syscall 59 0xffffffff802919ee 0xffffffff8012a114 0xffffffff8012b131 0xffffffff8011a819 1
+syscall 1 0xffffffff801c9da7 0xffffffff801cb630 0xffffffff801d6d9c 0xffffffff801c5fd2 1
+syscall 257 0xffffffff8019530d 0xffffffff801a6c54 0xffffffff801a6d72 0xffffffff8013d56d 1
+syscall 12 0xffffffff8041b4b4 0xffffffff8021b4a9 0xffffffff80132e74 0xffffffff8011a819 2
+syscall 59 0xffffffff8021c628 0xffffffff8021ec09 0xffffffff8021f095 0xffffffff80127b11 3
+syscall 217 0xffffffff80293fae 0xffffffff8019fa8c 0xffffffff80145bd7 0xffffffff801662a5 6
+syscall 262 0xffffffff80293df1 0xffffffff801a4d8e 0xffffffff801a6c54 0xffffffff801a70af 1
+syscall 230 0xffffffff8041b4a2 0xffffffff80119fe9 0xffffffff8011a1f7 0xffffffff8011a3ed 1
+syscall 230 0xffffffff8011a791 0xffffffff803f2c0d 0xffffffff803f3baa 0xffffffff803f3d47 3
+kernel 0 0xffffffff803f867e 0xffffffff80419c62 0xffffffff80370872 0xffffffff80372f18 1
+syscall 257 0xffffffff801c08d3 0xffffffff801ce7f3 0xffffffff801d06c7 0xffffffff8013d5f7 1
+syscall 257 0xffffffff801ce4b5 0xffffffff801ce7f3 0xffffffff801d06c7 0xffffffff8013d5f7 1
+syscall 56 0xffffffff8041b4b4 0xffffffff8020781c 0xffffffff802126f6 0xffffffff80126db6 2
+kernel 0 0xffffffff802158e8 0xffffffff80215ae8 0xffffffff8025ae25 0xffffffff8025b13b 1
+kernel 0 0xffffffff803ee7d0 0xffffffff8025af9e 0xffffffff8025b13b 0xffffffff8025b21d 1
+syscall 88 0xffffffff8011a69c 0xffffffff803f2c0d 0xffffffff803f3baa 0xffffffff803f3d47 1
+kernel 0 0xffffffff8041b4b4 0xffffffff8046b75f 0xffffffff8046b8fc 0xffffffff804988af 3
+syscall 2 0xffffffff801952c0 0xffffffff801a6c54 0xffffffff801a70af 0xffffffff8014f957 1
+syscall 230 0xffffffff80119640 0xffffffff8011a340 0xffffffff8011c8f8 0xffffffff8011c9e3 1
+kernel 0 0xffffffff8011f9f7 0xffffffff8012f7dd 0xffffffff803f4dab 0xffffffff803f40d9 1
+syscall 56 0xffffffff80209341 0xffffffff8020ce1c 0xffffffff8021281a 0xffffffff80126db6 1
+syscall 257 0xffffffff802956fd 0xffffffff801a49d5 0xffffffff801a6c54 0xffffffff801a70af 1
+syscall 165 0xffffffff8041b4b4 0xffffffff80116e73 0xffffffff801177fb 0xffffffff80118902 2
+kernel 0 0xffffffff802158c1 0xffffffff8025ae25 0xffffffff8025b13b 0xffffffff8025b21d 3
+syscall 257 0xffffffff80347738 0xffffffff801ce2cb 0xffffffff801ce389 0xffffffff801ce7f3 1
+syscall 7 0xffffffff8026e84d 0xffffffff8026ea05 0xffffffff8026f180 0xffffffff8026fa29 1
+syscall 82 0xffffffff80141ee3 0xffffffff80142615 0xffffffff80142945 0xffffffff8014e1bb 1
+syscall 59 0xffffffff803477c7 0xffffffff801959f8 0xffffffff8019961a 0xffffffff801a5920 1
+syscall 13 0xffffffff8011a69c 0xffffffff803f2c0d 0xffffffff803f3baa 0xffffffff803f3d47 4
+ioctl 0xc0406442 0xffffffff8041b4b4 0xffffffff8036ee42 0xffffffff803730d1 0xffffffff80377533 1
+kernel 0 0xffffffff8041a9b6 0xffffffff8012f38b 0xffffffff803f4dab 0xffffffff803f40d9 1
+syscall 230 0xffffffff8011c9f3 0xffffffff8011a819 0xffffffff803f2c0d 0xffffffff803f3baa 2
+kernel 0 0xffffffff801027a2 0xffffffff801091e3 0xffffffff803ed728 0xffffffff801002d9 1
+kernel 0 0xffffffff803f866b 0xffffffff80419c62 0xffffffff80370872 0xffffffff80372f18 1
+syscall 257 0xffffffff80150a85 0xffffffff801516b4 0xffffffff8015c485 0xffffffff8015c5c5 1
+syscall 231 0xffffffff8021e78e 0xffffffff802176e5 0xffffffff8021a795 0xffffffff8021ab4e 1
+syscall 56 0xffffffff80214b4b 0xffffffff80214d41 0xffffffff8022aff4 0xffffffff8022bcd6 1
+syscall 7 0xffffffff80339c01 0xffffffff8026e7ba 0xffffffff8026ea05 0xffffffff8026f180 1
+syscall 230 0xffffffff8011c891 0xffffffff8011c9e3 0xffffffff8011a819 0xffffffff803f2c0d 1
+syscall 257 0xffffffff8041b4b4 0xffffffff8023175e 0xffffffff80246fdc 0xffffffff80247a98 8
+syscall 59 0xffffffff8041b4b4 0xffffffff8023175e 0xffffffff80246fdc 0xffffffff80247a98 3
+syscall 230 0xffffffff801daa26 0xffffffff803f2c0d 0xffffffff803f3baa 0xffffffff803f3d47 8
+syscall 257 0xffffffff802a0c7c 0xffffffff802a42e3 0xffffffff802a4782 0xffffffff80195a78 1
+syscall 59 0xffffffff8041b4b4 0xffffffff801e6bdc 0xffffffff8018691a 0xffffffff8018a1e5 1
+syscall 231 0xffffffff8041b4b4 0xffffffff80214ee4 0xffffffff8021ab88 0xffffffff8021b3c8 1
+syscall 262 0xffffffff8019ac65 0xffffffff801a4bc1 0xffffffff801a6c54 0xffffffff801a70af 1
+syscall 230 0xffffffff8010c4b0 0xffffffff8011a1f7 0xffffffff8011a3ed 0xffffffff8011c8f8 1
+syscall 59 0xffffffff80143af1 0xffffffff8012b131 0xffffffff8011a819 0xffffffff803f2c0d 1
+syscall 231 0xffffffff8041b4b4 0xffffffff8012ce5b 0xffffffff8022c8a4 0xffffffff8012cbe1 15
+syscall 56 0xffffffff803911f6 0xffffffff803919d5 0xffffffff8020aa0d 0xffffffff8021b31c 1
+syscall 326 0xffffffff80186eae 0xffffffff8018afde 0xffffffff801d57d4 0xffffffff801bfdfc 1
+syscall 9 0xffffffff8021e9f3 0xffffffff80133d06 0xffffffff8011a819 0xffffffff803f3cc3 1
+syscall 257 0xffffffff8014fc95 0xffffffff801516b4 0xffffffff8015c485 0xffffffff8015c5c5 1
+syscall 21 0xffffffff801a18a0 0xffffffff801a6c54 0xffffffff801a70af 0xffffffff80159dbe 1
+syscall 230 0xffffffff802158b0 0xffffffff8011c9a0 0xffffffff8011a819 0xffffffff803f2c0d 1
+kernel 0 0xffffffff80215b11 0xffffffff8025b13b 0xffffffff8025b21d 0xffffffff803f4db3 1
+syscall 7 0xffffffff8026e521 0xffffffff8026ea05 0xffffffff8026f180 0xffffffff8026fa29 1
+syscall 9 0xffffffff8041b4b4 0xffffffff80133350 0xffffffff80133d06 0xffffffff8011a819 3
+syscall 56 0xffffffff80208310 0xffffffff80126db6 0xffffffff80127806 0xffffffff8012b2ea 1
+syscall 230 0xffffffff801e83b0 0xffffffff803f2c0d 0xffffffff803f3baa 0xffffffff803f3d47 1
+syscall 231 0xffffffff8041b4b4 0xffffffff8028f975 0xffffffff8014a0e5 0xffffffff8021a9e0 1
+kernel 0 0xffffffff8041b4b4 0xffffffff8040f9ab 0xffffffff8010f67b 0xffffffff80110b45 1
+syscall 0 0xffffffff803ee7b4 0xffffffff80220095 0xffffffff802940ed 0xffffffff8019d92b 1
+kernel 0 0xffffffff8011f998 0xffffffff8012f7dd 0xffffffff803f4dab 0xffffffff803f40d9 2
+syscall 439 0xffffffff8041b4b4 0xffffffff8015dce5 0xffffffff80161ca9 0xffffffff8011a819 2
+syscall 59 0xffffffff80197e3c 0xffffffff801a4cad 0xffffffff801a6c54 0xffffffff801a70af 1
+syscall 10 0xffffffff8041b4b4 0xffffffff80212050 0xffffffff80121b49 0xffffffff801344ae 3
+syscall 257 0xffffffff8041b611 0xffffffff803eeabc 0xffffffff803ef0a4 0xffffffff803ef517 1
+syscall 59 0xffffffff8024b201 0xffffffff80129e82 0xffffffff8012b131 0xffffffff8011a819 1
+syscall 2 0xffffffff801504b2 0xffffffff801516b4 0xffffffff8015c485 0xffffffff8015c5c5 1
+syscall 230 0xffffffff8011a130 0xffffffff8011a1f7 0xffffffff8011a3ed 0xffffffff8011c8f8 1
+kernel 0 0xffffffff8041b4b4 0xffffffff8040fba5 0xffffffff801123e0 0xffffffff80385ad8 1
+kernel 0 0xffffffff8012f7dd 0xffffffff803f4dab 0xffffffff803f40d9 0xffffffff80100643 1
+vector 14 0xffffffff80214b4b 0xffffffff80214d41 0xffffffff8021fc59 0xffffffff8022050d 2
+syscall 56 0xffffffff8020aa60 0xffffffff8021b31c 0xffffffff80126da3 0xffffffff80127806 1
+syscall 15 0xffffffff8011a69c 0xffffffff803f2c0d 0xffffffff803f3baa 0xffffffff803f3d47 2
+kernel 0 0xffffffff8038f209 0xffffffff80229707 0x0 0x0 1
+syscall 257 0xffffffff801addbc 0xffffffff801a49d5 0xffffffff801a6c54 0xffffffff801a70af 1
+vector 14 0xffffffff8041b4b4 0xffffffff8021c9ad 0xffffffff8021e04f 0xffffffff8020dd28 4
+syscall 56 0xffffffff8041b4b4 0xffffffff8028fc4d 0xffffffff802900a6 0xffffffff80126ca1 9
+syscall 56 0xffffffff80218338 0xffffffff80126ede 0xffffffff80127806 0xffffffff8012b2ea 1
+syscall 21 0xffffffff8041b4b4 0xffffffff8015dce5 0xffffffff801615c1 0xffffffff8011a819 1
+syscall 257 0xffffffff8041b4b4 0xffffffff80191156 0xffffffff801c2310 0xffffffff801c27b9 2
+syscall 56 0xffffffff8021b192 0xffffffff8020ce9f 0xffffffff8021281a 0xffffffff80126db6 1
+syscall 257 0xffffffff8041b611 0xffffffff803eeabc 0xffffffff803ef0a4 0xffffffff803efda7 1
+kernel 0 0xffffffff802158d5 0xffffffff80215ae8 0xffffffff8025ae25 0xffffffff8025b13b 1
+syscall 230 0xffffffff801193f0 0xffffffff8011c9e3 0xffffffff8011a819 0xffffffff803f2c0d 1
+syscall 230 0xffffffff8022aef1 0xffffffff8011a3ed 0xffffffff8011c8f8 0xffffffff8011c9e3 3
+syscall 230 0xffffffff8022aef0 0xffffffff8011a3ed 0xffffffff8011c8f8 0xffffffff8011c9e3 1
+syscall 262 0xffffffff801ce846 0xffffffff801d06c7 0xffffffff801ae2bf 0xffffffff801a49d5 1
+syscall 257 0xffffffff8029b9a8 0xffffffff80144bef 0xffffffff801501f5 0xffffffff801516b4 1
+kernel 0 0xffffffff803ee7d7 0xffffffff8025af9e 0xffffffff8025b13b 0xffffffff8025b21d 1
+syscall 230 0xffffffff8011c971 0xffffffff803f2c0d 0xffffffff803f3baa 0xffffffff803f3d47 2
+syscall 89 0xffffffff8019ac58 0xffffffff801a4bc1 0xffffffff801a6c54 0xffffffff801a70af 1
+syscall 257 0xffffffff8041b686 0xffffffff803eeb2b 0xffffffff803ef0a4 0xffffffff803ef517 1
+syscall 7 0xffffffff80342ab8 0xffffffff8026e5a8 0xffffffff8026e7ba 0xffffffff8026ea05 1
+syscall 230 0xffffffff8041b4a1 0xffffffff8023096d 0xffffffff8023175e 0xffffffff80119abe 2
+kernel 0 0xffffffff803f8674 0xffffffff80419c62 0xffffffff80370872 0xffffffff80372f18 1
+syscall 326 0xffffffff8041b4b4 0xffffffff80221cec 0xffffffff80221fdb 0xffffffff80222c12 2
+syscall 88 0xffffffff802956fd 0xffffffff80148ff7 0xffffffff8014af1c 0xffffffff8014b228 1
+kernel 0 0xffffffff802157c7 0xffffffff80215b1f 0xffffffff8025adb6 0xffffffff8025b147 1
+syscall 56 0xffffffff80348316 0xffffffff802077ed 0xffffffff802126f6 0xffffffff80126db6 1
+syscall 11 0xffffffff8021e76e 0xffffffff802176e5 0xffffffff8021a785 0xffffffff8021b49e 1
+syscall 231 0xffffffff80216f31 0xffffffff80218048 0xffffffff8021818f 0xffffffff8021ab17 1
+syscall 59 0xffffffff8041b4a2 0xffffffff8020be38 0xffffffff80392241 0xffffffff8021ab06 1
+syscall 59 0xffffffff8041b4a1 0xffffffff8020be38 0xffffffff80392241 0xffffffff8021ab06 1
+syscall 59 0xffffffff801d0971 0xffffffff801a5920 0xffffffff801a6c54 0xffffffff801a70af 1
+kernel 0 0xffffffff801015ff 0xffffffff80215b1f 0xffffffff8025adda 0xffffffff8025b147 4
+syscall 257 0xffffffff803ee7b4 0xffffffff801c2308 0xffffffff801c27b9 0xffffffff801ce2a0 2
+syscall 82 0xffffffff8041b4b4 0xffffffff801ae10f 0xffffffff801aec3a 0xffffffff8019a393 1
+syscall 89 0xffffffff8041b4b4 0xffffffff8015d7b2 0xffffffff8015ec9c 0xffffffff8011a819 12
+kernel 0 0xffffffff8011f9cc 0xffffffff8012f7dd 0xffffffff803f4dab 0xffffffff803f40d9 1
+kernel 0 0xffffffff801015ff 0xffffffff80215b1f 0xffffffff8025adb6 0xffffffff8025b147 1
+syscall 44 0xffffffff803049f1 0xffffffff80166a90 0xffffffff80167005 0xffffffff80167986 1
+kernel 0 0xffffffff8041b4b4 0xffffffff803f40d9 0xffffffff80100643 0x0 119
+syscall 262 0xffffffff803ee7b7 0xffffffff801ce2cb 0xffffffff801ce4a8 0xffffffff801ce7f3 1
+syscall 230 0xffffffff8010cf47 0xffffffff8011a340 0xffffffff8011c8f8 0xffffffff8011c9e3 1
+kernel 0 0xffffffff8041b4b4 0xffffffff80382d2e 0xffffffff801e704e 0xffffffff801e7159 1
+syscall 230 0xffffffff80119ef1 0xffffffff8011a3ed 0xffffffff8011c8f8 0xffffffff8011c9e3 1
+ioctl 0x40086409 0xffffffff8041b4b4 0xffffffff8036ee42 0xffffffff803730d1 0xffffffff80375e47 1
+kernel 0 0xffffffff80347671 0xffffffff8025b13b 0xffffffff8025b21d 0xffffffff803f4db3 1
+syscall 7 0xffffffff8026e525 0xffffffff8026ea05 0xffffffff8026f180 0xffffffff8026fa29 1
+kernel 0 0xffffffff8025ada8 0xffffffff8025b147 0xffffffff8025b21d 0xffffffff803f4db3 1
+vector 14 0xffffffff8041b4b4 0xffffffff8021a780 0xffffffff8020f5a8 0xffffffff8020fd43 2
+syscall 59 0xffffffff8041b4b4 0xffffffff80190c54 0xffffffff801d4fd7 0xffffffff801bfedc 1
+syscall 56 0xffffffff802106a1 0xffffffff80127806 0xffffffff8012b2ea 0xffffffff8011a819 1
+syscall 33 0xffffffff8041b4b4 0xffffffff802908e7 0xffffffff80152ffb 0xffffffff80158a2b 1
+kernel 0 0xffffffff803ee6c2 0xffffffff80419c62 0xffffffff801026c8 0xffffffff801091e3 31
+syscall 262 0xffffffff8041b4b4 0xffffffff80191a69 0xffffffff801926fd 0xffffffff801bfb06 1
+syscall 59 0xffffffff8041b4b4 0xffffffff8020be82 0xffffffff80392241 0xffffffff8021ab06 8
+syscall 293 0xffffffff8011a69c 0xffffffff803f2c0d 0xffffffff803f3baa 0xffffffff803f3d47 1
+kernel 0 0xffffffff802157b6 0xffffffff80215b1f 0xffffffff8025adb6 0xffffffff8025b147 3
+syscall 326 0xffffffff8041b4b4 0xffffffff8023175e 0xffffffff80246fdc 0xffffffff80247a98 7
+kernel 0 0xffffffff803f8672 0xffffffff80419c62 0xffffffff80419002 0xffffffff80246801 1
+syscall 231 0xffffffff80392174 0xffffffff8021ab06 0xffffffff8021b3c8 0xffffffff8022c6af 1
+syscall 20 0xffffffff8041b4b4 0xffffffff80118d93 0xffffffff80279fbd 0xffffffff802795a4 1
+kernel 0 0xffffffff8025afd0 0xffffffff8025b13b 0xffffffff8025b21d 0xffffffff803f4db3 1
+syscall 2 0xffffffff80191234 0xffffffff801926fd 0xffffffff801bfb06 0xffffffff801c22d2 1
+syscall 59 0xffffffff803ee7d7 0xffffffff80391270 0xffffffff803919d5 0xffffffff80210ec9 2
+syscall 257 0xffffffff8041b611 0xffffffff803f03a7 0xffffffff802c3e93 0xffffffff802c6caf 1
+syscall 231 0xffffffff8027193e 0xffffffff80271acd 0xffffffff8028f800 0xffffffff80144722 1
+syscall 56 0xffffffff80216cbe 0xffffffff80218357 0xffffffff80126ede 0xffffffff80127806 1
+syscall 230 0xffffffff8022af04 0xffffffff8011a1af 0xffffffff8011a3ed 0xffffffff8011c8f8 1
+syscall 326 0xffffffff80214b4b 0xffffffff80214d41 0xffffffff8021fc59 0xffffffff8021ff48 1
+kernel 0 0xffffffff802157c7 0xffffffff80215ae8 0xffffffff8025ae25 0xffffffff8025b13b 1
+kernel 0 0xffffffff80101603 0xffffffff80215ae8 0xffffffff8025ae25 0xffffffff8025b13b 1
+syscall 257 0xffffffff8019123b 0xffffffff801926fd 0xffffffff801bfb06 0xffffffff801c22d2 1
+kernel 0 0xffffffff8041b4b4 0xffffffff8012f29b 0xffffffff803f4dab 0xffffffff803f40d9 1
+syscall 56 0xffffffff803ee7d7 0xffffffff803910b7 0xffffffff803918f9 0xffffffff80219784 1
+F /sys/kernel/debug/sched/debug
+Sched Debug Version: v0.11, 6.18.0-rach2 #1
+ktime                                   : 1032606.929338
+sched_clk                               : 1032606.929338
+cpu_clk                                 : 1032606.929338
+jiffies                                 : 258151
+
+sysctl_sched
+  .sysctl_sched_base_slice                 : 2.100000
+  .sysctl_sched_features                   : 199608287
+  .sysctl_sched_tunable_scaling            : 1 (logarithmic)
+
+cpu#0, 4192.027 MHz
+  .nr_running                    : 1
+  .nr_switches                   : 97263
+  .nr_uninterruptible            : 0
+  .next_balance                  : 0.258150
+  .curr->pid                     : 2409
+  .clock                         : 1032606.146383
+  .clock_task                    : 1031449.775200
+  .avg_idle                      : 318410
+  .max_idle_balance_cost         : 500000
+
+cfs_rq[0]:/autogroup-1
+  .left_deadline                 : 0.000001
+  .left_vruntime                 : 0.000001
+  .zero_vruntime                 : 199.646194
+  .avg_vruntime                  : 199.646194
+  .right_vruntime                : 0.000001
+  .spread                        : 0.000000
+  .nr_running                    : 1
+  .h_nr_runnable                 : 1
+  .h_nr_queued                   : 1
+  .h_nr_delayed                  : 0
+  .idle_nr_running               : 0
+  .idle_h_nr_running             : 0
+  .load                          : 1024
+  .load_avg                      : 1024
+  .runnable_avg                  : 401
+  .util_avg                      : 401
+  .util_est                      : 0
+  .removed.load_avg              : 0
+  .removed.util_avg              : 0
+  .removed.runnable_avg          : 0
+  .tg_load_avg_contrib           : 1024
+  .tg_load_avg                   : 2351
+  .se->exec_start                : 1031449.775200
+  .se->vruntime                  : 3536.214034
+  .se->sum_exec_runtime          : 200.694770
+  .se->load.weight               : 446
+  .se->avg.load_avg              : 446
+  .se->avg.util_avg              : 401
+  .se->avg.runnable_avg          : 401
+
+cfs_rq[0]:/autogroup-10
+  .left_deadline                 : 0.000001
+  .left_vruntime                 : 0.000001
+  .zero_vruntime                 : 547.784614
+  .avg_vruntime                  : 547.784614
+  .right_vruntime                : 0.000001
+  .spread                        : 0.000000
+  .nr_running                    : 0
+  .h_nr_runnable                 : 0
+  .h_nr_queued                   : 0
+  .h_nr_delayed                  : 0
+  .idle_nr_running               : 0
+  .idle_h_nr_running             : 0
+  .load                          : 0
+  .load_avg                      : 0
+  .runnable_avg                  : 0
+  .util_avg                      : 0
+  .util_est                      : 0
+  .removed.load_avg              : 0
+  .removed.util_avg              : 0
+  .removed.runnable_avg          : 0
+  .tg_load_avg_contrib           : 0
+  .tg_load_avg                   : 2
+  .se->exec_start                : 1031327.946224
+  .se->vruntime                  : 3468.914584
+  .se->sum_exec_runtime          : 548.836436
+  .se->load.weight               : 1023
+  .se->avg.load_avg              : 0
+  .se->avg.util_avg              : 0
+  .se->avg.runnable_avg          : 0
+
+cfs_rq[0]:/autogroup-16
+  .left_deadline                 : 0.000001
+  .left_vruntime                 : 0.000001
+  .zero_vruntime                 : 324.241792
+  .avg_vruntime                  : 324.241792
+  .right_vruntime                : 0.000001
+  .spread                        : 0.000000
+  .nr_running                    : 0
+  .h_nr_runnable                 : 0
+  .h_nr_queued                   : 0
+  .h_nr_delayed                  : 0
+  .idle_nr_running               : 0
+  .idle_h_nr_running             : 0
+  .load                          : 0
+  .load_avg                      : 6
+  .runnable_avg                  : 6
+  .util_avg                      : 3
+  .util_est                      : 0
+  .removed.load_avg              : 0
+  .removed.util_avg              : 0
+  .removed.runnable_avg          : 0
+  .tg_load_avg_contrib           : 6
+  .tg_load_avg                   : 106
+  .se->exec_start                : 1031438.787659
+  .se->vruntime                  : 3524.052803
+  .se->sum_exec_runtime          : 325.290368
+  .se->load.weight               : 941
+  .se->avg.load_avg              : 3
+  .se->avg.util_avg              : 3
+  .se->avg.runnable_avg          : 6
+
+cfs_rq[0]:/
+  .left_deadline                 : 0.000001
+  .left_vruntime                 : 0.000001
+  .zero_vruntime                 : 3536.214034
+  .avg_vruntime                  : 3536.214034
+  .right_vruntime                : 0.000001
+  .spread                        : 0.000000
+  .nr_running                    : 1
+  .h_nr_runnable                 : 1
+  .h_nr_queued                   : 1
+  .h_nr_delayed                  : 0
+  .idle_nr_running               : 0
+  .idle_h_nr_running             : 0
+  .load                          : 446
+  .load_avg                      : 19359
+  .runnable_avg                  : 6553
+  .util_avg                      : 6529
+  .util_est                      : 0
+  .removed.load_avg              : 0
+  .removed.util_avg              : 0
+  .removed.runnable_avg          : 0
+  .tg_load_avg_contrib           : 0
+  .tg_load_avg                   : 0
+
+rt_rq[0]:
+  .rt_nr_running                 : 0
+
+dl_rq[0]:
+  .dl_nr_running                 : 0
+  .dl_bw->bw                     : 996147
+  .dl_bw->total_bw               : 209712
+
+runnable tasks:
+ S            task   PID       vruntime   eligible    deadline             slice          sum-exec      switches  prio         wait-time        sum-sleep       sum-block  group-path
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ R                     0         0.000000   N           0.000000           0.000000         0.000000         0     120         0.000000         0.000000         0.000000        /
+ S       vhost-net     8         0.821675   E           0.698576           0.700000         0.226901         1     120         0.000000         0.000000         0.000000        /
+ S            kdrm     2         0.384188   E           1.541644           2.100000         0.664388         2     120         0.000000         0.000000         0.000000        /
+ S         kdrmcon     3      2618.338762   E        2620.438762           2.100000         0.129889         2     120         0.000000         0.000000         0.000000        /
+ S       writeback     6      3087.638222   E        3089.474187           2.100000        52.629115       287     120         0.000000         0.000000         0.000000        /
+ S            init     1      3088.787152   E        3090.413122           2.100000       324.216945      1104     120         0.000000         0.000000         0.000000        /
+ S       kconsoled    11        57.305559   E          59.405559           2.100000         1.439393         4     120         0.000000         0.000000         0.000000        /
+ S            bash    16         7.129737   E           9.229737           2.100000        60.832683       107     120         0.000000         0.000000         0.000000        /autogroup-1
+ S            sshd    19        88.999259   E          90.976867           2.100000         6.349284        24     120         0.000000         0.000000         0.000000        /
+ S           crond    22      3032.937803   E        3034.962991           2.100000         9.754797       111     120         0.000000         0.000000         0.000000        /
+ S   rach2-desktop    24      3089.209253   E        3090.887152           2.100000       414.033894      1126     120         0.000000         0.000000         0.000000        /
+ S   systemd-udevd    29        48.187501   E          50.167924           2.100000        65.054967       239     120         0.000000         0.000000         0.000000        /autogroup-2
+ S         python3    38         7.129737   E           9.154395           2.100000        74.101125       352     120         0.000000         0.000000         0.000000        /autogroup-1
+ S   weston:disk$0    43        24.784956   E         160.775979           2.100000         2.831407        17     139         0.000000         0.000000         0.000000        /autogroup-4
+ S         python3    70       943.593557   E         945.583068           2.100000      1217.191379      3792     120         0.000000         0.000000         0.000000        /autogroup-7
+ S            bash    78         1.019243   E           3.119243           2.100000         2.717484         1     120         0.000000         0.000000         0.000000        /autogroup-9
+ S  winedevice.exe   248        12.777145   E          14.869992           2.100000        17.056881       755     120         0.000000         0.000000         0.000000        /autogroup-13
+ S  wine_rpcrt4_io   260        24.317376   E          26.365328           2.100000         1.045824        54     120         0.000000         0.000000         0.000000        /autogroup-12
+ S     svchost.exe   265         9.482148   E          11.572720           2.100000        11.592722       437     120         0.000000         0.000000         0.000000        /autogroup-15
+ S  wine_rpcrt4_io   266        28.085189   E          30.178947           2.100000         1.129427        55     120         0.000000         0.000000         0.000000        /autogroup-12
+ S  wine_rpcrt4_io   273        34.811127   E          36.905406           2.100000         8.556270       494     120         0.000000         0.000000         0.000000        /autogroup-12
+ S  wine_rpcrt4_io   283         0.699295   E           2.714514           2.100000         1.073430        55     120         0.000000         0.000000         0.000000        /autogroup-14
+ S        Xwayland   307        65.319062   E          67.033880           2.100000       225.925930       316     120         0.000000         0.000000         0.000000        /autogroup-19
+ S  wine_rpcrt4_io   331        41.809448   E          43.787566           2.100000         1.003010        42     120         0.000000         0.000000         0.000000        /autogroup-12
+ S       rpcss.exe   332         7.350276   E           9.445457           2.100000         0.598326        35     120         0.000000         0.000000         0.000000        /autogroup-20
+ S       steam.exe   342       961.208104   E         963.227472           2.100000         0.241286         6     120         0.000000         0.000000         0.000000        /autogroup-7
+>R            head  2409       199.646194   E         200.693890           2.100000         0.002304         0     120         0.000000         0.000000         0.000000        /autogroup-1
+
+cpu#1, 4192.027 MHz
+  .nr_running                    : 1
+  .nr_switches                   : 422995
+  .nr_uninterruptible            : 0
+  .next_balance                  : 0.258153
+  .curr->pid                     : 279
+  .clock                         : 1032606.848109
+  .clock_task                    : 1029358.214898
+  .avg_idle                      : 918091
+  .max_idle_balance_cost         : 500000
+
+cfs_rq[1]:/autogroup-1
+  .left_deadline                 : 0.000001
+  .left_vruntime                 : 0.000001
+  .zero_vruntime                 : 282.655380
+  .avg_vruntime                  : 282.655380
+  .right_vruntime                : 0.000001
+  .spread                        : 0.000000
+  .nr_running                    : 0
+  .h_nr_runnable                 : 0
+  .h_nr_queued                   : 0
+  .h_nr_delayed                  : 0
+F /proc/interrupts
+           CPU0       CPU1       CPU2       CPU3       
+ 32:      65759     241985     191421     532348     LAPIC  timer
+ 33:          3          0          0          0   IO-APIC  kbd
+ 36:         10          0          0          0   IO-APIC  com1
+ 41:          0          0          0          0   IO-APIC  acpi
+ 44:          0          0          0          0   IO-APIC  mouse
+ 46:          1          0          0          0   IO-APIC  ata
+ 47:          1          0          0          0   IO-APIC  ata
+ 48:          0          0          0          0       MSI  virtio1
+ 49:         11       3945          0          0       MSI  virtio1
+ 50:          0          0       1852          0       MSI  virtio1
+ 51:          0          0          0       1360       MSI  virtio1
+ 52:       2692          0          0          0       MSI  virtio1
+ 53:          0          0          0          0       MSI  virtio2
+ 54:          2          0          0          0       MSI  virtio2
+ 55:          0          0          0          4       MSI  virtio2
+ 56:          1          0          0          0       MSI  virtio2
+ 57:          0          2          0          0       MSI  virtio2
+ 58:          0          0          0          0       MSI  virtio0
+ 59:          4          0          0        137       MSI  virtio0
+ 60:          0          0          0          0       MSI  virtio0
+SPU:          0   spurious
+FBK:          0   usb fallback
+F /proc/lockdep_stats
+cat: /proc/lockdep_stats: No such file or directory
+F /proc/fs/lockwait
+mount 0 0 0 -
+rename 0 0 0 -
+ext2 batch 0 0 0 -
+ext2 group 0 0 0 -
+ext2 super 0 0 0 -
+ext2 node 0 0 0 -
+ext2 write 0 0 0 -
+ext2 xattr 0 0 0 -
+pipe 0 0 0 -
+F /proc/stat
+cpu  656 0 2541 409594 0 0 0 22 0 0
+cpu0 62 0 277 102919 0 0 0 1 0 0
+cpu1 173 0 665 102342 0 0 0 5 0 0
+cpu2 144 0 562 102474 0 0 0 3 0 0
+cpu3 276 0 1036 101858 0 0 0 12 0 0
+intr 1041546
+ctxt 1761219
+btime 1795508366
+processes 2418
+sleeps_interrupted 0
+process_pid_steps 115381
+process_uid_steps 2506
+process_timer_steps 10306371
+process_timer_passes 916356
+timer_passes_late 22
+tlb_shootdowns 136
+tlb_shootdown_ipis 137
+scheduler_picks 1989047
+scheduler_steps 0
+vm_gap_steps 875234
+clock_calls 0
+vdso_tsc 1
+bkl_wait_us 1218813
+bkl_wait_max_us 55301
+bkl_wait_max_holds 1
+bkl_wait_max_hold take 0 342639
+bkl_hold_max_us 342639
+bkl_hold_max_entry take 0
+bkl_hold_sample_us 178271
+bkl_hold_sample_pc ffffffff8041b4b4 ffffffff801171c0 ffffffff80118902 ffffffff80118094 ffffffff80108cc9 ffffffff803ed728 ffffffff801002d9
+bkl_hold_max_mark 1 0
+bkl_hold_max_mark 2 0
+bkl_hold_max_mark 4 0
+bkl_hold_max_mark 8 0
+bkl_hold_max_mark 16 0
+bkl_hold_entry syscall 230 760778 5832557
+bkl_hold_entry take 1 770231 2080148
+bkl_hold_entry vector 32 249341 1092649
+bkl_hold_entry vector 0 444408 746397
+bkl_hold_entry syscall 257 30844 529076
+bkl_hold_entry syscall 231 2451 426772
+bkl_hold_entry syscall 7 1862043 372458
+bkl_hold_entry take 0 5 342640
+bkl_hold_entry syscall 56 2335 267355
+bkl_hold_entry syscall 59 2000 201802
+bkl_hold_entry syscall 262 19694 123267
+bkl_hold_entry syscall 1 2748 85847
+bkl_hold_entry syscall 61 2292 66238
+bkl_hold_entry syscall 41 4203 58813
+bkl_hold_entry syscall 326 688 57857
+bkl_hold_entry syscall 2 2228 37967
+kvm_vms 0
+kvm_vcpus 0
+kvm_slots 0
+kvm_tdp_pages 0
+kvm_run_mappings 0
+kvm_gpa_maps 0
+kvm_gpa_map_pages 0
+kvm_ioeventfd_signals 0
+kvm_irqfd_raises 0
+vfio_groups 0
+vfio_devices 0
+vfio_dma_mappings 0
+vfio_dma_pages 0
+vfio_dma_io_pages 0
+kvm_exits 0
+iommu_dma_faults 0
+iommu_irq_faults 0
+msi_vectors_free 178
+vhost_net_detaches 0
+vhost_net_detached_to_guest 0
+vhost_net_detached_from_guest 0
+virtio_gpu_copied_bytes 7132032
+virtio_gpu_objects 10
+window_free_min 13651
+vkms_vblank_overruns 0
+vkms_vblank_skipped 0
+vkms_crc_missed 0
+vkms_crc_catchups 0
+latency_timer_us 76091
+latency_disk_us 374432
+latency_diskwait_us 0
+latency_console_us 6219
+wlan_refused_tcp 0
+wlan_refused_ack 0
+wlan_refused_other 0
+wlan_rx_held 0
+wlan_rx_wait_most 0
+wlan_tx_status_lost 0
+wlan_rescue_key 0
+wlan_rescue_message4 0
+wlan_rescue_silent 0
+wlan_rescue_saved 0
+wlan_rx_old_far 0
+loopback_dropped 0
+loopback_peak 0
+loopback_delivered_tick 0
+loopback_delivered_idle 0
+loopback_delivered_call 0
+loopback_left_idle 0
+namecache_hits 643532
+namecache_misses 6174
+namecache_entries 5944
+namecache_negative 652
+ext2_node_visits 37617
+procs_running 3
+procs_blocked 0
+DUMP END 1032.61 4095.95
+DUMPFINISHED

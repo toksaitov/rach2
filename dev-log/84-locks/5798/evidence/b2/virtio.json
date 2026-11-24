@@ -1,0 +1,677 @@
+{
+ "list": {
+  "return": [
+   {
+    "name": "virtio-gpu",
+    "path": "/machine/peripheral-anon/device[0]/virtio-backend"
+   },
+   {
+    "name": "virtio-blk",
+    "path": "/machine/peripheral-anon/device[1]/virtio-backend"
+   },
+   {
+    "name": "virtio-blk",
+    "path": "/machine/peripheral-anon/device[2]/virtio-backend"
+   }
+  ],
+  "id": 48
+ },
+ "/machine/peripheral-anon/device[0]/virtio-backend": {
+  "status": {
+   "return": {
+    "device-endian": "little",
+    "bus-name": "",
+    "disable-legacy-check": false,
+    "name": "virtio-gpu",
+    "started": true,
+    "device-id": 16,
+    "backend-features": {
+     "dev-features": [],
+     "transports": []
+    },
+    "start-on-kick": false,
+    "isr": 1,
+    "broken": false,
+    "status": {
+     "statuses": [
+      "VIRTIO_CONFIG_S_ACKNOWLEDGE: Valid virtio device found",
+      "VIRTIO_CONFIG_S_DRIVER: Guest OS compatible with device",
+      "VIRTIO_CONFIG_S_FEATURES_OK: Feature negotiation complete",
+      "VIRTIO_CONFIG_S_DRIVER_OK: Driver setup and ready"
+     ]
+    },
+    "num-vqs": 2,
+    "guest-features": {
+     "dev-features": [
+      "VIRTIO_GPU_F_CONTEXT_INIT: Context types and synchronization timelines supported",
+      "VIRTIO_GPU_F_EDID: EDID metadata supported",
+      "VIRTIO_GPU_F_VIRGL: Virgl 3D mode supported"
+     ],
+     "transports": [
+      "VIRTIO_RING_F_EVENT_IDX: Used & avail. event fields enabled",
+      "VIRTIO_RING_F_INDIRECT_DESC: Indirect descriptors supported",
+      "VIRTIO_F_VERSION_1: Device compliant for v1 spec (legacy)"
+     ]
+    },
+    "host-features": {
+     "dev-features": [
+      "VHOST_USER_F_PROTOCOL_FEATURES: Vhost-user protocol features negotiation supported",
+      "VIRTIO_GPU_F_CONTEXT_INIT: Context types and synchronization timelines supported",
+      "VIRTIO_GPU_F_EDID: EDID metadata supported",
+      "VIRTIO_GPU_F_VIRGL: Virgl 3D mode supported"
+     ],
+     "transports": [
+      "VIRTIO_RING_F_EVENT_IDX: Used & avail. event fields enabled",
+      "VIRTIO_RING_F_INDIRECT_DESC: Indirect descriptors supported",
+      "VIRTIO_F_RING_RESET: Driver can reset a queue individually",
+      "VIRTIO_F_VERSION_1: Device compliant for v1 spec (legacy)",
+      "VIRTIO_F_ANY_LAYOUT: Device accepts arbitrary desc. layouts",
+      "VIRTIO_F_NOTIFY_ON_EMPTY: Notify when device runs out of avail. descs. on VQ"
+     ]
+    },
+    "use-guest-notifier-mask": true,
+    "vm-running": true,
+    "queue-sel": 1,
+    "disabled": false,
+    "vhost-started": false,
+    "use-started": true
+   },
+   "id": 49
+  },
+  "queues": [
+   {
+    "return": {
+     "signalled-used": 187,
+     "inuse": 0,
+     "name": "virtio-gpu",
+     "vring-align": 4096,
+     "vring-desc": 77565952,
+     "signalled-used-valid": true,
+     "vring-num-default": 256,
+     "vring-avail": 77568000,
+     "queue-index": 0,
+     "last-avail-idx": 187,
+     "vring-used": 77568264,
+     "used-idx": 187,
+     "shadow-avail-idx": 187,
+     "vring-num": 128
+    },
+    "id": 50
+   },
+   {
+    "return": {
+     "signalled-used": 0,
+     "inuse": 0,
+     "name": "virtio-gpu",
+     "vring-align": 4096,
+     "vring-desc": 77832192,
+     "signalled-used-valid": false,
+     "vring-num-default": 16,
+     "vring-avail": 77832448,
+     "queue-index": 1,
+     "last-avail-idx": 0,
+     "vring-used": 77832488,
+     "used-idx": 0,
+     "shadow-avail-idx": 0,
+     "vring-num": 16
+    },
+    "id": 51
+   }
+  ]
+ },
+ "/machine/peripheral-anon/device[1]/virtio-backend": {
+  "status": {
+   "return": {
+    "device-endian": "little",
+    "bus-name": "",
+    "disable-legacy-check": false,
+    "name": "virtio-blk",
+    "started": true,
+    "device-id": 2,
+    "backend-features": {
+     "dev-features": [],
+     "transports": []
+    },
+    "start-on-kick": false,
+    "isr": 1,
+    "broken": false,
+    "status": {
+     "statuses": [
+      "VIRTIO_CONFIG_S_ACKNOWLEDGE: Valid virtio device found",
+      "VIRTIO_CONFIG_S_DRIVER: Guest OS compatible with device",
+      "VIRTIO_CONFIG_S_FEATURES_OK: Feature negotiation complete",
+      "VIRTIO_CONFIG_S_DRIVER_OK: Driver setup and ready"
+     ]
+    },
+    "num-vqs": 4,
+    "guest-features": {
+     "dev-features": [
+      "VIRTIO_BLK_F_CONFIG_WCE: Cache writeback and writethrough modes supported",
+      "VIRTIO_BLK_F_FLUSH: Flush command supported",
+      "VIRTIO_BLK_F_WRITE_ZEROES: Write zeroes command supported",
+      "VIRTIO_BLK_F_DISCARD: Discard command supported",
+      "VIRTIO_BLK_F_MQ: Multiqueue supported",
+      "VIRTIO_BLK_F_BLK_SIZE: Block size of disk available",
+      "VIRTIO_BLK_F_SEG_MAX: Max segments in a request is seg_max"
+     ],
+     "transports": [
+      "VIRTIO_RING_F_EVENT_IDX: Used & avail. event fields enabled",
+      "VIRTIO_RING_F_INDIRECT_DESC: Indirect descriptors supported",
+      "VIRTIO_F_VERSION_1: Device compliant for v1 spec (legacy)"
+     ]
+    },
+    "host-features": {
+     "dev-features": [
+      "VHOST_USER_F_PROTOCOL_FEATURES: Vhost-user protocol features negotiation supported",
+      "VIRTIO_BLK_F_CONFIG_WCE: Cache writeback and writethrough modes supported",
+      "VIRTIO_BLK_F_FLUSH: Flush command supported",
+      "VIRTIO_BLK_F_WRITE_ZEROES: Write zeroes command supported",
+      "VIRTIO_BLK_F_DISCARD: Discard command supported",
+      "VIRTIO_BLK_F_MQ: Multiqueue supported",
+      "VIRTIO_BLK_F_TOPOLOGY: Topology information available",
+      "VIRTIO_BLK_F_BLK_SIZE: Block size of disk available",
+      "VIRTIO_BLK_F_GEOMETRY: Legacy geometry available",
+      "VIRTIO_BLK_F_SEG_MAX: Max segments in a request is seg_max"
+     ],
+     "transports": [
+      "VIRTIO_RING_F_EVENT_IDX: Used & avail. event fields enabled",
+      "VIRTIO_RING_F_INDIRECT_DESC: Indirect descriptors supported",
+      "VIRTIO_F_RING_RESET: Driver can reset a queue individually",
+      "VIRTIO_F_VERSION_1: Device compliant for v1 spec (legacy)",
+      "VIRTIO_F_ANY_LAYOUT: Device accepts arbitrary desc. layouts",
+      "VIRTIO_F_NOTIFY_ON_EMPTY: Notify when device runs out of avail. descs. on VQ"
+     ]
+    },
+    "use-guest-notifier-mask": true,
+    "vm-running": true,
+    "queue-sel": 3,
+    "disabled": false,
+    "vhost-started": false,
+    "use-started": true
+   },
+   "id": 53
+  },
+  "queues": [
+   {
+    "return": {
+     "signalled-used": 3987,
+     "inuse": 0,
+     "name": "virtio-blk",
+     "vring-align": 4096,
+     "vring-desc": 74694656,
+     "signalled-used-valid": true,
+     "vring-num-default": 256,
+     "vring-avail": 74696704,
+     "queue-index": 0,
+     "last-avail-idx": 3987,
+     "vring-used": 74696968,
+     "used-idx": 3987,
+     "shadow-avail-idx": 3987,
+     "vring-num": 128
+    },
+    "id": 54
+   },
+   {
+    "return": {
+     "signalled-used": 1874,
+     "inuse": 0,
+     "name": "virtio-blk",
+     "vring-align": 4096,
+     "vring-desc": 74739712,
+     "signalled-used-valid": true,
+     "vring-num-default": 256,
+     "vring-avail": 74741760,
+     "queue-index": 1,
+     "last-avail-idx": 1874,
+     "vring-used": 74742024,
+     "used-idx": 1874,
+     "shadow-avail-idx": 1874,
+     "vring-num": 128
+    },
+    "id": 55
+   },
+   {
+    "return": {
+     "signalled-used": 1355,
+     "inuse": 0,
+     "name": "virtio-blk",
+     "vring-align": 4096,
+     "vring-desc": 74784768,
+     "signalled-used-valid": true,
+     "vring-num-default": 256,
+     "vring-avail": 74786816,
+     "queue-index": 2,
+     "last-avail-idx": 1355,
+     "vring-used": 74787080,
+     "used-idx": 1355,
+     "shadow-avail-idx": 1355,
+     "vring-num": 128
+    },
+    "id": 56
+   },
+   {
+    "return": {
+     "signalled-used": 2700,
+     "inuse": 0,
+     "name": "virtio-blk",
+     "vring-align": 4096,
+     "vring-desc": 74829824,
+     "signalled-used-valid": true,
+     "vring-num-default": 256,
+     "vring-avail": 74831872,
+     "queue-index": 3,
+     "last-avail-idx": 2700,
+     "vring-used": 74832136,
+     "used-idx": 2700,
+     "shadow-avail-idx": 2700,
+     "vring-num": 128
+    },
+    "id": 57
+   }
+  ]
+ },
+ "/machine/peripheral-anon/device[2]/virtio-backend": {
+  "status": {
+   "return": {
+    "device-endian": "little",
+    "bus-name": "",
+    "disable-legacy-check": false,
+    "name": "virtio-blk",
+    "started": true,
+    "device-id": 2,
+    "backend-features": {
+     "dev-features": [],
+     "transports": []
+    },
+    "start-on-kick": false,
+    "isr": 1,
+    "broken": false,
+    "status": {
+     "statuses": [
+      "VIRTIO_CONFIG_S_ACKNOWLEDGE: Valid virtio device found",
+      "VIRTIO_CONFIG_S_DRIVER: Guest OS compatible with device",
+      "VIRTIO_CONFIG_S_FEATURES_OK: Feature negotiation complete",
+      "VIRTIO_CONFIG_S_DRIVER_OK: Driver setup and ready"
+     ]
+    },
+    "num-vqs": 4,
+    "guest-features": {
+     "dev-features": [
+      "VIRTIO_BLK_F_CONFIG_WCE: Cache writeback and writethrough modes supported",
+      "VIRTIO_BLK_F_FLUSH: Flush command supported",
+      "VIRTIO_BLK_F_WRITE_ZEROES: Write zeroes command supported",
+      "VIRTIO_BLK_F_DISCARD: Discard command supported",
+      "VIRTIO_BLK_F_MQ: Multiqueue supported",
+      "VIRTIO_BLK_F_BLK_SIZE: Block size of disk available",
+      "VIRTIO_BLK_F_RO: Device is read-only",
+      "VIRTIO_BLK_F_SEG_MAX: Max segments in a request is seg_max"
+     ],
+     "transports": [
+      "VIRTIO_RING_F_EVENT_IDX: Used & avail. event fields enabled",
+      "VIRTIO_RING_F_INDIRECT_DESC: Indirect descriptors supported",
+      "VIRTIO_F_VERSION_1: Device compliant for v1 spec (legacy)"
+     ]
+    },
+    "host-features": {
+     "dev-features": [
+      "VHOST_USER_F_PROTOCOL_FEATURES: Vhost-user protocol features negotiation supported",
+      "VIRTIO_BLK_F_CONFIG_WCE: Cache writeback and writethrough modes supported",
+      "VIRTIO_BLK_F_FLUSH: Flush command supported",
+      "VIRTIO_BLK_F_WRITE_ZEROES: Write zeroes command supported",
+      "VIRTIO_BLK_F_DISCARD: Discard command supported",
+      "VIRTIO_BLK_F_MQ: Multiqueue supported",
+      "VIRTIO_BLK_F_TOPOLOGY: Topology information available",
+      "VIRTIO_BLK_F_BLK_SIZE: Block size of disk available",
+      "VIRTIO_BLK_F_RO: Device is read-only",
+      "VIRTIO_BLK_F_GEOMETRY: Legacy geometry available",
+      "VIRTIO_BLK_F_SEG_MAX: Max segments in a request is seg_max"
+     ],
+     "transports": [
+      "VIRTIO_RING_F_EVENT_IDX: Used & avail. event fields enabled",
+      "VIRTIO_RING_F_INDIRECT_DESC: Indirect descriptors supported",
+      "VIRTIO_F_RING_RESET: Driver can reset a queue individually",
+      "VIRTIO_F_VERSION_1: Device compliant for v1 spec (legacy)",
+      "VIRTIO_F_ANY_LAYOUT: Device accepts arbitrary desc. layouts",
+      "VIRTIO_F_NOTIFY_ON_EMPTY: Notify when device runs out of avail. descs. on VQ"
+     ]
+    },
+    "use-guest-notifier-mask": true,
+    "vm-running": true,
+    "queue-sel": 3,
+    "disabled": false,
+    "vhost-started": false,
+    "use-started": true
+   },
+   "id": 59
+  },
+  "queues": [
+   {
+    "return": {
+     "signalled-used": 2,
+     "inuse": 0,
+     "name": "virtio-blk",
+     "vring-align": 4096,
+     "vring-desc": 74874880,
+     "signalled-used-valid": true,
+     "vring-num-default": 256,
+     "vring-avail": 74876928,
+     "queue-index": 0,
+     "last-avail-idx": 2,
+     "vring-used": 74877192,
+     "used-idx": 2,
+     "shadow-avail-idx": 2,
+     "vring-num": 128
+    },
+    "id": 60
+   },
+   {
+    "return": {
+     "signalled-used": 4,
+     "inuse": 0,
+     "name": "virtio-blk",
+     "vring-align": 4096,
+     "vring-desc": 74919936,
+     "signalled-used-valid": true,
+     "vring-num-default": 256,
+     "vring-avail": 74921984,
+     "queue-index": 1,
+     "last-avail-idx": 4,
+     "vring-used": 74922248,
+     "used-idx": 4,
+     "shadow-avail-idx": 4,
+     "vring-num": 128
+    },
+    "id": 61
+   },
+   {
+    "return": {
+     "signalled-used": 0,
+     "inuse": 0,
+     "name": "virtio-blk",
+     "vring-align": 4096,
+     "vring-desc": 74964992,
+     "signalled-used-valid": false,
+     "vring-num-default": 256,
+     "vring-avail": 74967040,
+     "queue-index": 2,
+     "last-avail-idx": 0,
+     "vring-used": 74967304,
+     "used-idx": 0,
+     "shadow-avail-idx": 0,
+     "vring-num": 128
+    },
+    "id": 62
+   },
+   {
+    "return": {
+     "signalled-used": 2,
+     "inuse": 0,
+     "name": "virtio-blk",
+     "vring-align": 4096,
+     "vring-desc": 75010048,
+     "signalled-used-valid": true,
+     "vring-num-default": 256,
+     "vring-avail": 75012096,
+     "queue-index": 3,
+     "last-avail-idx": 2,
+     "vring-used": 75012360,
+     "used-idx": 2,
+     "shadow-avail-idx": 2,
+     "vring-num": 128
+    },
+    "id": 63
+   }
+  ]
+ },
+ "blockstats": {
+  "return": [
+   {
+    "device": "d0",
+    "parent": {
+     "stats": {
+      "unmap_operations": 0,
+      "unmap_merged": 0,
+      "failed_zone_append_operations": 0,
+      "flush_total_time_ns": 0,
+      "wr_highest_offset": 1507328,
+      "wr_total_time_ns": 0,
+      "failed_wr_operations": 0,
+      "failed_rd_operations": 0,
+      "wr_merged": 0,
+      "wr_bytes": 0,
+      "timed_stats": [],
+      "failed_unmap_operations": 0,
+      "zone_append_merged": 0,
+      "failed_flush_operations": 0,
+      "account_invalid": false,
+      "rd_total_time_ns": 0,
+      "invalid_unmap_operations": 0,
+      "flush_operations": 0,
+      "wr_operations": 0,
+      "unmap_bytes": 0,
+      "rd_merged": 0,
+      "rd_bytes": 0,
+      "unmap_total_time_ns": 0,
+      "invalid_flush_operations": 0,
+      "account_failed": false,
+      "zone_append_total_time_ns": 0,
+      "zone_append_operations": 0,
+      "rd_operations": 0,
+      "zone_append_bytes": 0,
+      "invalid_zone_append_operations": 0,
+      "invalid_wr_operations": 0,
+      "invalid_rd_operations": 0
+     },
+     "node-name": "#block093",
+     "driver-specific": {
+      "discard-bytes-ok": 0,
+      "discard-nb-ok": 0,
+      "driver": "file",
+      "discard-nb-failed": 0
+     }
+    },
+    "stats": {
+     "unmap_operations": 0,
+     "unmap_merged": 0,
+     "failed_zone_append_operations": 0,
+     "flush_total_time_ns": 416305762,
+     "wr_highest_offset": 13012959232,
+     "wr_total_time_ns": 90633558,
+     "failed_wr_operations": 0,
+     "failed_rd_operations": 0,
+     "wr_merged": 0,
+     "wr_bytes": 2387968,
+     "timed_stats": [],
+     "failed_unmap_operations": 0,
+     "zone_append_merged": 0,
+     "failed_flush_operations": 0,
+     "account_invalid": true,
+     "rd_total_time_ns": 369303294493,
+     "invalid_unmap_operations": 0,
+     "flush_operations": 182,
+     "wr_operations": 557,
+     "unmap_bytes": 0,
+     "rd_merged": 26,
+     "rd_bytes": 492578816,
+     "unmap_total_time_ns": 0,
+     "invalid_flush_operations": 0,
+     "account_failed": true,
+     "idle_time_ns": 121061064341,
+     "zone_append_total_time_ns": 0,
+     "zone_append_operations": 0,
+     "rd_operations": 9176,
+     "zone_append_bytes": 0,
+     "invalid_zone_append_operations": 0,
+     "invalid_wr_operations": 0,
+     "invalid_rd_operations": 0
+    },
+    "backing": {
+     "parent": {
+      "stats": {
+       "unmap_operations": 0,
+       "unmap_merged": 0,
+       "failed_zone_append_operations": 0,
+       "flush_total_time_ns": 0,
+       "wr_highest_offset": 0,
+       "wr_total_time_ns": 0,
+       "failed_wr_operations": 0,
+       "failed_rd_operations": 0,
+       "wr_merged": 0,
+       "wr_bytes": 0,
+       "timed_stats": [],
+       "failed_unmap_operations": 0,
+       "zone_append_merged": 0,
+       "failed_flush_operations": 0,
+       "account_invalid": false,
+       "rd_total_time_ns": 0,
+       "invalid_unmap_operations": 0,
+       "flush_operations": 0,
+       "wr_operations": 0,
+       "unmap_bytes": 0,
+       "rd_merged": 0,
+       "rd_bytes": 0,
+       "unmap_total_time_ns": 0,
+       "invalid_flush_operations": 0,
+       "account_failed": false,
+       "zone_append_total_time_ns": 0,
+       "zone_append_operations": 0,
+       "rd_operations": 0,
+       "zone_append_bytes": 0,
+       "invalid_zone_append_operations": 0,
+       "invalid_wr_operations": 0,
+       "invalid_rd_operations": 0
+      },
+      "node-name": "#block271",
+      "driver-specific": {
+       "discard-bytes-ok": 0,
+       "discard-nb-ok": 0,
+       "driver": "file",
+       "discard-nb-failed": 0
+      }
+     },
+     "stats": {
+      "unmap_operations": 0,
+      "unmap_merged": 0,
+      "failed_zone_append_operations": 0,
+      "flush_total_time_ns": 0,
+      "wr_highest_offset": 0,
+      "wr_total_time_ns": 0,
+      "failed_wr_operations": 0,
+      "failed_rd_operations": 0,
+      "wr_merged": 0,
+      "wr_bytes": 0,
+      "timed_stats": [],
+      "failed_unmap_operations": 0,
+      "zone_append_merged": 0,
+      "failed_flush_operations": 0,
+      "account_invalid": false,
+      "rd_total_time_ns": 0,
+      "invalid_unmap_operations": 0,
+      "flush_operations": 0,
+      "wr_operations": 0,
+      "unmap_bytes": 0,
+      "rd_merged": 0,
+      "rd_bytes": 0,
+      "unmap_total_time_ns": 0,
+      "invalid_flush_operations": 0,
+      "account_failed": false,
+      "zone_append_total_time_ns": 0,
+      "zone_append_operations": 0,
+      "rd_operations": 0,
+      "zone_append_bytes": 0,
+      "invalid_zone_append_operations": 0,
+      "invalid_wr_operations": 0,
+      "invalid_rd_operations": 0
+     },
+     "node-name": "#block395"
+    },
+    "node-name": "#block164",
+    "qdev": "/machine/peripheral-anon/device[1]/virtio-backend"
+   },
+   {
+    "device": "d1",
+    "parent": {
+     "stats": {
+      "unmap_operations": 0,
+      "unmap_merged": 0,
+      "failed_zone_append_operations": 0,
+      "flush_total_time_ns": 0,
+      "wr_highest_offset": 0,
+      "wr_total_time_ns": 0,
+      "failed_wr_operations": 0,
+      "failed_rd_operations": 0,
+      "wr_merged": 0,
+      "wr_bytes": 0,
+      "timed_stats": [],
+      "failed_unmap_operations": 0,
+      "zone_append_merged": 0,
+      "failed_flush_operations": 0,
+      "account_invalid": false,
+      "rd_total_time_ns": 0,
+      "invalid_unmap_operations": 0,
+      "flush_operations": 0,
+      "wr_operations": 0,
+      "unmap_bytes": 0,
+      "rd_merged": 0,
+      "rd_bytes": 0,
+      "unmap_total_time_ns": 0,
+      "invalid_flush_operations": 0,
+      "account_failed": false,
+      "zone_append_total_time_ns": 0,
+      "zone_append_operations": 0,
+      "rd_operations": 0,
+      "zone_append_bytes": 0,
+      "invalid_zone_append_operations": 0,
+      "invalid_wr_operations": 0,
+      "invalid_rd_operations": 0
+     },
+     "node-name": "#block453",
+     "driver-specific": {
+      "discard-bytes-ok": 0,
+      "discard-nb-ok": 0,
+      "driver": "file",
+      "discard-nb-failed": 0
+     }
+    },
+    "stats": {
+     "unmap_operations": 0,
+     "unmap_merged": 0,
+     "failed_zone_append_operations": 0,
+     "flush_total_time_ns": 0,
+     "wr_highest_offset": 0,
+     "wr_total_time_ns": 0,
+     "failed_wr_operations": 0,
+     "failed_rd_operations": 0,
+     "wr_merged": 0,
+     "wr_bytes": 0,
+     "timed_stats": [],
+     "failed_unmap_operations": 0,
+     "zone_append_merged": 0,
+     "failed_flush_operations": 0,
+     "account_invalid": true,
+     "rd_total_time_ns": 755317,
+     "invalid_unmap_operations": 0,
+     "flush_operations": 0,
+     "wr_operations": 0,
+     "unmap_bytes": 0,
+     "rd_merged": 0,
+     "rd_bytes": 213504,
+     "unmap_total_time_ns": 0,
+     "invalid_flush_operations": 0,
+     "account_failed": true,
+     "idle_time_ns": 1030662438806,
+     "zone_append_total_time_ns": 0,
+     "zone_append_operations": 0,
+     "rd_operations": 7,
+     "zone_append_bytes": 0,
+     "invalid_zone_append_operations": 0,
+     "invalid_wr_operations": 0,
+     "invalid_rd_operations": 0
+    },
+    "node-name": "#block521",
+    "qdev": "/machine/peripheral-anon/device[2]/virtio-backend"
+   }
+  ],
+  "id": 65
+ }
+}

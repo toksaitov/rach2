@@ -1,0 +1,212 @@
+{
+ "/machine/peripheral-anon/device[0]/virtio-backend": [
+  {
+   "return": {
+    "signalled-used": 188,
+    "inuse": 0,
+    "name": "virtio-gpu",
+    "vring-align": 4096,
+    "vring-desc": 77565952,
+    "signalled-used-valid": true,
+    "vring-num-default": 256,
+    "vring-avail": 77568000,
+    "queue-index": 0,
+    "last-avail-idx": 188,
+    "vring-used": 77568264,
+    "used-idx": 188,
+    "shadow-avail-idx": 188,
+    "vring-num": 128
+   },
+   "id": 67
+  },
+  {
+   "return": {
+    "signalled-used": 0,
+    "inuse": 0,
+    "name": "virtio-gpu",
+    "vring-align": 4096,
+    "vring-desc": 77832192,
+    "signalled-used-valid": false,
+    "vring-num-default": 16,
+    "vring-avail": 77832448,
+    "queue-index": 1,
+    "last-avail-idx": 0,
+    "vring-used": 77832488,
+    "used-idx": 0,
+    "shadow-avail-idx": 0,
+    "vring-num": 16
+   },
+   "id": 68
+  },
+  {
+   "id": 69,
+   "error": {
+    "class": "GenericError",
+    "desc": "Invalid virtqueue number 2"
+   }
+  },
+  {
+   "id": 70,
+   "error": {
+    "class": "GenericError",
+    "desc": "Invalid virtqueue number 3"
+   }
+  }
+ ],
+ "/machine/peripheral-anon/device[1]/virtio-backend": [
+  {
+   "return": {
+    "signalled-used": 3992,
+    "inuse": 0,
+    "name": "virtio-blk",
+    "vring-align": 4096,
+    "vring-desc": 74694656,
+    "signalled-used-valid": true,
+    "vring-num-default": 256,
+    "vring-avail": 74696704,
+    "queue-index": 0,
+    "last-avail-idx": 3992,
+    "vring-used": 74696968,
+    "used-idx": 3992,
+    "shadow-avail-idx": 3992,
+    "vring-num": 128
+   },
+   "id": 71
+  },
+  {
+   "return": {
+    "signalled-used": 1878,
+    "inuse": 0,
+    "name": "virtio-blk",
+    "vring-align": 4096,
+    "vring-desc": 74739712,
+    "signalled-used-valid": true,
+    "vring-num-default": 256,
+    "vring-avail": 74741760,
+    "queue-index": 1,
+    "last-avail-idx": 1878,
+    "vring-used": 74742024,
+    "used-idx": 1878,
+    "shadow-avail-idx": 1878,
+    "vring-num": 128
+   },
+   "id": 72
+  },
+  {
+   "return": {
+    "signalled-used": 1366,
+    "inuse": 0,
+    "name": "virtio-blk",
+    "vring-align": 4096,
+    "vring-desc": 74784768,
+    "signalled-used-valid": true,
+    "vring-num-default": 256,
+    "vring-avail": 74786816,
+    "queue-index": 2,
+    "last-avail-idx": 1366,
+    "vring-used": 74787080,
+    "used-idx": 1366,
+    "shadow-avail-idx": 1366,
+    "vring-num": 128
+   },
+   "id": 73
+  },
+  {
+   "return": {
+    "signalled-used": 2700,
+    "inuse": 0,
+    "name": "virtio-blk",
+    "vring-align": 4096,
+    "vring-desc": 74829824,
+    "signalled-used-valid": true,
+    "vring-num-default": 256,
+    "vring-avail": 74831872,
+    "queue-index": 3,
+    "last-avail-idx": 2700,
+    "vring-used": 74832136,
+    "used-idx": 2700,
+    "shadow-avail-idx": 2700,
+    "vring-num": 128
+   },
+   "id": 74
+  }
+ ],
+ "/machine/peripheral-anon/device[2]/virtio-backend": [
+  {
+   "return": {
+    "signalled-used": 2,
+    "inuse": 0,
+    "name": "virtio-blk",
+    "vring-align": 4096,
+    "vring-desc": 74874880,
+    "signalled-used-valid": true,
+    "vring-num-default": 256,
+    "vring-avail": 74876928,
+    "queue-index": 0,
+    "last-avail-idx": 2,
+    "vring-used": 74877192,
+    "used-idx": 2,
+    "shadow-avail-idx": 2,
+    "vring-num": 128
+   },
+   "id": 75
+  },
+  {
+   "return": {
+    "signalled-used": 4,
+    "inuse": 0,
+    "name": "virtio-blk",
+    "vring-align": 4096,
+    "vring-desc": 74919936,
+    "signalled-used-valid": true,
+    "vring-num-default": 256,
+    "vring-avail": 74921984,
+    "queue-index": 1,
+    "last-avail-idx": 4,
+    "vring-used": 74922248,
+    "used-idx": 4,
+    "shadow-avail-idx": 4,
+    "vring-num": 128
+   },
+   "id": 76
+  },
+  {
+   "return": {
+    "signalled-used": 1,
+    "inuse": 0,
+    "name": "virtio-blk",
+    "vring-align": 4096,
+    "vring-desc": 74964992,
+    "signalled-used-valid": true,
+    "vring-num-default": 256,
+    "vring-avail": 74967040,
+    "queue-index": 2,
+    "last-avail-idx": 1,
+    "vring-used": 74967304,
+    "used-idx": 1,
+    "shadow-avail-idx": 1,
+    "vring-num": 128
+   },
+   "id": 77
+  },
+  {
+   "return": {
+    "signalled-used": 2,
+    "inuse": 0,
+    "name": "virtio-blk",
+    "vring-align": 4096,
+    "vring-desc": 75010048,
+    "signalled-used-valid": true,
+    "vring-num-default": 256,
+    "vring-avail": 75012096,
+    "queue-index": 3,
+    "last-avail-idx": 2,
+    "vring-used": 75012360,
+    "used-idx": 2,
+    "shadow-avail-idx": 2,
+    "vring-num": 128
+   },
+   "id": 78
+  }
+ ]
+}

@@ -1,0 +1,42 @@
+drive: 18:08:41 start: plan pause60,pause60,pause60,pause60,pause60,pause60,pause60,pause60,pause60,pause60; kernel /home/toksaitov-s/rach2/build/worktrees/5798/build/x86_64/rach2/kernel
+drive: 18:09:13 boot 1 pause60: 30 s, reads (2342, 118093824)
+drive: 18:09:43 boot 1 pause60: disk at full speed after 60.0 s; reads (2376, 118716416)
+drive: 18:09:43 boot 1 pause60: 60 s, reads (2379, 118753280)
+drive: 18:09:53 RESULT boot 1 step pause60: made in 68.2 s: ONE END status 0 made True in 68.1 s; boot+weston 1.5 s; read 14285 ops 846 MB during the prefix
+drive: 18:10:24 boot 2 pause60: 30 s, reads (2349, 118032384)
+drive: 18:10:54 boot 2 pause60: disk at full speed after 60.0 s; reads (2386, 118724608)
+drive: 18:10:54 boot 2 pause60: 60 s, reads (2390, 118765568)
+drive: 18:11:04 RESULT boot 2 step pause60: made in 68.4 s: ONE END status 0 made True in 68.3 s; boot+weston 1.4 s; read 14284 ops 846 MB during the prefix
+drive: 18:11:36 boot 3 pause60: 30 s, reads (2362, 118114304)
+drive: 18:12:07 boot 3 pause60: disk at full speed after 60.0 s; reads (2395, 118728704)
+drive: 18:12:07 boot 3 pause60: 60 s, reads (2398, 118794240)
+drive: 18:12:16 RESULT boot 3 step pause60: made in 68.3 s: ONE END status 0 made True in 68.2 s; boot+weston 1.9 s; read 14273 ops 846 MB during the prefix
+drive: 18:12:48 boot 4 pause60: 30 s, reads (2323, 117614592)
+drive: 18:13:18 boot 4 pause60: disk at full speed after 60.0 s; reads (2358, 118540288)
+drive: 18:13:18 boot 4 pause60: 60 s, reads (2361, 118564864)
+drive: 18:13:28 RESULT boot 4 step pause60: made in 68.4 s: ONE END status 0 made True in 68.3 s; boot+weston 1.4 s; read 14309 ops 847 MB during the prefix
+drive: 18:14:00 boot 5 pause60: 30 s, reads (2357, 118204416)
+drive: 18:14:30 boot 5 pause60: disk at full speed after 60.0 s; reads (2391, 118761472)
+drive: 18:14:30 boot 5 pause60: 60 s, reads (2394, 118798336)
+drive: 18:14:39 RESULT boot 5 step pause60: made in 68.4 s: ONE END status 0 made True in 68.4 s; boot+weston 1.4 s; read 14276 ops 846 MB during the prefix
+drive: 18:15:11 boot 6 pause60: 30 s, reads (2339, 117839872)
+drive: 18:15:41 boot 6 pause60: disk at full speed after 60.0 s; reads (2373, 118396928)
+drive: 18:15:41 boot 6 pause60: 60 s, reads (2376, 118433792)
+drive: 18:15:51 RESULT boot 6 step pause60: made in 68.5 s: ONE END status 0 made True in 68.4 s; boot+weston 1.4 s; read 14292 ops 846 MB during the prefix
+drive: 18:16:23 boot 7 pause60: 30 s, reads (2309, 117331968)
+drive: 18:16:53 boot 7 pause60: disk at full speed after 60.0 s; reads (2347, 118233088)
+drive: 18:16:53 boot 7 pause60: 60 s, reads (2354, 118274048)
+drive: 18:17:02 RESULT boot 7 step pause60: made in 68.3 s: ONE END status 0 made True in 68.3 s; boot+weston 1.5 s; read 14327 ops 847 MB during the prefix
+drive: 18:17:34 boot 8 pause60: 30 s, reads (2325, 117630976)
+drive: 18:18:04 boot 8 pause60: disk at full speed after 60.0 s; reads (2360, 118306816)
+drive: 18:18:04 boot 8 pause60: 60 s, reads (2366, 118409216)
+drive: 18:18:14 RESULT boot 8 step pause60: made in 68.5 s: ONE END status 0 made True in 68.4 s; boot+weston 1.4 s; read 14302 ops 846 MB during the prefix
+drive: 18:18:46 boot 9 pause60: 30 s, reads (2362, 118175744)
+drive: 18:19:16 boot 9 pause60: disk at full speed after 60.0 s; reads (2399, 118855680)
+drive: 18:19:16 boot 9 pause60: 60 s, reads (2403, 118937600)
+drive: 18:19:26 RESULT boot 9 step pause60: made in 68.3 s: ONE END status 0 made True in 68.2 s; boot+weston 1.4 s; read 14283 ops 846 MB during the prefix
+drive: 18:19:57 boot 10 pause60: 30 s, reads (2348, 118032384)
+drive: 18:20:27 boot 10 pause60: disk at full speed after 60.0 s; reads (2385, 118724608)
+drive: 18:20:27 boot 10 pause60: 60 s, reads (2389, 118765568)
+drive: 18:20:37 RESULT boot 10 step pause60: made in 68.5 s: ONE END status 0 made True in 68.4 s; boot+weston 1.4 s; read 14304 ops 846 MB during the prefix
+drive: 18:20:39 end: 10 boots

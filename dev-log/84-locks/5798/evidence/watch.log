@@ -1,0 +1,53 @@
+watcher: 15:13:47 start
+watcher: 15:13:48 boot 3 step 50iops reads-at-stop 9186 ops 493 MB explorer-line present
+watcher: 15:13:48 boot 3: released
+watcher: 15:13:50 boot 3: the driver moved on; release removed
+watcher: 15:31:36 boot 4 step 500KB/s reads-at-stop 9164 ops 491 MB explorer-line present
+watcher: 15:31:36 boot 4: released
+watcher: 15:31:38 boot 4: the driver moved on; release removed
+watcher: 16:06:01 boot 7 step 2MB/s reads-at-stop 9165 ops 492 MB explorer-line present
+watcher: 16:06:01 boot 7: released
+watcher: 16:06:03 boot 7: the driver moved on; release removed
+watcher: 16:23:50 boot 8 step 50iops reads-at-stop 9185 ops 492 MB explorer-line present
+watcher: 16:23:50 boot 8: released
+watcher: 16:23:52 boot 8: the driver moved on; release removed
+watcher: 16:41:38 boot 9 step 500KB/s reads-at-stop 9173 ops 492 MB explorer-line present
+watcher: 16:41:38 boot 9: released
+watcher: 16:41:40 boot 9: the driver moved on; release removed
+watcher: 17:16:07 boot 12 step 2MB/s reads-at-stop 9171 ops 492 MB explorer-line present
+watcher: 17:16:07 boot 12: released
+watcher: 17:16:09 boot 12: the driver moved on; release removed
+watcher: 17:33:55 boot 13 step 50iops reads-at-stop 9193 ops 493 MB explorer-line present
+watcher: 17:33:55 boot 13: released
+watcher: 17:33:57 boot 13: the driver moved on; release removed
+watcher: 17:51:43 boot 14 step 500KB/s reads-at-stop 9179 ops 492 MB explorer-line present
+watcher: 17:51:43 boot 14: released
+watcher: 17:51:45 boot 14: the driver moved on; release removed
+watcher: 18:25:56 boot 17 step 2MB/s reads-at-stop 9170 ops 492 MB explorer-line present
+watcher: 18:25:56 boot 17: released
+watcher: 18:25:58 boot 17: the driver moved on; release removed
+watcher: 18:43:44 boot 18 step 50iops reads-at-stop 9182 ops 493 MB explorer-line present
+watcher: 18:43:44 boot 18: released
+watcher: 18:43:46 boot 18: the driver moved on; release removed
+watcher: 19:01:32 boot 19 step 500KB/s reads-at-stop 9175 ops 491 MB explorer-line present
+watcher: 19:01:32 boot 19: released
+watcher: 19:01:34 boot 19: the driver moved on; release removed
+watcher: 19:35:46 boot 22 step 2MB/s reads-at-stop 9170 ops 492 MB explorer-line present
+watcher: 19:35:46 boot 22: released
+watcher: 19:35:48 boot 22: the driver moved on; release removed
+watcher: 19:53:34 boot 23 step 50iops reads-at-stop 9187 ops 493 MB explorer-line present
+watcher: 19:53:34 boot 23: released
+watcher: 19:53:36 boot 23: the driver moved on; release removed
+watcher: 20:11:22 boot 24 step 500KB/s reads-at-stop 9173 ops 492 MB explorer-line present
+watcher: 20:11:22 boot 24: released
+watcher: 20:11:24 boot 24: the driver moved on; release removed
+watcher: 20:45:35 boot 27 step 2MB/s reads-at-stop 9176 ops 492 MB explorer-line present
+watcher: 20:45:35 boot 27: released
+watcher: 20:45:37 boot 27: the driver moved on; release removed
+watcher: 21:03:24 boot 28 step 50iops reads-at-stop 9191 ops 493 MB explorer-line present
+watcher: 21:03:24 boot 28: released
+watcher: 21:03:26 boot 28: the driver moved on; release removed
+watcher: 21:21:12 boot 29 step 500KB/s reads-at-stop 9161 ops 491 MB explorer-line present
+watcher: 21:21:12 boot 29: released
+watcher: 21:21:14 boot 29: the driver moved on; release removed
+watcher: 21:36:28 the driver ended; stop

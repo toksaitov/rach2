@@ -1,0 +1,7 @@
+drive: 14:16:06 start: plan full,pause60; kernel /home/toksaitov-s/rach2/build/worktrees/5798/build/x86_64/rach2/kernel
+drive: 14:16:28 RESULT boot 1 step full: failed in 17.3 s: ONE END st; boot+weston 2.1 s; read 14343 ops 847 MB during the prefix
+drive: 14:17:00 boot 2 pause60: 30 s, reads (2272, 116455424)
+drive: 14:17:30 boot 2 pause60: disk at full speed after 60.0 s; reads (2307, 117413888)
+drive: 14:17:30 boot 2 pause60: 60 s, reads (2310, 117495808)
+drive: 14:17:48 RESULT boot 2 step pause60: failed in 76.8 s: ONE END sta; boot+weston 1.9 s; read 14355 ops 847 MB during the prefix
+drive: 14:17:48 end: 2 boots
