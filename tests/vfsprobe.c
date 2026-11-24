@@ -349,6 +349,10 @@ static const struct row rows[] = {
      "file alone",
      "krffs-relocate", STATFS_MAGIC_KRFFS},
     {"remove the files of the keep rows", "krffs-relocate", STATFS_MAGIC_KRFFS},
+    {"utimensat, chown, chmod and a write work on a KRFFS file and directory whose header a "
+     "block's edge cuts",
+     "krffs-attributes", STATFS_MAGIC_KRFFS},
+    {"remove the files of the attribute rows", "krffs-attributes", STATFS_MAGIC_KRFFS},
     {"fchownat of the working directory by an empty path, after a rename, ends", "cwd-empty", 0},
     {"a walk follows the fixed /sys link of the PCI host bridge to its uevent", "walk-sys-link", 0},
     {"a walk climbs 1024 mounts stacked on /vp/c, 700 times over, and ends on the top one",
@@ -2638,11 +2642,146 @@ static void climb_row(unsigned magic)
     }
 }
 
+/* The files of the attribute rows, /vp/a/pNN and one at a time, and the
+ * directory /vp/a. */
+#define ATTR_FILES 64
+static char attr_name[] = "/vp/a/pNN";
+
+/** The path of the attribute rows' file `n`, in one buffer. */
+static const char *attr_path(int n)
+{
+    attr_name[7] = (char)('0' + n / 10);
+    attr_name[8] = (char)('0' + n % 10);
+    return attr_name;
+}
+
+/** Remove what `attr_rows` made. */
+static void attr_undo(void)
+{
+    int n;
+
+    for (n = 0; n < ATTR_FILES; n++) {
+        if (syscall1(SYS_UNLINK, (long)attr_path(n)) != 0) {
+            syscall1(SYS_RMDIR, (long)attr_path(n));
+        }
+    }
+    syscall1(SYS_RMDIR, (long)"/vp/a");
+}
+
+/** The times utimensat sets in the attribute rows, whole seconds. */
+#define ATTR_ATIME 1600000502
+#define ATTR_MTIME 1234567890
+
+/** Change the times, owner and mode of `path`, a file or with `dir` a
+ * directory, and read each change back, or fail `why`. */
+static void attr_change(const char *path, int dir, const char *why)
+{
+    unsigned mode = dir ? 0711 : 06751;
+    long ts[4];
+
+    ts[0] = ATTR_ATIME;
+    ts[1] = 987654321;
+    ts[2] = ATTR_MTIME;
+    ts[3] = 123456789;
+    if (syscall4(SYS_UTIMENSAT, AT_FDCWD, (long)path, 0, 0) != 0 ||
+        syscall4(SYS_UTIMENSAT, AT_FDCWD, (long)path, (long)ts, 0) != 0 || xstat(path) != 0 ||
+        st_field(KSTAT_ATIME) != ATTR_ATIME || st_field(KSTAT_MTIME) != ATTR_MTIME) {
+        fail(why);
+    }
+    if (syscall3(SYS_CHOWN, (long)path, 0x01020304, 0x05060708) != 0 || xstat(path) != 0 ||
+        st_field(KSTAT_UID) != 0x01020304 || st_field(KSTAT_GID) != 0x05060708 ||
+        syscall3(SYS_CHOWN, (long)path, 1000, 0x0a0b0c0d) != 0 || xstat(path) != 0 ||
+        st_field(KSTAT_UID) != 1000 || st_field(KSTAT_GID) != 0x0a0b0c0d) {
+        fail(why);
+    }
+    if (syscall2(SYS_CHMOD, (long)path, mode) != 0 || xstat(path) != 0 ||
+        (st_field(KSTAT_MODE) & 07777) != mode || syscall2(SYS_CHMOD, (long)path, 0600) != 0 ||
+        xstat(path) != 0 || (st_field(KSTAT_MODE) & 07777) != 0600) {
+        fail(why);
+    }
+}
+
+/**
+ * On a KRFFS volume, whose inode number is a file's header offset plus one,
+ * files whose headers lie at `target` modulo 4096, where a field is cut by
+ * a block's edge. A pad's length puts the next header there; a file that
+ * lands elsewhere stays, as room the search no longer takes. The file there
+ * takes every change of attributes and a write after, and so does a
+ * directory made in its place. On the boot root no place is chosen.
+ */
+static void attr_place(unsigned target, int volume, const char *why)
+{
+    static char bytes[4096];
+    const char *path = attr_path(0);
+    int fd, n;
+
+    for (n = 0; n < ATTR_FILES; n++) {
+        path = attr_path(n);
+        shared_file(path, bytes, 0, why);
+        if (xstat(path) != 0) {
+            fail(why);
+        }
+        if (!volume || (st_field(KSTAT_INO) - 1) % 4096 == target) {
+            break;
+        }
+        shared_file(path, bytes, (int)((target - (st_field(KSTAT_INO) - 1) - 357) % 4096), why);
+    }
+    if (n == ATTR_FILES) {
+        fail(why);
+    }
+    attr_change(path, 0, why);
+    fd = syscall3(SYS_OPEN, (long)path, O_WRONLY, 0);
+    if (fd < 0 || syscall3(SYS_WRITE, fd, (long)"after", 5) != 5 || syscall1(SYS_CLOSE, fd) != 0 ||
+        !file_holds(path, "after", 5) || xstat(path) != 0 || st_field(KSTAT_UID) != 1000) {
+        fail(why);
+    }
+    if (syscall1(SYS_UNLINK, (long)path) != 0 || syscall2(SYS_MKDIR, (long)path, 0755) != 0) {
+        fail(why);
+    }
+    attr_change(path, 1, why);
+    if (syscall1(SYS_RMDIR, (long)path) != 0) {
+        fail(why);
+    }
+    attr_undo();
+    if (syscall2(SYS_MKDIR, (long)"/vp/a", 0755) != 0) {
+        fail(why);
+    }
+}
+
+/** Change attributes at each place where a block's edge cuts a field of a
+ * KRFFS header: the ctime, the mtime, the atime, the gid, the uid and the
+ * mode. A root of another type, `magic`, has no such rows. */
+static void attr_rows(unsigned magic)
+{
+    static const unsigned targets[] = {3781, 3797, 3811, 3821, 3825, 3828};
+    const char *why = "utimensat, chown, chmod and a write work on a KRFFS file and directory "
+                      "whose header a block's edge cuts";
+    static unsigned char buf[KSTATFS_SIZE];
+    unsigned i;
+
+    if (magic != STATFS_MAGIC_KRFFS) {
+        return;
+    }
+    fail_undo = attr_undo;
+    if (syscall2(SYS_MKDIR, (long)"/vp/a", 0755) != 0 || probe_statfs("/", buf) != 0) {
+        fail(why);
+    }
+    for (i = 0; i < sizeof(targets) / sizeof(targets[0]); i++) {
+        attr_place(targets[i], *(unsigned *)buf == STATFS_MAGIC_KRFFS_VOLUME, why);
+    }
+    attr_undo();
+    fail_undo = 0;
+    if (xstat("/vp/a") != -ENOENT) {
+        fail("remove the files of the attribute rows");
+    }
+}
+
 /** The rows of walks, by the root `magic` names: on ext2 the holds of a
  * walk without the big lock (`cwd_unlocked_rows`), the changes that send
  * it again (`shared_rows`), and the changes that send a walk or a call again
  * while the walk gate stops it (`gated_rows`); on KRFFS the keeps of a
- * call's walk (`keep_rows`) and a climb of stacked mounts (`climb_row`). */
+ * call's walk (`keep_rows`), the attributes of cut headers (`attr_rows`) and
+ * a climb of stacked mounts (`climb_row`). */
 static void unlocked_rows(unsigned magic)
 {
     cwd_unlocked_rows(magic);
@@ -2650,6 +2789,7 @@ static void unlocked_rows(unsigned magic)
     handle_rows(magic);
     gated_rows(magic);
     keep_rows(magic);
+    attr_rows(magic);
     cwd_empty_row();
     sys_link_row();
     climb_row(magic);
