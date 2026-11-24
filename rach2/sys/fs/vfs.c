@@ -8391,6 +8391,7 @@ uint32_t vfs_walk_keep_place(uint32_t pid)
     const process_t *pr;
     const struct walk_keep *k = NULL;
     uint32_t place = 0;
+    void *node;
     int big = !bkl_held();
 
     if (big) {
@@ -8401,10 +8402,14 @@ uint32_t vfs_walk_keep_place(uint32_t pid)
     if (pr) {
         k = pr->walk_keeps;
     }
+    node = k ? walk_keep_node(k) : NULL;
     if (k && vfs_mount_base(k->mnt) == mounts[0] && k->mnt->type == &vfs_krffs_type) {
-        uint64_t at = krffs_node_place((const krffs_node_t *)walk_keep_node(k));
+        uint64_t at = krffs_node_place((const krffs_node_t *)node);
 
         place = at == KRFFS_NO_NODE || at >= 0xFFFFFFFFu ? 0 : (uint32_t)at + 1u;
+    } else if (k && k->hold.pin && k->mnt->type == &vfs_krffs_volume_type) {
+        /* A node of a mounted KRFFS is its offset plus 1 (krffsmount.c). */
+        place = (uint32_t)(uintptr_t)node;
     }
     if (big) {
         bkl_exit();

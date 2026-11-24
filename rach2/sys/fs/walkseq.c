@@ -321,8 +321,8 @@ static void gate_num(struct gate_text *t, const char *name, uint32_t n)
 /** The gate's state as one line: `pid P stop E waiting W`, the count of
  * each event by its name, E being `-` once the stop is used or released,
  * `tokens T active A`, the changes the gate holds open and all those under
- * way, and `keep K`, where the armed thread's newest walk keep lies in the
- * KRFFS boot root (`vfs_walk_keep_place`). May sleep. */
+ * way, and `keep K`, where the armed thread's newest walk keep lies in its
+ * KRFFS (`vfs_walk_keep_place`). May sleep. */
 static int32_t gate_show(void *data, char *buf, uint32_t cap)
 {
     struct gate_text t;

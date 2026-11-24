@@ -842,10 +842,10 @@ int vfs_call_again(void);
 void vfs_ref_now(struct vfs_ref *ref);
 
 /** Where the node of the newest keep of the walks of thread `pid` lies in
- * the KRFFS boot root, as its offset plus 1, or 0 when that thread keeps no
- * node of the boot root: the walk gate's `keep`, for a test that sees a
- * keep follow a relocation. Takes the big lock when the caller has not.
- * May sleep. */
+ * its KRFFS, the boot root or a mounted volume, as its offset plus 1, or 0
+ * when that thread keeps no node of a KRFFS: the walk gate's `keep`, for a
+ * test that sees a keep follow a relocation. Takes the big lock when the
+ * caller has not. May sleep. */
 uint32_t vfs_walk_keep_place(uint32_t pid);
 
 /** The calling thread's newest walk keep, a mark for
