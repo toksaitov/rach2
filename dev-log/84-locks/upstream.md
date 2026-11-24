@@ -567,3 +567,14 @@ QEMU 10.2.1 on WSL Linux 6.18.58.1 accounted for about 1.4 million I/O exits whi
 * Rach2: nothing in its own code; the guest runs Debian's Mesa and browser, as the Debian guest does, and gives the same spread. Firefox's virgl chunk 4 reference holds 823 for the page, the least either side gave, in place of its run's 824.
 * Status: unreported.
 * Next: run one shader texture function page alone after a refused `GL_EXT_texture_shadow_lod` shader, outside the browser, to see whether the checks that pass do so on a draw that virglrenderer dropped or on one it drew; then read the code in virglrenderer that prints "Dropping rendering due to missing shaders" and what a draw does after it.
+
+## GE-Proton's wineboot waits for ever when its desktop starts too slowly
+
+* Project: GE-Proton11-12 and its Wine 11.0 (`vendor/gnu/sources-extra.txt`, GE-Proton11-12-x86_64.tar.gz, SHA-256 0595159e417c3dbbfb7cc3ae0d3ed15a617cc607aa23ef756ea79029d7af5d70).
+* Fails: `wineboot.exe -u` in a new prefix never ends when `explorer.exe /desktop` has not registered the desktop's display driver by the time Proton's steam.exe makes its first window. win32u logs `nodrv_CreateWindow` "The explorer process failed to start.", no explorer.exe remains, rundll32.exe (`setupapi,InstallHinfSection PreInstall`) and conhost.exe wait in `send_inter_thread_message` and `wait_message_reply` for a reply that never comes, wineboot.exe waits in `wait_message`, and wineserver has no event to read. The functions are named from the symbols of Proton's `win32u.so` and `ntdll.so`; the source lines are missing, since Rach2 keeps the built Proton and not its source.
+* Found: 2026-11-24, the testing PC, milestone 84, cards 5782, 5786 and 5787: a lone run of `machine.games-wine.maps` stood still in `make_prefix` while the host's disk wrote a 24 GiB image, and card 5787 forced it by slowing the guest's disk.
+* Reproduction: boot a guest, cap its disk at 40 IOPS and 4 MiB/s, drop the page cache and run `tests/system/games/run.py maps` as the first Wine program after boot. On Rach2's games-wine machine with QEMU's `throttling.iops-total=40,throttling.bps-total=4194304` on both disks it stood still in 2 boots of 2; in the Debian 13 reference guest on Linux 6.12.115, with a cgroup v2 `io.max` of the same limits, in 2 boots of 2, with the same log line. Unthrottled, or at 100 IOPS and 10 MiB/s, it passed, as did the rows after the first in each Debian boot.
+* Evidence: `dev-log/84-locks/5787.md`.
+* Rach2: nothing; Linux stalls the same way.
+* Status: unreported.
+* Next: read `get_desktop_window` and `load_desktop_driver` in win32u and explorer's desktop start in the Proton source, find which thread owes rundll32 and conhost their reply, and check whether current Wine still waits for ever there.
