@@ -19,11 +19,12 @@
  * climbs out of the mount physically; /proc/mounts and /proc/filesystems
  * say what is mounted; the kernel's record of an unmount counts
  * descriptions, not descriptors; a mount namespace has its own copy of
- * each mount it inherits, which it remounts and unmounts alone
- * (`rows_namespaces`); and a name relative to a descriptor or the working
- * directory is walked from that directory though a mount made since covers
- * it (`rows_covered`), /dev/pts among them, and though one comes while the
- * walk is under way, and a walk follows 40 links and no more (`rows_walks`).
+ * each mount it inherits, which it remounts, unmounts and mounts over alone,
+ * the copies of /proc and the root among them (`rows_namespaces`); and a
+ * name relative to a descriptor or the working directory is walked from
+ * that directory though a mount made since covers it (`rows_covered`),
+ * /dev/pts among them, and though one comes while the walk is under way,
+ * and a walk follows 40 links and no more (`rows_walks`).
  * `mountprobe claim` runs the boot partition's rows alone (`rows_claim`),
  * and `mountprobe reloc` the rows of a bind whose KRFFS source moves while
  * it waits (`rows_reloc`), on disks of their own.
@@ -32,16 +33,19 @@
  * `claim` mode. Freestanding; direct system calls (probe.h).
  *
  * Given `machine=native` (probe_args.h), on a machine that is already up, the
- * probe runs every row but the `claim` mode's in its working directory, a
- * workspace whose absolute path is short enough for a mount's record, with
- * `hello` and `stdintest` in it: the mount points are `mnt` and `mnt2` there,
- * and the long target a name there. The vfat source is the first device of
- * `loops=DEVICE,DEVICE`, an empty FAT32 volume attached and not mounted, on
- * which the writable mount writes `hello.txt` and a copy of `hello`; the
- * second is a KRFFS volume, in place of /dev/disk0p1. The unprivileged
- * caller is the uid `ids=OLD:NEW,...` gives for 1000; the exec child reads a
- * pipe the probe holds open in place of the console; and the unmount record
- * is looked for in the whole of the kernel's ring.
+ * probe runs every row but the `claim` mode's and the refusals the permanent
+ * mounts make, of a mount over /proc and the root and of an unmount of one,
+ * which the native case's own mount namespace has only copies of, in its
+ * working directory, a workspace whose absolute path is short enough for a
+ * mount's record, with `hello` and `stdintest` in it: the mount points are
+ * `mnt` and `mnt2` there, and the long target a name there. The vfat source
+ * is the first device of `loops=DEVICE,DEVICE`, an empty FAT32 volume
+ * attached and not mounted, on which the writable mount writes `hello.txt`
+ * and a copy of `hello`; the second is a KRFFS volume, in place of
+ * /dev/disk0p1. The unprivileged caller is the uid `ids=OLD:NEW,...` gives
+ * for 1000; the exec child reads a pipe the probe holds open in place of the
+ * console; and the unmount record is looked for in the whole of the kernel's
+ * ring.
  */
 
 #include "probe.h"
@@ -487,6 +491,10 @@ static void row_renamed_dir(void)
  * it is the mount's and not the table's. A second mount on the same target
  * goes over the first and hides its files, as on Linux, and an unmount takes
  * the top one.
+ *
+ * /proc and the root are refused as targets where they are the permanent
+ * mounts, in the first mount namespace; a native run has a namespace of its
+ * own, whose copies take a mount as on Linux (`ns_targets_row`).
  */
 static void rows_placing(void)
 {
@@ -515,10 +523,10 @@ static void rows_placing(void)
         do_mount(src, mnt, MS_RDONLY | MS_MOVE, 0) != -EINVAL) {
         fail("MS_REMOUNT of no mount and MS_MOVE are EINVAL, and MS_BIND of a device ENOTDIR");
     }
-    if (do_mount(src, "/proc", MS_RDONLY, 0) != -EINVAL) {
+    if (!probe_native() && do_mount(src, "/proc", MS_RDONLY, 0) != -EINVAL) {
         fail("a target on /proc is EINVAL");
     }
-    if (do_mount(src, "/", MS_RDONLY, 0) != -EINVAL) {
+    if (!probe_native() && do_mount(src, "/", MS_RDONLY, 0) != -EINVAL) {
         fail("the root as a target is EINVAL");
     }
     if (do_mount("/dev/null", mnt, MS_RDONLY, 0) != -EINVAL) {
@@ -1029,7 +1037,8 @@ static void rows_zero_exec(void)
     }
 }
 
-/** The rows of umount2's flags and the permanent mounts, an unprivileged
+/** The rows of umount2's flags and the permanent mounts, which a native
+ * run's namespace has only copies of (`ns_targets_row`), an unprivileged
  * caller, noexec and a program run from the mount (`rows_exec`) and on
  * /dev/zero (`rows_zero_exec`), and a target too long for the mount's
  * record, which claims nothing. MNT_DETACH
@@ -1061,9 +1070,9 @@ static void rows_flags(void)
     if (do_mount(src, mnt, MS_RDONLY, 0) != 0) {
         fail("the mount after the detached one, freed by its last close");
     }
-    if (syscall2(SYS_UMOUNT2, (long)"/proc", 0) != -EBUSY ||
-        syscall2(SYS_UMOUNT2, (long)"/dev", 0) != -EBUSY ||
-        syscall2(SYS_UMOUNT2, (long)"/", 0) != -EBUSY) {
+    if (!probe_native() && (syscall2(SYS_UMOUNT2, (long)"/proc", 0) != -EBUSY ||
+                            syscall2(SYS_UMOUNT2, (long)"/dev", 0) != -EBUSY ||
+                            syscall2(SYS_UMOUNT2, (long)"/", 0) != -EBUSY)) {
         fail("the permanent mounts are EBUSY");
     }
     pid = syscall1(SYS_FORK, 0);
@@ -1353,6 +1362,10 @@ static const char *const ns_whys[] = {
     "a walker from a working directory on an ended namespace's copy of the root sleeps in its "
     "open of a FIFO",
     "an rmdir of a KRFFS directory only a walk's start keeps is EBUSY",
+    "a mount over the child's copy of /proc hides it",
+    "an unmount of the mount over the child's copy of /proc shows the copy again",
+    "a mount over the child's copy of the root leaves its names as they were",
+    "an unmount of the child's copy of /proc takes it from its names",
 };
 
 /** Fail with the reason of the wait status `st` of a child of the namespace
@@ -1556,6 +1569,50 @@ static void ns_desc_row(void)
     }
 }
 
+/** A tmpfs mounted on `target`: 0, or a negated errno. */
+static int mount_tmpfs_on(const char *target)
+{
+    return syscall5(SYS_MOUNT, (long)"none", (long)target, (long)"tmpfs", 0, 0);
+}
+
+/** The child of `ns_targets_row`; its exit status, a reason of `ns_whys`. */
+static int ns_targets_child(void)
+{
+    if (syscall1(SYS_UNSHARE, CLONE_NEWNS) != 0) {
+        return 1;
+    }
+    if (mount_tmpfs_on("/proc") != 0 || xstat("/proc/self") != -ENOENT) {
+        return 23;
+    }
+    if (syscall2(SYS_UMOUNT2, (long)"/proc", 0) != 0 || xstat("/proc/self") != 0) {
+        return 24;
+    }
+    if (mount_tmpfs_on("/") != 0 || xstat("/proc/self") != 0) {
+        return 25;
+    }
+    return syscall2(SYS_UMOUNT2, (long)"/proc", 0) == 0 && xstat("/proc/self") == -ENOENT ? 0 : 26;
+}
+
+/**
+ * In a namespace of its own a child mounts a tmpfs over its copy of /proc
+ * and unmounts it, mounts one over its copy of the root, which the names it
+ * looks up start below, and unmounts the copy of /proc, as on Linux. The
+ * first namespace refuses the two targets (`rows_placing`) and the unmount
+ * (`rows_flags`). What is left goes with the child's namespace.
+ */
+static void ns_targets_row(void)
+{
+    int pid = syscall1(SYS_FORK, 0);
+
+    if (pid == 0) {
+        sys_exit(ns_targets_child());
+    }
+    if (pid < 0) {
+        fail("fork for the row of the targets of a namespace's copies");
+    }
+    ns_child_done(pid);
+}
+
 /** The child of `ns_unmount_row`, which says on `out` that it made its file
  * and reads its go from `in`; its exit status, a reason of `ns_whys`. */
 static int ns_unmount_child(int out, int in)
@@ -1663,8 +1720,9 @@ static int copy_root_child(int krffs)
     if (krffs && syscall1(SYS_RMDIR, (long)at_top("nsheld")) != -EBUSY) {
         return 10;
     }
-    if (krffs && (syscall1(SYS_CHDIR, (long)at_top("nscwd")) != 0 ||
-                  syscall1(SYS_RMDIR, (long)at_top("nscwd")) != -EBUSY)) {
+    if (krffs &&
+        (syscall1(SYS_CHDIR, (long)at_top("nscwd")) != 0 ||
+         syscall1(SYS_RMDIR, (long)"../nscwd") != -EBUSY || syscall1(SYS_CHDIR, (long)"..") != 0)) {
         return 11;
     }
     syscall1(SYS_UMASK, 0);
@@ -2113,6 +2171,19 @@ static void ns_dev_row(void)
     }
 }
 
+/** The mount point's absolute path followed by `rest`, in the next of four
+ * buffers, for a row that leaves the working directory, from which a
+ * native run's mount point is named. */
+static const char *abs_mnt(const char *rest)
+{
+    static char paths[4][96];
+    static int next;
+    char *p = paths[next];
+
+    next = (next + 1) % 4;
+    return join3(p, (int)sizeof(paths[0]), mnt_abs, rest, "");
+}
+
 /** Whether /proc/<pid>/wchan names `want`, the function `pid` sleeps in. */
 static int sleeps_in(int pid, const char *want)
 {
@@ -2159,8 +2230,8 @@ static int held_start_helper(void)
         wait_status(walker);
         return 21;
     }
-    rc = syscall1(SYS_RMDIR, (long)at_top("nsfifo")) == -EBUSY ? 0 : 22;
-    w = syscall3(SYS_OPEN, (long)at_top("nsfifo/p"), O_WRONLY | O_NONBLOCK, 0);
+    rc = syscall1(SYS_RMDIR, (long)abs_mnt("/../nsfifo")) == -EBUSY ? 0 : 22;
+    w = syscall3(SYS_OPEN, (long)abs_mnt("/../nsfifo/p"), O_WRONLY | O_NONBLOCK, 0);
     if (w < 0) {
         syscall2(SYS_KILL, walker, 9);
         wait_status(walker);
@@ -2256,19 +2327,6 @@ static void rows_copies(void)
         fail("the tmpfs of the openat and setns rows unmounts");
     }
     row_undo = 0;
-}
-
-/** The mount point's absolute path followed by `rest`, in the next of four
- * buffers, for a row that leaves the working directory, from which a
- * native run's mount point is named. */
-static const char *abs_mnt(const char *rest)
-{
-    static char paths[4][96];
-    static int next;
-    char *p = paths[next];
-
-    next = (next + 1) % 4;
-    return join3(p, (int)sizeof(paths[0]), mnt_abs, rest, "");
 }
 
 /** Make the file `path` holding the one byte `byte`, or fail `what`. */
@@ -2425,17 +2483,19 @@ static void rows_covered(void)
 }
 
 /**
- * The rows of mount namespaces, on a tmpfs at the mount point, each with a
- * child that makes a namespace and so a copy of every mount, as Linux's
- * `copy_mnt_ns` makes one: a remount of each mount on its own with its own
- * writers (`ns_flags_row`), a descriptor that keeps an ended namespace's
- * read-only copy (`ns_desc_row`), and an unmount of a mount another
- * namespace has a copy of (`ns_unmount_row`). A failure detaches the
- * row's tmpfs.
+ * The rows of mount namespaces, each with a child that makes a namespace and
+ * so a copy of every mount, as Linux's `copy_mnt_ns` makes one: mounts over
+ * the child's copies of /proc and the root and an unmount of the first
+ * (`ns_targets_row`) and, on a tmpfs at the mount point, a remount of each
+ * mount on its own with its own writers (`ns_flags_row`), a descriptor that
+ * keeps an ended namespace's read-only copy (`ns_desc_row`), and an unmount
+ * of a mount another namespace has a copy of (`ns_unmount_row`). A failure
+ * detaches the row's tmpfs.
  */
 static void rows_namespaces(void)
 {
-    if (syscall5(SYS_MOUNT, (long)"none", (long)mnt, (long)"tmpfs", 0, 0) != 0) {
+    ns_targets_row();
+    if (mount_tmpfs_on(mnt) != 0) {
         fail("a tmpfs for the namespace rows");
     }
     row_undo = mnt_detach_undo;

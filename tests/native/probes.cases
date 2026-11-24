@@ -117,8 +117,9 @@ case modeprobe.ext2 ids:1000 stage:suidhelper -- modeprobe helper=suidhelper
 case modeprobe.krffs ids:1000 stage:suidhelper volume:krffs:krffs16 \
     -- modeprobe vol0 helper=../suidhelper
 # machine=native mounts in the workspace and on the case's two volumes, and
-# looks for the unmount record in the whole kernel ring; it leaves out no
-# check.
+# looks for the unmount record in the whole kernel ring; it leaves out the
+# refusals the permanent mounts make, which the case's own mount namespace
+# has only copies of.
 case mountprobe mountns log ids:1000 stage:hello,stdintest \
     volume:vfat:fat64:attached volume:krffs:krffs16:attached \
     -- mountprobe machine=native

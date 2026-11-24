@@ -45,7 +45,9 @@
  * so the rows look for the same lines in a private root, as a native run
  * gives one (tests/native/Readme.md). There the argument `root=PATH` says
  * that /dev/shm is a bind of the machine's, whose own mount is reached
- * through /proc/1/root.
+ * through /proc/1/root, and that the program's mount namespace is not the
+ * first, so that umount2 of that mount, another namespace's, fails with
+ * EINVAL.
  *
  * The program runs as root, since it mounts. It prints `TMPFSMUSL OK` and
  * exits 0 on success, and prints `TMPFSMUSL FAIL (detail)` and exits 1
@@ -406,7 +408,10 @@ static int deep(void)
     return 0;
 }
 
-/** Check the permanent shared-memory mount, including from a private root. */
+/** Check that the permanent shared-memory mount is the one at /dev/shm and
+ * that umount2 refuses it: with EBUSY in the first mount namespace, and with
+ * EINVAL from a private root, whose mount namespace has only a copy of it, as
+ * Linux answers for a mount of another namespace. */
 static int shm_unmount(void)
 {
     const char *path = private_root ? "/proc/1/root/dev/shm" : "/dev/shm";
@@ -416,7 +421,7 @@ static int shm_unmount(void)
         local.st_dev != original.st_dev || local.st_ino != original.st_ino) {
         return fail("the private root's shared-memory mount differs from the permanent mount");
     }
-    if (umount2(path, 0) != -1 || errno != EBUSY) {
+    if (umount2(path, 0) != -1 || errno != (private_root ? EINVAL : EBUSY)) {
         return fail("an unmount of the permanent shared-memory mount");
     }
     row_held();
