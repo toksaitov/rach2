@@ -4706,14 +4706,14 @@ static int krffs_store_owner(krffs_mount_t *mount, uint64_t offset, const krffs_
     return -1;
 }
 
-/** Whether a sector's or a block's edge cuts the changed bytes of an
- * attribute that `want` changes in `head`, the header at `offset`. */
+/** Whether a sector's or a block's edge cuts the changed bytes of the mode
+ * and the owner, judged as one field, or of a time that `want` changes in
+ * `head`, the header at `offset`. */
 static int krffs_attrs_cut(const krffs_mount_t *mount, uint64_t offset, const krffs_node_t *head,
                            const krffs_node_t *want)
 {
-    static const uint32_t fields[] = {KRFFS_FIELD_MODE,  KRFFS_FIELD_UID,   KRFFS_FIELD_GID,
-                                      KRFFS_FIELD_ATIME, KRFFS_FIELD_MTIME, KRFFS_FIELD_CTIME,
-                                      KRFFS_FIELD_SIZE};
+    static const uint32_t fields[] = {KRFFS_FIELD_MODE, KRFFS_FIELD_ATIME, KRFFS_FIELD_MTIME,
+                                      KRFFS_FIELD_CTIME, KRFFS_FIELD_SIZE};
     const uint8_t *old = (const uint8_t *)head;
     const uint8_t *now = (const uint8_t *)want;
     uint32_t i;

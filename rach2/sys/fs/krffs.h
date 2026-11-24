@@ -358,9 +358,10 @@ typedef struct krffs_attrs {
  * The caller does not pass the root, whose mode has the dirty flag. Return
  * 0, or -1 when the header cannot be read, the medium fails or the node is
  * free. A call with a field whose changed bytes a sector's or a block's edge
- * cuts stores all or, on a failure, none, and halts the mount when part of
- * a change may have reached the medium; in any other the stores before a
- * failed one stay. A cut among the owner and mode bytes sleeps in barriers.
+ * cuts, the mode and the owner counting as one field, stores all or, on a
+ * failure, none, and halts the mount when part of a change may have reached
+ * the medium; in any other the stores before a failed one stay. A cut among
+ * the owner and mode bytes sleeps in barriers.
  */
 int krffs_set_attrs_at(krffs_mount_t *mount, uint64_t offset, int what, const krffs_attrs_t *set);
 

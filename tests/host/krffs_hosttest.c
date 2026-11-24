@@ -4984,7 +4984,6 @@ static uint32_t attr_at;
 static uint16_t attr_kind; /* the type bits the node keeps in its mode */
 static int attr_what;      /* the KRFFS_SET_ bits of the call under test */
 static int attr_by_fsck;   /* whether a cut goes to fsck.krffs too */
-static int attr_between;   /* an edge lies between two owner fields, cutting none */
 
 /* The call's values; every byte of each differs from the fixture's. */
 static const krffs_attrs_t attr_set = {0151,
@@ -5045,8 +5044,7 @@ static int attr_head_is(const krffs_node_t *head, int set)
 }
 
 /** Whether a recovered cut keeps the node, its bytes, and each of its mode,
- * uid and gid whole, old or new, with no new owner beside the old mode but
- * where an edge cuts no field, whose plain stores have no barrier. */
+ * uid and gid whole, old or new, with no new owner beside the old mode. */
 static int attr_contents(krffs_mount_t *fs)
 {
     krffs_node_t head;
@@ -5063,7 +5061,7 @@ static int attr_contents(krffs_mount_t *fs)
     return (head.mode == was || head.mode == set) &&
            (head.uid == 0x01020304u || head.uid == attr_set.uid) &&
            (head.gid == 0x05060708u || head.gid == attr_set.gid) &&
-           (!newer || attr_between || !(attr_what & KRFFS_SET_MODE) || head.mode == set);
+           (!newer || !(attr_what & KRFFS_SET_MODE) || head.mode == set);
 }
 
 /** Recover copies of one cut by the volume's check, and with `attr_by_fsck`
@@ -5222,18 +5220,23 @@ static void attr_entry_case(void)
 }
 
 /**
- * Change a time, a mode, a uid, a gid, and all of them in one call, with
- * each edge of a block and of a sector at each byte of each field, and at
- * the bytes between them; and once on a volume whose sector and block edges
- * cut the mode and the uid both. A call that no edge cuts goes by the plain
- * stores, the mode's and the change time's.
+ * Change a time, a mode, a uid, a gid, the mode and the owner as a chown
+ * that clears set-id bits does, and all of them in one call, with each edge
+ * of a block and of a sector at each byte of each field, and at the bytes
+ * between them; and once on a volume whose sector and block edges cut the
+ * mode and the uid both. A call that no edge cuts goes by the plain stores,
+ * the mode's and the change time's.
  */
 static void attr_rows(void)
 {
     static const uint32_t edges[] = {4096, 3584};
-    static const int calls[] = {
-        KRFFS_SET_MODE, KRFFS_SET_UID, KRFFS_SET_GID, KRFFS_SET_ATIME | KRFFS_SET_MTIME,
-        KRFFS_SET_MODE | KRFFS_SET_UID | KRFFS_SET_GID | KRFFS_SET_ATIME | KRFFS_SET_MTIME};
+    static const int calls[] = {KRFFS_SET_MODE,
+                                KRFFS_SET_UID,
+                                KRFFS_SET_GID,
+                                KRFFS_SET_ATIME | KRFFS_SET_MTIME,
+                                KRFFS_SET_MODE | KRFFS_SET_UID | KRFFS_SET_GID,
+                                KRFFS_SET_MODE | KRFFS_SET_UID | KRFFS_SET_GID | KRFFS_SET_ATIME |
+                                    KRFFS_SET_MTIME};
     int64_t seconds = fake_seconds;
     krffs_mount_t fs;
     uint32_t i, j, cut;
@@ -5244,7 +5247,6 @@ static void attr_rows(void)
     for (i = 0; i < 2; i++) {
         for (cut = KRFFS_FIELD_MODE + 1; cut < KRFFS_FIELD_SIZE; cut++) {
             attr_at = edges[i] - cut;
-            attr_between = cut == KRFFS_FIELD_UID || cut == KRFFS_FIELD_GID;
             for (j = 0; j < sizeof(calls) / sizeof(calls[0]); j++) {
                 attr_what = calls[j];
                 attr_by_fsck = cut < KRFFS_FIELD_ATIME && j != 3;
@@ -5266,7 +5268,6 @@ static void attr_rows(void)
     }
     attr_kind = 0;
     attr_by_fsck = 0;
-    attr_between = 0;
     attr_at = 4095 - KRFFS_FIELD_MODE;
     for (j = 0; j < sizeof(calls) / sizeof(calls[0]); j++) {
         attr_what = calls[j];
