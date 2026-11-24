@@ -211,6 +211,30 @@ At the reviewed head, in QEMU on WSL under KVM with four processors:
 * Sizes: the i686 and x86-64 trial kernels, and the x86-64 lockdep kernel, against 4,194,304 bytes.
 * On the Lenovo, since the milestone touches the i915 and the HDA: 84-7's boots at that head, SuperTuxKart and 0 A.D. only, some 15 minutes.
 
+### What the slice ran and gave
+
+The reviewed head was f0d1c4fd14. The QEMU part ran there on 11-20 from 20:02 to 20:22 UTC+6, in WSL under KVM, in toksaitov-m's clone ([issue 5634](https://github.com/toksaitov/rach2/issues/5634)); the Lenovo's part ran the same evening ([84-7.md](84-7.md), Lenovo checkpoint, 11-20; [issue 5636](https://github.com/toksaitov/rach2/issues/5636)). The figures are those the issues give. The owner's rule of 11-20 had only a crash, hang, data loss, security fault or case failure hold the release.
+
+* Lockdep builds, i686, x86-64 and the i386 build on the x86-64 kernel: after each two-minute `lockstressmusl -t 120`, `/proc/lockdep_stats` read `reports: 0`, with 86 to 89 classes and no pool full. Writing `abba` and then `irq` to `lockdep/inject` gave exactly two reports on all three. All ten modes passed, in 41, 43 and 43 passes. The `-u` check failed on all three: many of the calls it names still take the big lock, so the criterion was not met. It went to the later list, since the release case runs `lockstressmusl` without `-u`.
+* `wakelatmusl 64 3`: the case passed 11 of 11 on both kernels, but the 10 ms criterion was not met. In the run with the others i686 had 4 waits over 10 ms, the worst 33.4 ms, and x86-64 3, the worst 29.2 ms; alone each had 2, the worst 23.9 and 27.7 ms. In each, 13.8 to 27.3 ms was run-queue wait and the big lock's share under 0.1 ms. It went to the later list.
+* Passed on both kernels: `smptlbmusl` 10 of 10, `futex2probe` 15 of 15, `futexvprobe` 11 of 11, `vmprobe` 19 of 19, `forkro` 5 of 5, `drmfuzz` on vkms 6 of 6, and on intel-hda the audio cases mix, loopback and sox, 6 of 6 each, and resample and signal, 7 of 7 each, which run `audioclientsmusl` in those modes. `mixprobe` passed on x86-64, 17 of 17. `drmfuzz 100000 1` by hand on vgem and on virtio-gpu gave `DRMFUZZ OK` and `kernel: 0 faults, 0 errors, 0 warnings` on both.
+* `cowregrant`: failed on both kernels, 6 assertions passed and 2 failed, and alone 2 runs of 3 on each: MemFree fell while MemFree plus KReclaimable held. Issue 5639 fixed the kernel's grace-period thread at ce59fc7f23, where x86-64 passed 3 of 3 and i686 failed 2 of 3. The probe then judged MemAvailable at 2dcacf32b2, and both passed 3 of 3 there, 5 of 5 assertions each run.
+
+Sizes at f0d1c4fd14, against the plan's 4,194,304 bytes:
+
+| Kernel | Bytes | Against 4,194,304 | Built on |
+|---|---|---|---|
+| i686 trial | 3,669,108 | 525,196 under | the testing host |
+| x86-64 trial | 4,167,568 | 26,736 under | the testing host |
+| x86-64 lockdep | 4,203,248 | 8,944 over | the testing host |
+| x86-64 trial, the one tried on the Lenovo | 4,278,144 | 83,840 over | the Mac |
+
+The i686 lockdep kernel was 3,693,204 bytes; the slice did not ask for it. The lockdep kernel's size went to the later list: it booted and ran the soaks, it is a debugging build that no release image carries, and no lockdep kernel was booted on the Lenovo at this head.
+
+The limit that applied to the Lenovo's trial was the slot's size, 16,777,216 bytes. The plan's 4,194,304 was the Lenovo's slot when the plan was written on 11-11, "until the release installs"; a release moved the disk to 16 MiB slots ([84-34.md](84-34.md)). `bootctl status` read `slot size: 16777216 bytes` and both slots at 16,777,216 before this trial, under release 7a2168e3c2, and `bootctl kernel`, which refuses a file larger than a slot, installed the 4,278,144 bytes in the candidate slot (`before.txt` and `arm-kernel.txt` in the run's directory, `build/worktrees/codex/build/runs/5636` on the Mac). No record gives a decision to allow more than the plan's 4,194,304 bytes; the figure was not brought up to date when the slots moved.
+
+Not recorded anywhere: why the x86-64 trial kernel is 4,167,568 bytes on the testing host and 4,278,144 on the Mac at the same head, 110,576 bytes apart.
+
 ## Risks and guards
 
 * A thread selected or its stack freed while still switching away: `on_cpu` and the free after it (84-2a); the stress program's exit-and-reap mode.
