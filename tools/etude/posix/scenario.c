@@ -3212,6 +3212,8 @@ enum etude_status etude_guest_start(struct etude_case_machine *m, const char *co
 struct command_wait {
     struct etude_case_machine *m;
     const char *text;
+    size_t from; /* where the search begins */
+    long at;     /* the text's end past `from`, or -1 */
     int found;
 };
 
@@ -3221,11 +3223,21 @@ static int command_output_found(void *ctx)
     struct command_wait *w = ctx;
     const struct etude_serial_result *r = etude_serial_result(w->m->serial);
 
-    w->found = find_text(r->out.data, r->out.kept, w->text) >= 0;
+    if (r->out.kept > w->from)
+        w->at = find_text(r->out.data + w->from, r->out.kept - w->from, w->text);
+    w->found = w->at >= 0;
     return w->found || etude_serial_status(w->m->serial) != ETUDE_SERIAL_BUSY;
 }
 
 enum etude_status etude_guest_output_wait(struct etude_case_machine *m, const char *text)
+{
+    size_t from = 0;
+
+    return etude_guest_output_wait_from(m, text, &from);
+}
+
+enum etude_status etude_guest_output_wait_from(struct etude_case_machine *m, const char *text,
+                                               size_t *from)
 {
     struct command_wait w;
     enum etude_status st;
@@ -3235,7 +3247,11 @@ enum etude_status etude_guest_output_wait(struct etude_case_machine *m, const ch
     memset(&w, 0, sizeof(w));
     w.m = m;
     w.text = text;
+    w.from = *from;
+    w.at = -1;
     st = serve_until(m->c, command_output_found, &w, NULL, step_deadline(m->c), 1);
+    if (st == ETUDE_OK && w.found)
+        *from += (size_t)w.at;
     return st == ETUDE_OK && !w.found ? ETUDE_LOST : st;
 }
 

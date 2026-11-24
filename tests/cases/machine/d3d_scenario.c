@@ -17,12 +17,14 @@ static enum etude_status vkd3d_part(struct net_case *u, struct etude_case_machin
 {
     char text[64];
     unsigned long n;
+    size_t from = 0;
 
     if (net_guest_start(u, m, argv, NULL, "d3d: units: ") == ETUDE_OK) {
         for (n = 1; n <= total; n++) {
             snprintf(text, sizeof(text), "\nd3d: done: %lu of %lu\n", n, total);
-            if (etude_guest_output_wait(m, text) != ETUDE_OK)
+            if (etude_guest_output_wait_from(m, text, &from) != ETUDE_OK)
                 break;
+            from--; /* the newline that ends the line begins the next */
             etude_progress(u->c, "unit", n);
         }
     }

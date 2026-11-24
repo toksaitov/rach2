@@ -241,6 +241,11 @@ enum etude_status etude_guest_start(struct etude_case_machine *m, const char *co
 /** Wait for TEXT on the command's standard output, within the step bound. */
 enum etude_status etude_guest_output_wait(struct etude_case_machine *m, const char *text);
 
+/** As etude_guest_output_wait, searching the output from offset `*from` alone,
+ * which is set to the offset past the text once it is found. */
+enum etude_status etude_guest_output_wait_from(struct etude_case_machine *m, const char *text,
+                                               size_t *from);
+
 /** Read currently available channel events and say whether the installed
  * command has started without an observed exit. This does not wait. */
 int etude_guest_running(struct etude_case_machine *m);
