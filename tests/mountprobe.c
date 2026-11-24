@@ -1366,6 +1366,10 @@ static const char *const ns_whys[] = {
     "an unmount of the mount over the child's copy of /proc shows the copy again",
     "a mount over the child's copy of the root leaves its names as they were",
     "an unmount of the child's copy of /proc takes it from its names",
+    "an unmount of the child's copy of /dev with mounts below it is EBUSY",
+    "an unmount of the child's copy of /dev with none below it takes it from its names",
+    "a file open for writing in the child's copy of the root",
+    "an unmount of the child's copy of the root with a file open for writing is EBUSY",
 };
 
 /** Fail with the reason of the wait status `st` of a child of the namespace
@@ -1575,7 +1579,8 @@ static int mount_tmpfs_on(const char *target)
     return syscall5(SYS_MOUNT, (long)"none", (long)target, (long)"tmpfs", 0, 0);
 }
 
-/** The child of `ns_targets_row`; its exit status, a reason of `ns_whys`. */
+/** The child of `ns_targets_row`; its exit status, a reason of `ns_whys`.
+ * The descriptor it opens keeps its file, unlinked, open for writing. */
 static int ns_targets_child(void)
 {
     if (syscall1(SYS_UNSHARE, CLONE_NEWNS) != 0) {
@@ -1587,6 +1592,21 @@ static int ns_targets_child(void)
     if (syscall2(SYS_UMOUNT2, (long)"/proc", 0) != 0 || xstat("/proc/self") != 0) {
         return 24;
     }
+    if (syscall2(SYS_UMOUNT2, (long)"/dev", 0) != -EBUSY || xstat("/dev/null") != 0) {
+        return 27;
+    }
+    if (syscall2(SYS_UMOUNT2, (long)"/dev/shm", 0) != 0 ||
+        syscall2(SYS_UMOUNT2, (long)"/dev/mqueue", 0) != 0 ||
+        syscall2(SYS_UMOUNT2, (long)"/dev", 0) != 0 || xstat("/dev/null") != -ENOENT) {
+        return 28;
+    }
+    if (syscall3(SYS_OPEN, (long)at_top("nsw"), O_WRONLY | O_CREAT | O_TRUNC, 0600) < 0 ||
+        syscall1(SYS_UNLINK, (long)at_top("nsw")) != 0) {
+        return 29;
+    }
+    if (syscall2(SYS_UMOUNT2, (long)"/", 0) != -EBUSY || xstat("/proc/self") != 0) {
+        return 30;
+    }
     if (mount_tmpfs_on("/") != 0 || xstat("/proc/self") != 0) {
         return 25;
     }
@@ -1595,10 +1615,18 @@ static int ns_targets_child(void)
 
 /**
  * In a namespace of its own a child mounts a tmpfs over its copy of /proc
- * and unmounts it, mounts one over its copy of the root, which the names it
- * looks up start below, and unmounts the copy of /proc, as on Linux. The
- * first namespace refuses the two targets (`rows_placing`) and the unmount
- * (`rows_flags`). What is left goes with the child's namespace.
+ * and unmounts it; unmounts its copy of /dev, which is EBUSY until the
+ * copies of /dev/shm and /dev/mqueue below it are unmounted; unmounts its
+ * copy of the root while it has a file there open for writing, which is
+ * EBUSY; mounts a tmpfs over that copy, which the names it looks up start
+ * below; and unmounts the copy of /proc. Linux, whose /dev has /dev/pts as
+ * a mount too, answers each the same. The first namespace refuses the two
+ * targets (`rows_placing`) and the three unmounts (`rows_flags`). What is
+ * left goes with the child's namespace.
+ *
+ * No row unmounts the copy of the root without such a file, or under the
+ * mount over it: Linux remounts the first read-only and unmounts the second,
+ * and here both are EBUSY.
  */
 static void ns_targets_row(void)
 {
@@ -2485,12 +2513,12 @@ static void rows_covered(void)
 /**
  * The rows of mount namespaces, each with a child that makes a namespace and
  * so a copy of every mount, as Linux's `copy_mnt_ns` makes one: mounts over
- * the child's copies of /proc and the root and an unmount of the first
- * (`ns_targets_row`) and, on a tmpfs at the mount point, a remount of each
- * mount on its own with its own writers (`ns_flags_row`), a descriptor that
- * keeps an ended namespace's read-only copy (`ns_desc_row`), and an unmount
- * of a mount another namespace has a copy of (`ns_unmount_row`). A failure
- * detaches the row's tmpfs.
+ * the child's copies of /proc and the root and unmounts of those and of the
+ * copy of /dev (`ns_targets_row`) and, on a tmpfs at the mount point, a
+ * remount of each mount on its own with its own writers (`ns_flags_row`), a
+ * descriptor that keeps an ended namespace's read-only copy (`ns_desc_row`),
+ * and an unmount of a mount another namespace has a copy of
+ * (`ns_unmount_row`). A failure detaches the row's tmpfs.
  */
 static void rows_namespaces(void)
 {
