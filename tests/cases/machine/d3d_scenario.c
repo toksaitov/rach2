@@ -8,9 +8,8 @@
 /**
  * Run `argv` through the guest channel as a d3dvenus vkd3d part, and report
  * the witness `unit` as each of its units ends, on run.py's line
- * `d3d: done: N of M`, so that the gap's watchdog bounds one unit and not
- * the whole part, which takes longer than the gap bound together on a
- * loaded host.
+ * `d3d: done: N of M`, so that the gap's watchdog bounds the time between
+ * two units' ends and not the whole part.
  */
 static enum etude_status vkd3d_part(struct net_case *u, struct etude_case_machine *m,
                                     const char *const argv[], struct net_run *r)

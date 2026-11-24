@@ -511,7 +511,8 @@ def main():
             # Each unit's begin and end, in seconds of the guest's monotonic
             # clock from the part's start, are printed for the record; the
             # count of ended units on the line `d3d: done: N of M` is the
-            # case's progress, so that its gap bound times one unit.
+            # case's progress, so that its gap bound times the wait between
+            # two units' ends.
             lock = threading.Lock()
             began = time.monotonic()
             ended_units = []
