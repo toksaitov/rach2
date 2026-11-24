@@ -1,0 +1,319 @@
+guest profile virgl
+guest firmware seabios
+guest accelerator kvm
+guest cpu host,invtsc=on
+guest cpus 3
+guest memory_mib 8192
+guest qemu QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)
+guest image debian-13-generic-amd64-20261103-2651.qcow2 sha512 1207e6e3efaff8ee77ab7a32c156a3eea6a9e53f94cfc48efbd1f49ba554ca36ac62ab27395aa813a1775a8c0a393b1a1ce5377d9e5670f6113e3110c57fee4b
+guest snapshot 20261108T000000Z
+guest claim debian-ref:toksaitov-m:885415:1795494163
+guest host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+guest host_load 14.74 17.27 18.84
+guest host_claims 15
+guest host_ledger etude-ledger 1
+guest host_ledger claim tests.i686-x86_64.20261123T233556Z.2721703:ports
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 2721703 87664347 1
+guest host_ledger account testing
+guest host_ledger state reserved
+guest host_ledger resource collections 1
+guest host_ledger end
+guest host_ledger claim t5780:toksaitov-a:409856:1795489313
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 409856 89029922 1
+guest host_ledger account toksaitov-a
+guest host_ledger state running
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger process keeper 409872 89029925 1
+guest host_ledger process case 409873 89029925 1
+guest host_ledger end
+guest host_ledger claim debian-ref-t5781:toksaitov-d:474821:1795490538
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 474821 89152394 1
+guest host_ledger account toksaitov-d
+guest host_ledger state running
+guest host_ledger resource cpu_millis 3000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger process keeper 475177 89154808 1
+guest host_ledger process case 475178 89154808 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261123T233556Z.2721703:machine.d3dvenus.vkd3d-6:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 2721703 87664347 1
+guest host_ledger account testing
+guest host_ledger state running
+guest host_ledger resource cpu_millis 8000
+guest host_ledger resource memory_bytes 18253611008
+guest host_ledger resource disk_bytes 21474836480
+guest host_ledger process keeper 745603 89444040 1
+guest host_ledger process case 745604 89444041 1
+guest host_ledger end
+guest host_ledger claim tests.x86_64.20261124T040952Z.573042:ports
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 573042 89397344 1
+guest host_ledger account toksaitov-s
+guest host_ledger state reserved
+guest host_ledger resource collections 1
+guest host_ledger end
+guest host_ledger claim tests.x86_64.20261124T040952Z.573042:machine.games-wine.maps:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 573042 89397344 1
+guest host_ledger account toksaitov-s
+guest host_ledger state running
+guest host_ledger resource cpu_millis 4000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger resource disk_bytes 8589934592
+guest host_ledger process keeper 745605 89444041 1
+guest host_ledger process case 745606 89444041 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261123T233556Z.2721703:machine.wifi-gnu.joins:i686:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 2721703 87664347 1
+guest host_ledger account testing
+guest host_ledger state running
+guest host_ledger resource cpu_millis 2000
+guest host_ledger resource memory_bytes 2952790016
+guest host_ledger resource disk_bytes 268435456
+guest host_ledger process keeper 884942 89513956 1
+guest host_ledger process case 884943 89513956 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261123T233556Z.2721703:machine.wifi-gnu.joins:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 2721703 87664347 1
+guest host_ledger account testing
+guest host_ledger state running
+guest host_ledger resource cpu_millis 2000
+guest host_ledger resource memory_bytes 2952790016
+guest host_ledger resource disk_bytes 268435456
+guest host_ledger process keeper 884948 89513959 1
+guest host_ledger process case 884950 89513959 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261123T233556Z.2721703:machine.wifi.security:i686:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 2721703 87664347 1
+guest host_ledger account testing
+guest host_ledger state running
+guest host_ledger resource cpu_millis 2000
+guest host_ledger resource memory_bytes 1073741824
+guest host_ledger resource disk_bytes 268435456
+guest host_ledger process keeper 884958 89513961 1
+guest host_ledger process case 884960 89513962 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261123T233556Z.2721703:machine.wifi.security:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 2721703 87664347 1
+guest host_ledger account testing
+guest host_ledger state running
+guest host_ledger resource cpu_millis 2000
+guest host_ledger resource memory_bytes 1073741824
+guest host_ledger resource disk_bytes 268435456
+guest host_ledger process keeper 884969 89513964 1
+guest host_ledger process case 884971 89513965 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261123T233556Z.2721703:machine.grow.boot:none:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 2721703 87664347 1
+guest host_ledger account testing
+guest host_ledger state running
+guest host_ledger resource cpu_millis 1000
+guest host_ledger resource memory_bytes 1610612736
+guest host_ledger resource disk_bytes 12884901888
+guest host_ledger process keeper 885278 89514869 1
+guest host_ledger process case 885281 89514869 1
+guest host_ledger end
+guest host_ledger claim debian-ref:toksaitov-m:885415:1795494163
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 885415 89514904 1
+guest host_ledger account toksaitov-m
+guest host_ledger state running
+guest host_ledger resource cpu_millis 3000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger process keeper 885705 89514962 1
+guest host_ledger process case 885706 89514962 1
+guest host_ledger end
+guest host_ledger claim tests.i686-x86_64.20261123T233556Z.2721703:machine.grow.space:none:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 2721703 87664347 1
+guest host_ledger account testing
+guest host_ledger state running
+guest host_ledger resource cpu_millis 1000
+guest host_ledger resource memory_bytes 1610612736
+guest host_ledger resource disk_bytes 12884901888
+guest host_ledger process keeper 886003 89515565 1
+guest host_ledger process case 886006 89515565 1
+guest host_ledger end
+guest host_ledger claim tests.x86_64.20261124T042255Z.886086:ports
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 886086 89515580 1
+guest host_ledger account toksaitov-m
+guest host_ledger state reserved
+guest host_ledger resource collections 1
+guest host_ledger end
+guest host_ledger claim tests.x86_64.20261124T042255Z.886086:machine.virgl.webgl-firefox-webgl2-04:x86_64:r0:a0
+guest host_ledger system linux
+guest host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+guest host_ledger owner 886086 89515580 1
+guest host_ledger account toksaitov-m
+guest host_ledger state running
+guest host_ledger resource cpu_millis 3000
+guest host_ledger resource memory_bytes 9663676416
+guest host_ledger resource disk_bytes 8589934592
+guest host_ledger process keeper 889284 89516215 1
+guest host_ledger process case 889285 89516215 1
+guest host_ledger end
+guest env GRAPHICS_CLASS=conformance
+guest env GRAPHICS_CPUS=3
+guest env GRAPHICS_MEMORY_KIB=8138292
+guest env LP_NUM_THREADS=0
+guest env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+guest env MESA_SHADER_CACHE_FILES=0
+guest env GRAPHICS_DONE=1
+guest env XVFB=-noreset
+host SFW-DPC Linux 6.18.58.1-microsoft-standard-WSL2
+host_load 9.37 10.81 14.68
+host_claims 13
+host_ledger etude-ledger 1
+host_ledger claim t5780:toksaitov-a:409856:1795489313
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 409856 89029922 1
+host_ledger account toksaitov-a
+host_ledger state running
+host_ledger resource memory_bytes 9663676416
+host_ledger process keeper 409872 89029925 1
+host_ledger process case 409873 89029925 1
+host_ledger end
+host_ledger claim debian-ref-t5781:toksaitov-d:474821:1795490538
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 474821 89152394 1
+host_ledger account toksaitov-d
+host_ledger state running
+host_ledger resource cpu_millis 3000
+host_ledger resource memory_bytes 9663676416
+host_ledger process keeper 475177 89154808 1
+host_ledger process case 475178 89154808 1
+host_ledger end
+host_ledger claim tests.x86_64.20261124T042255Z.886086:ports
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 886086 89515580 1
+host_ledger account toksaitov-m
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261124T042255Z.886086:machine.virgl.webgl-firefox-webgl2-04:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 886086 89515580 1
+host_ledger account toksaitov-m
+host_ledger state running
+host_ledger resource cpu_millis 3000
+host_ledger resource memory_bytes 9663676416
+host_ledger resource disk_bytes 8589934592
+host_ledger process keeper 889284 89516215 1
+host_ledger process case 889285 89516215 1
+host_ledger end
+host_ledger claim tests.x86_64.20261124T043102Z.891035:ports
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 891035 89523293 1
+host_ledger account toksaitov-v
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261124T043102Z.891035:machine.games-wm.wineio:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 891035 89523293 1
+host_ledger account toksaitov-v
+host_ledger state running
+host_ledger resource cpu_millis 4000
+host_ledger resource memory_bytes 9663676416
+host_ledger resource disk_bytes 8589934592
+host_ledger process keeper 956165 89564898 1
+host_ledger process case 956166 89564898 1
+host_ledger end
+host_ledger claim launch:c273628ea9d7821d1a621e685ceebf3a
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 993657 89594291 1
+host_ledger account testing
+host_ledger state running
+host_ledger resource memory_bytes 19461570560
+host_ledger process keeper 993694 89594294 1
+host_ledger process case 993695 89594294 1
+host_ledger end
+host_ledger claim browser-load:993695:1795494956921779128
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 993695 89594294 1
+host_ledger account testing
+host_ledger state blocked
+host_ledger ticket 1
+host_ledger resource cpu_millis 28000
+host_ledger resource memory_bytes 6442450944
+host_ledger end
+host_ledger claim tests.x86_64.20261124T043933Z.962409:ports
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 962409 89581997 1
+host_ledger account toksaitov-a
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261124T043933Z.962409:machine.d3d-wine.wined3d-d3d9-device:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 962409 89581997 1
+host_ledger account toksaitov-a
+host_ledger state waiting
+host_ledger ticket 2
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 18253611008
+host_ledger resource disk_bytes 21474836480
+host_ledger end
+host_ledger claim debian-ref:toksaitov-a:1022780:1795495201
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 1022780 89618654 1
+host_ledger account toksaitov-a
+host_ledger state waiting
+host_ledger ticket 3
+host_ledger resource cpu_millis 8000
+host_ledger resource memory_bytes 18253611008
+host_ledger end
+host_ledger claim tests.x86_64.20261124T044032Z.1030117:ports
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 1030117 89621481 1
+host_ledger account toksaitov-s
+host_ledger state reserved
+host_ledger resource collections 1
+host_ledger end
+host_ledger claim tests.x86_64.20261124T044032Z.1030117:machine.games-wine.maps:x86_64:r0:a0
+host_ledger system linux
+host_ledger boot 1c99ecb4-e457-424d-a94b-4430188ba304
+host_ledger owner 1030117 89621481 1
+host_ledger account toksaitov-s
+host_ledger state waiting
+host_ledger ticket 4
+host_ledger resource cpu_millis 4000
+host_ledger resource memory_bytes 9663676416
+host_ledger resource disk_bytes 8589934592
+host_ledger end

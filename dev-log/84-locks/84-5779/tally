@@ -1,0 +1,17 @@
+checks failing in every run: 1065; moving: 13
+debian: first runs {823: 5, 824: 1, 825: 2}; verdicts {823: 7, 824: 1}
+rach2: first runs {823: 7, 825: 1}; verdicts {823: 5, 824: 2, 826: 1}
+check                          debian rach2
+isampler2darray_fragment 17    1/16 0/16
+sampler2darray_fixed_vertex 10 1/16 0/16
+sampler2darray_fixed_vertex 5  1/16 0/16
+usampler2darray_fragment 29    1/16 0/16
+usampler2darray_fragment 33    1/16 0/16
+usampler2darray_fragment 34    1/16 0/16
+usampler2darray_vertex 19      0/16 1/16
+usampler2darray_vertex 7       0/16 1/16
+usampler3d_fragment 7          0/16 1/16
+usampler3d_fragment 8          0/16 1/16
+usampler3d_vertex 18           0/16 1/16
+usampler3d_vertex 20           0/16 1/16
+usampler3d_vertex 32           0/16 1/16

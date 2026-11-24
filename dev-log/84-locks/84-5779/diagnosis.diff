@@ -1,0 +1,125 @@
+diff --git a/tests/cases/machine.virgl.json b/tests/cases/machine.virgl.json
+index 8e67b56bf3..222f472997 100644
+--- a/tests/cases/machine.virgl.json
++++ b/tests/cases/machine.virgl.json
+@@ -12933,7 +12933,7 @@
+               }
+             ],
+             "cpu": "max",
+-            "processors": 8,
++            "processors": 3,
+             "memory_bytes": 8589934592,
+             "firmware": "direct",
+             "devices": [],
+@@ -13003,8 +13003,8 @@
+         }
+       },
+       "resources": {
+-        "cpu_millis": 8000,
+-        "cpu_ceiling_millis": 8000,
++        "cpu_millis": 3000,
++        "cpu_ceiling_millis": 3000,
+         "memory_bytes": 9663676416,
+         "disk_bytes": 8589934592,
+         "locks": [],
+diff --git a/tests/cases/machine/graphics_scenario.c b/tests/cases/machine/graphics_scenario.c
+index c9385366f6..d1ec22346d 100644
+--- a/tests/cases/machine/graphics_scenario.c
++++ b/tests/cases/machine/graphics_scenario.c
+@@ -591,9 +591,9 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
+         } else {
+             *pattern = "webgl: result: ";
+             snprintf(runner, size,
+-                     "sh " GRAPHICS_DIR "/runners/webgl.sh -g -b %s -v %s%s -x " VIRGL_OMIT
+-                     " -o " GRAPHICS_DIR "/out %s",
+-                     s->browser, s->version, virgl_pages(s), s->chunk);
++                     "sh " GRAPHICS_DIR "/runners/webgl.sh -R 8 -P 1034,1095,1132,1133,1134,1135,1136,1137,1138,1139,1140,1141,1142,1143,1144,1145,1146,1147 -g -b %s -v %s%s -k 1 -x " VIRGL_OMIT
++                     " -o " GRAPHICS_DIR "/out 1146",
++                     s->browser, s->version, virgl_pages(s));
+         }
+         return 0;
+     }
+diff --git a/tests/graphics/runners/webgl.html b/tests/graphics/runners/webgl.html
+index 8b54f90729..fcf674f1ed 100644
+--- a/tests/graphics/runners/webgl.html
++++ b/tests/graphics/runners/webgl.html
+@@ -31,7 +31,7 @@ const OMIT_DIRS = [...OMIT].filter(s => s.endsWith("/"));
+ const omitted = path => OMIT.has(path) || OMIT_DIRS.some(d => path.startsWith(d));
+ const TRY = Number(q.get("try") || "0");
+ const FAILED = [];
+-const FAILURES = 100;
++const FAILURES = 5000;
+ 
+ const xhrOpen = XMLHttpRequest.prototype.open;
+ const xhrSend = XMLHttpRequest.prototype.send;
+@@ -47,7 +47,8 @@ XMLHttpRequest.prototype.send = function (body) {
+ };
+ 
+ function post(event) {
+-  return fetch("/event", { method: "POST", body: JSON.stringify(event), keepalive: true });
++  const body = JSON.stringify(event);
++  return fetch("/event", { method: "POST", body: body, keepalive: body.length < 60000 });
+ }
+ 
+ // The renderer of a WebGL context, unmasked where the browser gives it.
+diff --git a/tests/graphics/runners/webgl.sh b/tests/graphics/runners/webgl.sh
+index 59f25eaeda..f46969e66d 100755
+--- a/tests/graphics/runners/webgl.sh
++++ b/tests/graphics/runners/webgl.sh
+@@ -56,6 +56,29 @@
+ # a result, which judge.py compares with the reference's.
+ set -eu
+ 
++# Diagnosis of task 5779 only: -R N runs the same arguments N times, each
++# with its own -o OUT/rI.
++case " $* " in
++*" -R "*)
++    reps=1 rout=. rest=
++    while [ $# -gt 1 ]; do
++        case $1 in
++            -R) reps=$2; shift 2 ;;
++            -o) rout=$2; shift 2 ;;
++            *) rest="$rest $1"; shift ;;
++        esac
++    done
++    i=1
++    while [ "$i" -le "$reps" ]; do
++        mkdir -p "$rout/r$i"
++        # shellcheck disable=SC2086
++        sh "$0" $rest -o "$rout/r$i" "$1" || echo "webgl: rep $i: status $?" >&2
++        i=$((i + 1))
++    done
++    exit 0
++    ;;
++esac
++
+ RUNNER_DIR=$(cd "$(dirname "$0")" && pwd)
+ # shellcheck source=common.sh
+ . "$RUNNER_DIR/common.sh"
+@@ -63,7 +86,8 @@ RUNNER_DIR=$(cd "$(dirname "$0")" && pwd)
+ browser=chromium version=2.0.1 size=250 suite=/usr/share/webgl/sdk/tests out=. omit='' batch=0
+ silence=120
+ # shellcheck disable=SC2034 # runner_weston reads RUNNER_RENDERER
+-while getopts b:v:k:n:s:x:o:g o; do
++plist=
++while getopts b:v:k:n:s:x:o:gP: o; do
+     case $o in
+         b) browser=$OPTARG ;;
+         v) version=$OPTARG ;;
+@@ -73,6 +97,7 @@ while getopts b:v:k:n:s:x:o:g o; do
+         x) omit=$OPTARG ;;
+         o) out=$OPTARG ;;
+         g) RUNNER_RENDERER=gl ;;
++        P) plist=$(echo "$OPTARG" | tr , ' ') ;;
+         *) exit 2 ;;
+     esac
+ done
+@@ -197,7 +222,7 @@ chunk()
+ {
+     n=$1
+     first=$((n * size))
+-    run_pages $(seq "$first" $((first + size - 1)))
++    run_pages ${plist:-$(seq "$first" $((first + size - 1)))}
+     [ -n "$count" ] || runner_die "the harness gave no list"
+     [ "$first" -lt "$count" ] || runner_die "chunk $n starts past the list's $count pages"
+     chunks=$(((count + size - 1) / size))
