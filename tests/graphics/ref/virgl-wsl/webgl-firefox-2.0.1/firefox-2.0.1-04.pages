@@ -144,7 +144,7 @@
 1143 fail 724689 24 0 0 fail deqp/functional/gles3/shadertexturefunction/textureprojgradoffset.html
 1144 fail 724593 24 0 0 fail deqp/functional/gles3/shadertexturefunction/texelfetch.html
 1145 fail 724593 24 0 0 fail deqp/functional/gles3/shadertexturefunction/texelfetchoffset.html
-1146 fail 824 1077 0 0 fail deqp/functional/gles3/shadertexturefunction/texturesize.html
+1146 fail 823 1078 0 0 fail deqp/functional/gles3/shadertexturefunction/texturesize.html
 1147 fail 755150 6 0 0 fail deqp/functional/gles3/texturefiltering/2d_formats_00.html
 1148 fail 755150 6 0 0 fail deqp/functional/gles3/texturefiltering/2d_formats_01.html
 1149 fail 755150 6 0 0 fail deqp/functional/gles3/texturefiltering/2d_formats_02.html
