@@ -51,6 +51,9 @@ PRELOADER = (
     ("top32", 0x00007f000000, 0x00ff0000),
     ("top64", 0x7ffffe000000, 0x01ff0000),
 )
+# The starts of a hold program the maps row makes to find one whose stack
+# lies outside the preloader's ranges (`stack_ranges`).
+HOLD_STARTS = 3
 CHILDREN = set()
 
 
@@ -162,6 +165,23 @@ def coverage(maps):
         end = base + size
         result[name] = sum(max(0, min(hi, end) - max(lo, base)) for lo, hi in spans)
     return result
+
+
+def stack_ranges(maps):
+    """
+    Return the names of the preloader ranges that the [stack] mapping of the
+    MAPS text overlaps. The preloader leaves a range unreserved when the
+    initial stack lies in it (loader/preloader.c, wld_start), and the stack's
+    top is drawn anywhere in the 16 GiB below the top of user space, on Linux
+    (STACK_RND_MASK) as on Rach2, so about one start in 512 puts it in top64;
+    Linux's counts were taken from starts whose stacks lay outside them all.
+    """
+    names = []
+    for line in maps.splitlines():
+        if line.endswith("[stack]"):
+            lo, hi = (int(x, 16) for x in line.split()[0].split("-"))
+            names += [name for name, base, size in PRELOADER if lo < base + size and hi > base]
+    return names
 
 
 def find_process(comm, uid):
@@ -499,31 +519,61 @@ class Runner:
             return False
         return True
 
+    def hold(self, name):
+        """
+        Start the hold program NAME, read its maps once it is ready, and let
+        it end. Returns its exit status and the maps text, which is kept in
+        NAME.maps.
+        """
+        go = self.work / ("go" + name)
+        output = self.work / (name + ".txt")
+        for path in (go, output):
+            if path.exists():
+                path.unlink()
+        proc = self.launch(name, [str(HERE / "probes" / (name + ".exe"))],
+                           {"PROBE_OUT": "Z:" + str(output), "PROBE_GO": "Z:" + str(go)},
+                           wait=False)
+        try:
+            if not wait_for(output, r"^hold: ready", proc):
+                raise RuntimeError("%s ended before it was ready" % name)
+            pid = find_process(name + ".exe", os.getuid())
+            if pid is None:
+                raise RuntimeError("no process named %s.exe" % name)
+            maps = Path("/proc/%d/maps" % pid).read_text()
+            (self.out / (name + ".maps")).write_text(maps)
+            go.touch()
+            status = finish(proc)
+        finally:
+            if proc.poll() is None:
+                finish(proc)
+        self.server_wait()
+        return status, maps
+
     def row_maps(self, results, ref):
-        """Read each hold program's maps and compare the preloader's ranges."""
+        """
+        Read each hold program's maps and compare the preloader's ranges. A
+        start whose stack lies in one of the ranges is set aside, with its
+        maps and log kept as NAME.N.maps and NAME.N.log, and the program is
+        started again, up to HOLD_STARTS times (`stack_ranges`).
+        """
         self.make_prefix()
         ok = True
         for bits in ("64", "32"):
             name = "hold" + bits
-            go = self.work / ("go" + bits)
-            output = self.work / (name + ".txt")
-            proc = self.launch(name, [str(HERE / "probes" / (name + ".exe"))],
-                               {"PROBE_OUT": "Z:" + str(output), "PROBE_GO": "Z:" + str(go)},
-                               wait=False)
-            try:
-                if not wait_for(output, r"^hold: ready", proc):
-                    raise RuntimeError("%s ended before it was ready" % name)
-                pid = find_process(name + ".exe", os.getuid())
-                if pid is None:
-                    raise RuntimeError("no process named %s.exe" % name)
-                maps = Path("/proc/%d/maps" % pid).read_text()
-                (self.out / (name + ".maps")).write_text(maps)
-                go.touch()
-                status = finish(proc)
-            finally:
-                if proc.poll() is None:
-                    finish(proc)
-            self.server_wait()
+            for start in range(1, HOLD_STARTS + 1):
+                status, maps = self.hold(name)
+                inside = stack_ranges(maps)
+                if not inside:
+                    break
+                for kind in ("maps", "log"):
+                    shutil.copy(self.out / ("%s.%s" % (name, kind)),
+                                self.out / ("%s.%d.%s" % (name, start, kind)))
+                say("%s: start %d: the stack lies in %s, which the preloader leaves "
+                    "unreserved" % (name, start, " ".join(inside)))
+            if inside:
+                say("%s: the stack lay in a preloader range in each of %d starts" %
+                    (name, HOLD_STARTS))
+                ok = False
             have = coverage(maps)
             results[name] = {"exit": status, "coverage": have}
             want = ref.get(name) if ref is not None else None
