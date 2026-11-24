@@ -444,6 +444,10 @@ def main():
                 rc, stopped = run_proton(launch + ["runinprefix", str(HERE / "wine" / (exe + "_test.exe")), name],
                                          env, out / "unit.log", out, work, stop)
                 text = (out / "unit.log").read_text(errors="replace")
+                # The case's evidence keeps this output, not the unit's log.
+                for line in text.splitlines():
+                    if re.match(WINE_FAILED, line):
+                        print("d3d: failure: " + line, flush=True)
                 counts = summaries(text, WINE_SUMMARY % re.escape(name))
                 lines = len(re.findall(TEST_LINE, text, re.M))
                 actual = {"exit": rc, "summary": counts, "progress": stopped, "lines": lines}
