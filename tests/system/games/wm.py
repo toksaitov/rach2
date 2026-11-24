@@ -553,7 +553,12 @@ def tone_windows(data):
 
 def row_wineio():
     """Wine's waveOut tone through PulseAudio on OSS, and DirectInput's devices."""
-    settings = subprocess.run(desktop("rach2-game --print"), stdout=subprocess.PIPE,
+    # The session's PulseAudio plays the tones, and its Weston gives Wine a
+    # display; with neither, wineboot never returns.
+    session("1366x768", debug=False)
+    while not Path("/run/user/%d/pulse/native" % UID).is_socket():
+        time.sleep(0.1)
+    settings =subprocess.run(desktop("rach2-game --print"), stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True).stdout
     check("latency", "PULSE_LATENCY_MSEC=60\n" in settings, "rach2-game --print")
     make_prefix()
