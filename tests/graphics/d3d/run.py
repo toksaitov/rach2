@@ -30,11 +30,48 @@ VK_FAILED = r"^%s:(\d+): Test failed: "
 # test_unused_attachments_mix_and_match takes 900 s of one processor where
 # the others take a few seconds each.
 VK_LONG = ("test_unused_attachments_mix_and_match",)
-CHILDREN = set()
+# Each running command's Popen and the log its output goes to.
+CHILDREN = {}
+# The lines of a stopped command's log that report_running() prints.
+LOG_TAIL = 30
+
+
+def report_running(proc, log):
+    """Print to stderr where a command that a stop ends had got to.
+
+    For each thread of the command's process group it prints the state,
+    wait channel and system call that /proc gives, and then the last
+    LOG_TAIL lines of its log, so that a case stopped past its bound shows
+    what its unit waited on: the log goes with the guest's temporary files.
+    """
+    lines = ["d3d: stopped: running: %s, process group %d" % (log.name, proc.pid)]
+    for entry in Path("/proc").iterdir():
+        try:
+            if not entry.name.isdigit():
+                continue
+            # The fields after the command's name: state, parent, group.
+            if int((entry / "stat").read_text().rpartition(")")[2].split()[2]) != proc.pid:
+                continue
+            for task in sorted((entry / "task").iterdir(), key=lambda t: int(t.name)):
+                state = (task / "stat").read_text().rpartition(")")[2].split()[0]
+                lines.append("d3d: stopped: thread %s of %s %s: state %s, wchan %s, syscall %s" % (
+                    task.name, entry.name, (task / "comm").read_text().strip(), state,
+                    (task / "wchan").read_text().strip() or "0", (task / "syscall").read_text().strip()))
+        except (OSError, ValueError, IndexError):
+            continue
+    try:
+        tail = log.read_text(errors="replace").splitlines()[-LOG_TAIL:]
+    except OSError:
+        tail = []
+    lines += ["d3d: stopped: log: " + line for line in tail]
+    sys.stderr.write("\n".join(lines) + "\n")
+    sys.stderr.flush()
 
 
 def interrupted(signum, _frame):
-    """Stop owned command groups before unwinding the workspace cleanup."""
+    """Report and stop owned command groups before unwinding the workspace cleanup."""
+    for proc, log in list(CHILDREN.items()):
+        report_running(proc, log)
     for proc in list(CHILDREN):
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -87,7 +124,7 @@ def run_command(argv, env, log, stop=None, lost=()):
     with log.open("wb") as dest:
         proc = subprocess.Popen(argv, env=env, stdout=dest,
                                 stderr=subprocess.STDOUT, start_new_session=True)
-        CHILDREN.add(proc)
+        CHILDREN[proc] = log
         try:
             if stop or lost:
                 marker = stop[0].encode() if stop else None
@@ -120,7 +157,7 @@ def run_command(argv, env, log, stop=None, lost=()):
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
-            CHILDREN.discard(proc)
+            CHILDREN.pop(proc, None)
 
 
 def tails(watched):
