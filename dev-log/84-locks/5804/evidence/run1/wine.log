@@ -1,0 +1,32 @@
+ProtonFixes[740] WARN: Skipping fix execution. Execution conditions are not satisfied.
+Proton: Upgrading prefix from None to 11.0-100 with GE-Proton11-12 (/tmp/t5804.mcrkvvc7/compat/)
+ProtonFixes[740] WARN: Skipping upscaler setup. Execution conditions are not satisfied.
+ProtonFixes[740] WARN: Skipping fix execution. Execution conditions are not satisfied.
+===
+======================
+Proton: 1793687165 GE-Proton11-12
+SteamGameId: 2733
+Command: ['c:\\windows\\system32\\wineboot.exe', '-u']
+Options: {'forcelgadd', 'wined3d', 'gamedrive', 'wow64'}
+Kernel: Linux 6.12.115+deb13.1-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01) x86_64
+Language: LC_ALL None, LC_MESSAGES None, LC_CTYPE None
+PATH: /opt/proton/files/bin/:/usr/local/bin:/usr/bin:/bin:/usr/games
+System WINEDEBUG: -all,err+all
+Effective WINEDEBUG: -all,err+all
+======================
+Inherited environment
+DISPLAY: :0
+======================
+No NV driver found, disabling nvapi
+fsync: up and running.
+0034:err:service:process_send_start_message service L"PlugPlay" failed to start
+00a4:err:sync:RtlpWaitForCriticalSection section 00006FFFFFF6B420 "../src-wine/dlls/ntdll/loader.c: loader_section" wait timed out in thread 00a4, blocked by 009c, retrying (60 sec)
+0034:err:service:process_send_command receiving command result timed out
+0034:err:service:process_send_command receiving command result timed out
+0034:err:service:process_send_command receiving command result timed out
+0094:err:wineusb:DriverEntry Failed to initialize Unix library, status 0xc0000135.
+0094:err:ntoskrnl:ZwLoadDriver failed to create driver L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\wineusb": c0000135
+0094:err:ntoskrnl:ZwLoadDriver failed to create driver L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\winebth": c0000142
+00e0:err:winediag:nodrv_CreateWindow Application tried to create a window, but no driver could be loaded.
+00e0:err:winediag:nodrv_CreateWindow L"The explorer process failed to start."
+0024:err:steamclient:steamclient_init unable to load native steamclient library

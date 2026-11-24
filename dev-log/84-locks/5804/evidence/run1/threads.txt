@@ -1,0 +1,177 @@
+loadavg 1.71 0.51 0.30 1/175 1159
+P 682 /usr/lib/systemd/systemd --user 
+  T 682 systemd state S wchan do_epoll_wait syscall 232 0x4 0x563f440ce270 0x26 0xffffffffffffffff 0x0 0x0
+P 685 (sd-pam) 
+  T 685 (sd-pam) state S wchan do_sigtimedwait.isra.0 syscall 128 0x7ffe38c19ee0 0x7ffe38c19d40 0x0 0x8 0x0 0x0
+P 730 sshd-session: gfx@notty             
+  T 730 sshd-session state S wchan do_sys_poll syscall 271 0x564a62dc6300 0x4 0x7fffd6ee14b0 0x7fffd6ee15c0 0x8 0x0
+P 731 python3 -u /tmp/one.py 
+  T 731 python3 state S wchan hrtimer_nanosleep syscall 230 0x1 0x1 0x7ffc289dfe90 0x0 0x0 0x0
+P 732 weston --backend=headless --renderer=gl --width=1280 --height=800 --shell=desktop --idle-time=0 --xwayland --socket=games-wine --log=/tmp/t5804-out/weston.log 
+  T 732 weston state S wchan do_epoll_wait syscall 232 0x4 0x7ffc3086de20 0x20 0xffffffffffffffff 0x0 0x0
+  T 733 weston:disk$0 state S wchan futex_wait_queue syscall 202 0x556cf00de770 0x189 0x2 0x0 0x0 0xffffffff
+    FX futex addr 0x556cf00de770 op 0x189 expect 0x2 now 0x2 SAME pfn 0x124fa9
+  T 734 weston:disk$0 state S wchan futex_wait_queue syscall 202 0x556cf010a580 0x189 0x0 0x0 0x0 0xffffffff
+    FX futex addr 0x556cf010a580 op 0x189 expect 0x0 now 0x0 SAME pfn 0x125397
+P 735 /usr/libexec/weston-keyboard 
+  T 735 weston-keyboard state S wchan do_epoll_wait syscall 232 0x0 0x7ffe3d1d1010 0x10 0xffffffffffffffff 0x0 0x0
+P 736 /usr/libexec/weston-desktop-shell 
+  T 736 weston-desktop- state S wchan do_epoll_wait syscall 232 0x0 0x7ffffb0dfa60 0x10 0xffffffffffffffff 0x0 0x0
+P 737 sh /usr/local/bin/rach2-game --id 2733 --prefix /tmp/t5804.mcrkvvc7/compat -- c:\windows\system32\cmd.exe /c exit 0 
+  T 737 sh state S wchan do_wait syscall 61 0xffffffffffffffff 0x7ffd50de51bc 0x0 0x0 0x0 0x0
+P 740 python3 /opt/proton/proton run c:\windows\system32\wineboot.exe -u 
+  T 740 python3 state S wchan do_wait syscall 61 0x30d 0x7ffd2bbbcffc 0x0 0x0 0x0 0x0
+P 781 c:\windows\system32\steam.exe c:\windows\system32\wineboot.exe -u                                                                                                     
+  T 781 steam.exe state S wchan futex_wait_multiple syscall 449 0x1000fee00 0x2 0x0 0x0 0x0 0x7f7b26d9c30c
+    FX waitv n 2 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f7b26b6e660 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [1] addr 0x7f7b26b6fcd0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+  T 933 steam.exe state S wchan futex_wait_multiple syscall 449 0x1001fdb10 0x1 0x0 0x0 0x0 0x1001ff9c8
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f7b26b6fc00 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+  T 948 steam.exe state S wchan futex_wait_multiple syscall 449 0x1002fdc50 0x1 0x0 0x0 0x0 0x0
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f7b26b6fcf0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+P 783 /opt/proton/files/lib/wine/../../bin/wineserver 
+  T 783 wineserver state S wchan do_epoll_wait syscall 441 0x9 0x7ffe98c640d0 0x80 0x7ffe98c640c0 0x0 0x8
+P 787 C:\windows\system32\services.exe                                                                                                   
+  T 787 services.exe state S wchan futex_wait_multiple syscall 449 0x1000fee10 0x1 0x0 0x0 0x0 0x3d
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7fd487943660 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+  T 788 wine_rpcrt4_ser state S wchan futex_wait_multiple syscall 449 0x1001fdc40 0x3 0x0 0x0 0x0 0x0
+    FX waitv n 3 flags 0x0 timeout 0x0
+    FX [0] addr 0x7fd4879435b0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [1] addr 0x7fd487943650 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [2] addr 0x7fd487943620 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+  T 791 wine_rpcrt4_io state S wchan futex_wait_multiple syscall 449 0x1002fdc50 0x1 0x0 0x0 0x0 0x0
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7fd4879437e0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+  T 803 wine_rpcrt4_io state S wchan futex_wait_multiple syscall 449 0x1004fdc50 0x1 0x0 0x0 0x0 0x0
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7fd487943c10 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+  T 810 wine_rpcrt4_io state S wchan futex_wait_multiple syscall 449 0x1005fdc50 0x1 0x0 0x0 0x0 0x0
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7fd487943f50 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+  T 891 services.exe state S wchan pipe_read syscall 0 0x23 0x1006fd1c0 0x10 0x0 0x0 0x0
+  T 893 wine_rpcrt4_io state S wchan futex_wait_multiple syscall 449 0x1007fdc50 0x1 0x0 0x0 0x0 0x0
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7fd4879442f0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+  T 922 wine_rpcrt4_io state S wchan futex_wait_multiple syscall 449 0x1009fdc50 0x1 0x0 0x0 0x0 0x0
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7fd487944960 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+  T 938 wine_rpcrt4_io state S wchan futex_wait_multiple syscall 449 0x100cfdc50 0x1 0x0 0x0 0x0 0x0
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7fd487944ed0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+  T 945 wine_rpcrt4_io state S wchan futex_wait_multiple syscall 449 0x1008fdc50 0x1 0x0 0x0 0x0 0x0
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7fd487944b30 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+P 790 C:\windows\system32\winedevice.exe                                                                                                   
+  T 790 winedevice.exe state S wchan futex_wait_multiple syscall 449 0x1000fee00 0x4 0x0 0x0 0x0 0x1000ff460
+    FX waitv n 4 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f1d0e445660 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [1] addr 0x7f1d0e445880 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [2] addr 0x7f1d0e445870 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [3] addr 0x7f1d0e4458d0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+  T 793 winedevice.exe state S wchan pipe_read syscall 0 0xf 0x1001fd100 0x10 0x0 0x0 0x0
+  T 794 wine_sechost_se state S wchan futex_wait_multiple syscall 449 0x1002fdc40 0x3 0x0 0x0 0x0 0x1002fe2a0
+    FX waitv n 3 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f1d0e445910 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [1] addr 0x7f1d0e445920 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [2] addr 0x7f1d0e4458e0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+  T 795 wine_sechost_se state S wchan futex_wait_queue syscall 202 0x7f1d0e435050 0x80 0x0 0x0 0x0 0x0
+    FX futex addr 0x7f1d0e435050 op 0x80 expect 0x0 now 0x0 SAME pfn 0x15442f
+  T 796 winedevice.exe state S wchan futex_wait_multiple syscall 449 0x1004fdd30 0x1 0x0 0x0 0x0 0x0
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f1d0e4459e0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+  T 797 winedevice.exe state S wchan do_sys_poll syscall 7 0x1005fe2b0 0x1 0xffffffffffffffff 0x0 0x0 0x0
+  T 798 winedevice.exe state S wchan do_select syscall 270 0x0 0x0 0x0 0x0 0x1006fe350 0x0
+  T 806 wine_nsi_notifi state S wchan __skb_wait_for_more_packets syscall 45 0x2b 0x1007fd3a0 0x1000 0x0 0x0 0x0
+  T 807 winedevice.exe state S wchan do_sys_poll syscall 7 0x7f1ce8000bc0 0x1 0xffffffffffffffff 0x0 0x0 0x0
+P 802 C:\windows\system32\svchost.exe -k LocalServiceNetworkRestricted                                                                                                   
+  T 802 svchost.exe state S wchan futex_wait_multiple syscall 449 0x1000fee00 0x4 0x0 0x0 0x0 0x1000ff460
+    FX waitv n 4 flags 0x0 timeout 0x0
+    FX [0] addr 0x7fbde820c660 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [1] addr 0x7fbde820cc60 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [2] addr 0x7fbde820cc50 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [3] addr 0x7fbde820ccb0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+  T 804 svchost.exe state S wchan pipe_read syscall 0 0xe 0x1001fd100 0x10 0x0 0x0 0x0
+  T 805 wine_sechost_se state S wchan futex_wait_multiple syscall 449 0x1002fdc50 0x1 0x0 0x0 0x0 0x0
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7fbde820ccd0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+P 809 C:\windows\system32\winedevice.exe                                                                                                   
+  T 809 winedevice.exe state S wchan futex_wait_multiple syscall 449 0x1000fee00 0x4 0x0 0x0 0x0 0x1000ff460
+    FX waitv n 4 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f195fdba660 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [1] addr 0x7f195fdbafa0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [2] addr 0x7f195fdbaf90 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [3] addr 0x7f195fdbaff0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+  T 811 winedevice.exe state S wchan pipe_read syscall 0 0xe 0x1001fd100 0x10 0x0 0x0 0x0
+  T 812 wine_sechost_se state S wchan futex_wait_multiple syscall 449 0x1002fdc40 0x3 0x0 0x0 0x0 0x1002fe2a0
+    FX waitv n 3 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f195fdbb030 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+    FX [1] addr 0x7f195fdbb040 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+    FX [2] addr 0x7f195fdbb000 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+  T 813 wine_sechost_se state S wchan futex_wait_queue syscall 202 0x7f195fdaa098 0x80 0x0 0x0 0x0 0x0
+    FX futex addr 0x7f195fdaa098 op 0x80 expect 0x0 now 0x0 SAME pfn 0x168eab
+  T 814 winedevice.exe state S wchan do_sys_poll syscall 7 0x1004fcfc0 0x2 0xffffffffffffffff 0x0 0x0 0x0
+  T 895 wine_sechost_se state S wchan futex_wait_multiple syscall 449 0x1005fdc40 0x2 0x0 0x0 0x0 0x0
+    FX waitv n 2 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f195fdbb370 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+    FX [1] addr 0x7f195fdbb380 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+  T 897 wine_sechost_se state S wchan futex_wait_multiple syscall 449 0x1007fdc40 0x2 0x0 0x0 0x0 0x0
+    FX waitv n 2 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f195fdbb3d0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+    FX [1] addr 0x7f195fdbb3e0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+P 921 C:\windows\system32\lsass.exe                                                                                                   
+  T 921 lsass.exe state S wchan futex_wait_multiple syscall 449 0x1000fee00 0x4 0x0 0x0 0x0 0x1000ff460
+    FX waitv n 4 flags 0x0 timeout 0x0
+    FX [0] addr 0x7fdde1cba660 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [1] addr 0x7fdde1cbba00 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+    FX [2] addr 0x7fdde1cbb9f0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+    FX [3] addr 0x7fdde1cbba50 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+  T 924 lsass.exe state S wchan pipe_read syscall 0 0xe 0x1001fd100 0x10 0x0 0x0 0x0
+  T 925 wine_sechost_se state S wchan futex_wait_multiple syscall 449 0x1002fdc50 0x1 0x0 0x0 0x0 0x0
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7fdde1cbba90 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+P 928 /usr/bin/Xwayland :0 -rootless -listenfd 21 -listenfd 22 -displayfd 35 -wm 33 -terminate 
+  T 928 Xwayland state S wchan do_epoll_wait syscall 232 0x0 0x7ffd464ba080 0x100 0xffffffffffffffff 0x0 0x0
+  T 929 Xwaylan:disk$0 state S wchan futex_wait_queue syscall 202 0x5602280a4fe4 0x189 0x3 0x0 0x0 0xffffffff
+    FX futex addr 0x5602280a4fe4 op 0x189 expect 0x3 now 0x3 SAME pfn 0x15eca4
+P 937 C:\windows\system32\rpcss.exe                                                                                                   
+  T 937 rpcss.exe state S wchan futex_wait_multiple syscall 449 0x1000fee00 0x4 0x0 0x0 0x0 0x1000ff460
+    FX waitv n 4 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f8b109a8660 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x137580
+    FX [1] addr 0x7f8b109a9f20 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+    FX [2] addr 0x7f8b109a9f00 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+    FX [3] addr 0x7f8b109a9f60 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+  T 939 rpcss.exe state S wchan pipe_read syscall 0 0xe 0x1001fd100 0x10 0x0 0x0 0x0
+  T 940 wine_sechost_se state S wchan futex_wait_multiple syscall 449 0x1002fdc50 0x1 0x0 0x0 0x0 0x0
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f8b109aa130 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x13e6cc
+  T 941 wine_rpcrt4_ser state S wchan futex_wait_multiple syscall 449 0x1003fdc40 0x5 0x0 0x0 0x0 0x0
+    FX waitv n 5 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f8b109a9fc0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+    FX [1] addr 0x7f8b109aa080 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x13e6cc
+    FX [2] addr 0x7f8b109aa090 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x13e6cc
+    FX [3] addr 0x7f8b109aa0a0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x13e6cc
+    FX [4] addr 0x7f8b109aa050 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x13e6cc
+  T 942 wine_rpcrt4_ser state S wchan futex_wait_multiple syscall 449 0x1004fdc40 0x3 0x0 0x0 0x0 0x0
+    FX waitv n 3 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f8b109a9f80 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x113b41
+    FX [1] addr 0x7f8b109aa120 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x13e6cc
+    FX [2] addr 0x7f8b109aa0f0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x13e6cc
+P 947 c:\windows\system32\wineboot.exe -u                                                                                                   
+  T 947 wineboot.exe state S wchan futex_wait_multiple syscall 449 0x1000feb00 0x2 0x0 0x0 0x0 0x0
+    FX waitv n 2 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f256d1a3270 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x13e6cc
+    FX [1] addr 0x7f256d1a32f0 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x13e6cc
+P 950 C:\windows\system32\conhost.exe --server 0x3c                                                                                                   
+  T 950 conhost.exe state S wchan futex_wait_multiple syscall 449 0x1000fd040 0x1 0x0 0x0 0x0 0x1dd7be304d76300
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7fbe584d1250 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x13e6cc
+P 952 C:\windows\system32\rundll32.exe setupapi,InstallHinfSection PreInstall 128 \\?\Z:\opt\proton\files\share\wine\wine.inf                                                                                 
+  T 952 rundll32.exe state S wchan futex_wait_multiple syscall 449 0x1000fd040 0x1 0x0 0x0 0x0 0x1dd7be304d76300
+    FX waitv n 1 flags 0x0 timeout 0x0
+    FX [0] addr 0x7f0e45ebd300 expect 0x0 now 0x0 flags 0x2 SAME pfn 0x13e6cc
+P 1156 sshd-session: gfx@notty             
+  T 1156 sshd-session state S wchan do_sys_poll syscall 271 0x55e8af06e300 0x4 0x7ffc4ac12c50 0x7ffc4ac12d60 0x8 0x0
