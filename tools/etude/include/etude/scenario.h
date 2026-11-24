@@ -77,6 +77,10 @@ void etude_branch(struct etude_case *c, const char *group, const char *alternati
 /** Report that witness `witness` has completed `units` in all. */
 void etude_progress(struct etude_case *c, const char *witness, uint64_t units);
 
+/** Give the limit the manifest gives `witness`, in units, or 0 when it gives
+ * none or the case has no such witness. */
+uint64_t etude_progress_limit(const struct etude_case *c, const char *witness);
+
 /**
  * Begin step `step` of the manifest, ending the step before it.
  *

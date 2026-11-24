@@ -986,6 +986,20 @@ void etude_progress(struct etude_case *c, const char *witness, uint64_t units)
     record("%s %s %llu", ETUDE_REPORT_PROGRESS, witness, (unsigned long long)units);
 }
 
+uint64_t etude_progress_limit(const struct etude_case *c, const char *witness)
+{
+    const struct eh_json *list = eh_json_get(c->kase, "progress");
+    const struct eh_json *w;
+
+    for (w = list != NULL ? list->child : NULL; w != NULL; w = w->next) {
+        const char *id = jtext(w, "witness_id");
+
+        if (id != NULL && strcmp(id, witness) == 0)
+            return jnum(w, "limit");
+    }
+    return 0;
+}
+
 /* ---- Files of the attempt. ---- */
 
 /** Remember `path`, which the library made, for removal after a pass. */
