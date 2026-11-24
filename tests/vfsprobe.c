@@ -2711,7 +2711,7 @@ static void attr_change(const char *path, int dir, const char *why)
  */
 static void attr_place(unsigned target, int volume, const char *why)
 {
-    static char bytes[4096];
+    static const char bytes[4096];
     const char *path = attr_path(0);
     int fd, n;
 
