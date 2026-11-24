@@ -508,6 +508,19 @@ def main():
                 raise RuntimeError("unknown vkd3d part or test")
             names = sorted(names, key=lambda n: n not in VK_LONG)
             jobs = min(4, cpus)
+            # Each unit's begin and end, in seconds of the guest's monotonic
+            # clock from the part's start, are printed for the record; the
+            # count of ended units on the line `d3d: done: N of M` is the
+            # case's progress, so that its gap bound times one unit.
+            lock = threading.Lock()
+            began = time.monotonic()
+            ended_units = []
+            print("d3d: units: %d" % len(names), flush=True)
+            def report(name, result):
+                with lock:
+                    ended_units.append(name)
+                    print("d3d: unit: %s %s" % (name, json.dumps(result)), flush=True)
+                    print("d3d: done: %d of %d" % (len(ended_units), len(names)), flush=True)
             def unit(name):
                 unit_env = env.copy()
                 unit_env["VKD3D_TEST_MATCH"] = name
@@ -515,13 +528,18 @@ def main():
                 unit_env["VKD3D_TEST_DEBUG"] = "1"
                 expected = {} if record else ref["vkd3d"][name]
                 stop = stall_of(expected)
+                start = round(time.monotonic() - began, 3)
+                with lock:
+                    print("d3d: begin: %s %.3f" % (name, start), flush=True)
                 rc, stopped, _ = run_command([str(HERE / "vkd3d/d3d12")], unit_env, out / (name + ".log"), stop)
+                times = {"begin_s": start, "end_s": round(time.monotonic() - began, 3)}
                 text = (out / (name + ".log")).read_text(errors="replace")
                 counts = summaries(text, VK_SUMMARY)
                 if record:
                     result = {"exit": rc, "summary": counts, "begun": name + " begin" in text,
                               "ended": name + " end" in text, "matched": True}
-                    print("d3d: unit: %s %s" % (name, json.dumps(result)), flush=True)
+                    result.update(times)
+                    report(name, result)
                     return name, result
                 # The discovery's SIGKILLs are memory exhaustion, never flakes.
                 flake = (rc in (-signal.SIGSEGV, 128 + signal.SIGSEGV) and
@@ -545,7 +563,8 @@ def main():
                                     counts[0] >= expected["min_checks"] and
                                     counts[3] <= expected["max_skipped"] and (rc == 0) == (counts[1] == 0))
                 result = {"exit": rc, "summary": counts, "linux_flake": flake, "progress": stopped, "matched": matched}
-                print("d3d: unit: %s %s" % (name, json.dumps(result)), flush=True)
+                result.update(times)
+                report(name, result)
                 return name, result
             with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
                 results.update(pool.map(unit, names))

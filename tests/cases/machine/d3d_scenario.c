@@ -6,6 +6,30 @@
 #include "netcase.h"
 
 /**
+ * Run `argv` through the guest channel as a d3dvenus vkd3d part, and report
+ * the witness `unit` as each of its units ends, on run.py's line
+ * `d3d: done: N of M`, so that the gap's watchdog bounds one unit and not
+ * the whole part, which takes longer than the gap bound together on a
+ * loaded host.
+ */
+static enum etude_status vkd3d_part(struct net_case *u, struct etude_case_machine *m,
+                                    const char *const argv[], struct net_run *r)
+{
+    char text[48];
+    unsigned long n;
+
+    if (net_guest_start(u, m, argv, NULL, "d3d: units: ") == ETUDE_OK) {
+        for (n = 1;; n++) {
+            snprintf(text, sizeof(text), "d3d: done: %lu of ", n);
+            if (etude_guest_output_wait(m, text) != ETUDE_OK)
+                break;
+            etude_progress(u->c, "unit", n);
+        }
+    }
+    return net_guest_finish(u, m, 0, "direct3d", r);
+}
+
+/**
  * Run one row and require its exit and complete result token to agree.
  *
  * A d3dvenus case is probe-PATH-N, wine-PATH-EXE-UNIT or vkd3d-PART, run
@@ -82,7 +106,9 @@ int etude_scenario(struct etude_case *c)
              "python3 /tmp/d3d/run.py -a %s %s %s /tmp/d3d-results",
              adapter, family, row);
     if (net_step(&u, "row") == ETUDE_OK &&
-        net_guest(&u, b.m, argv, NULL, NULL, "direct3d", &r) == ETUDE_OK) {
+        (strcmp(adapter, "venus") == 0 && strcmp(family, "vkd3d") == 0
+             ? vkd3d_part(&u, b.m, argv, &r)
+             : net_guest(&u, b.m, argv, NULL, NULL, "direct3d", &r)) == ETUDE_OK) {
         fputs(r.out, stdout);
         fputs(r.err, stderr);
         snprintf(marker, sizeof(marker), "D3DROW OK %s %s", family, row);
