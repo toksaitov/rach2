@@ -132,7 +132,7 @@ static int cwd_rows(void)
         if (stat(".", &st) != 0) {
             _exit(2);
         }
-        if ((fd = open("f", O_RDONLY)) < 0) {
+        if (open("f", O_RDONLY) < 0) {
             _exit(3);
         }
         if (!getcwd(cwd, sizeof(cwd)) || strcmp(cwd, CWD_DIR "/in") != 0) {
