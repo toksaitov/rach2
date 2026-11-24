@@ -1,0 +1,82 @@
+WineD3D's d3d9:device on lavapipe, x86_64, Wine 11.0: each run's summary and the lines that count as failures.
+Card 5783, 2026-11-24.
+
+Debian 13 guest, 8 CPUs, KVM, run 1:
+device.c:6775: Test failed: Got unexpected hr 0x1.
+device.c:6779: Test failed: Got unexpected hr 0x1.
+device.c:6780: Test failed: Got unexpected query result 0xffffffffffffffff.
+device.c:14930: Test failed: Adapter 0: Expect clip rect (0,0)-(640,480), got (-64,0)-(704,480).
+device.c:15008: Test succeeded inside todo block: Adapter 0: Expect window rect (0,0)-(1280,800), got (0,0)-(1280,800).
+0020:device: 160671 tests executed (159 marked as todo, 0 as flaky, 5 failures), 9 skipped.
+
+Debian 13 guest, 8 CPUs, KVM, run 2:
+device.c:6775: Test failed: Got unexpected hr 0x1.
+device.c:6779: Test failed: Got unexpected hr 0x1.
+device.c:6780: Test failed: Got unexpected query result 0xffffffffffffffff.
+device.c:14930: Test failed: Adapter 0: Expect clip rect (0,0)-(640,480), got (-64,0)-(704,480).
+device.c:15008: Test succeeded inside todo block: Adapter 0: Expect window rect (0,0)-(1280,800), got (0,0)-(1280,800).
+0020:device: 160671 tests executed (159 marked as todo, 0 as flaky, 5 failures), 9 skipped.
+
+Debian 13 guest, 8 CPUs, KVM, run 3:
+device.c:6775: Test failed: Got unexpected hr 0x1.
+device.c:6779: Test failed: Got unexpected hr 0x1.
+device.c:6780: Test failed: Got unexpected query result 0xffffffffffffffff.
+device.c:14930: Test failed: Adapter 0: Expect clip rect (0,0)-(640,480), got (-64,0)-(704,480).
+device.c:15008: Test succeeded inside todo block: Adapter 0: Expect window rect (0,0)-(1280,800), got (0,0)-(1280,800).
+0020:device: 160671 tests executed (159 marked as todo, 0 as flaky, 5 failures), 9 skipped.
+
+Debian 13 guest, 2 CPUs, KVM, run 1:
+device.c:6775: Test failed: Got unexpected hr 0x1.
+device.c:6779: Test failed: Got unexpected hr 0x1.
+device.c:6780: Test failed: Got unexpected query result 0xffffffffffffffff.
+device.c:14930: Test failed: Adapter 0: Expect clip rect (0,0)-(640,480), got (-64,0)-(704,480).
+device.c:15008: Test succeeded inside todo block: Adapter 0: Expect window rect (0,0)-(1280,800), got (0,0)-(1280,800).
+0020:device: 160671 tests executed (159 marked as todo, 0 as flaky, 5 failures), 9 skipped.
+
+Debian 13 guest, 2 CPUs, KVM, run 2:
+device.c:6775: Test failed: Got unexpected hr 0x1.
+device.c:6779: Test failed: Got unexpected hr 0x1.
+device.c:6780: Test failed: Got unexpected query result 0xffffffffffffffff.
+device.c:14930: Test failed: Adapter 0: Expect clip rect (0,0)-(640,480), got (-64,0)-(704,480).
+device.c:15008: Test succeeded inside todo block: Adapter 0: Expect window rect (0,0)-(1280,800), got (0,0)-(1280,800).
+0020:device: 160671 tests executed (159 marked as todo, 0 as flaky, 5 failures), 9 skipped.
+
+Debian 13 guest, 2 CPUs, KVM, run 3:
+device.c:6775: Test failed: Got unexpected hr 0x1.
+device.c:6779: Test failed: Got unexpected hr 0x1.
+device.c:6780: Test failed: Got unexpected query result 0xffffffffffffffff.
+device.c:14930: Test failed: Adapter 0: Expect clip rect (0,0)-(640,480), got (-64,0)-(704,480).
+device.c:15008: Test succeeded inside todo block: Adapter 0: Expect window rect (0,0)-(1280,800), got (0,0)-(1280,800).
+0020:device: 160671 tests executed (159 marked as todo, 0 as flaky, 5 failures), 9 skipped.
+
+Debian 13 guest, 8 CPUs, TCG, run 1:
+device.c:6706: Tests skipped: Test loop took too long (115 ms), skipping large query tests.
+device.c:14930: Test failed: Adapter 0: Expect clip rect (0,0)-(640,480), got (-64,0)-(704,480).
+device.c:15008: Test succeeded inside todo block: Adapter 0: Expect window rect (0,0)-(1280,800), got (0,0)-(1280,800).
+0020:device: 60605 tests executed (175 marked as todo, 0 as flaky, 2 failures), 10 skipped.
+
+Rach2 at the milestone's c0d72028fb, run 1:
+device.c:14930: Test failed: Adapter 0: Expect clip rect (0,0)-(640,480), got (-64,0)-(704,480).
+device.c:15008: Test succeeded inside todo block: Adapter 0: Expect window rect (0,0)-(1280,800), got (0,0)-(1280,800).
+0020:device: 160671 tests executed (159 marked as todo, 0 as flaky, 2 failures), 9 skipped.
+
+Rach2 at the milestone's c0d72028fb, run 2:
+device.c:14930: Test failed: Adapter 0: Expect clip rect (0,0)-(640,480), got (-64,0)-(704,480).
+device.c:15008: Test succeeded inside todo block: Adapter 0: Expect window rect (0,0)-(1280,800), got (0,0)-(1280,800).
+0020:device: 160671 tests executed (159 marked as todo, 0 as flaky, 2 failures), 9 skipped.
+
+Rach2 at the milestone's c0d72028fb, run 3:
+device.c:6775: Test failed: Got unexpected hr 0x1.
+device.c:6779: Test failed: Got unexpected hr 0x1.
+device.c:6780: Test failed: Got unexpected query result 0xffffffffffffffff.
+device.c:14930: Test failed: Adapter 0: Expect clip rect (0,0)-(640,480), got (-64,0)-(704,480).
+device.c:15008: Test succeeded inside todo block: Adapter 0: Expect window rect (0,0)-(1280,800), got (0,0)-(1280,800).
+0020:device: 160671 tests executed (159 marked as todo, 0 as flaky, 5 failures), 9 skipped.
+
+Rach2 with master b167e6ac5c's kernel:
+device.c:6775: Test failed: Got unexpected hr 0x1.
+device.c:6779: Test failed: Got unexpected hr 0x1.
+device.c:6780: Test failed: Got unexpected query result 0xffffffffffffffff.
+device.c:14930: Test failed: Adapter 0: Expect clip rect (0,0)-(640,480), got (-64,0)-(704,480).
+device.c:15008: Test succeeded inside todo block: Adapter 0: Expect window rect (0,0)-(1280,800), got (0,0)-(1280,800).
+0020:device: 160671 tests executed (159 marked as todo, 0 as flaky, 5 failures), 9 skipped.
