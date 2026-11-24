@@ -620,6 +620,8 @@ Without
 .Dv MNT_DETACH
 the seven permanent mounts return
 .Er EBUSY .
+A copy of one that another mount namespace made is not permanent: it takes
+a mount over it and an unmount, as on Linux.
 .Pp
 .Dv MNT_DETACH
 takes the mount, and every mount below it, from the caller's mount
