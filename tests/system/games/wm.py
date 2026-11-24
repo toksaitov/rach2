@@ -558,7 +558,7 @@ def row_wineio():
     session("1366x768", debug=False)
     while not Path("/run/user/%d/pulse/native" % UID).is_socket():
         time.sleep(0.1)
-    settings =subprocess.run(desktop("rach2-game --print"), stdout=subprocess.PIPE,
+    settings = subprocess.run(desktop("rach2-game --print"), stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True).stdout
     check("latency", "PULSE_LATENCY_MSEC=60\n" in settings, "rach2-game --print")
     make_prefix()
