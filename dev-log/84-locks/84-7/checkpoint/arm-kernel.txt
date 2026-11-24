@@ -1,0 +1,2 @@
+bootctl: installed: 4278144 bytes in the candidate slot; the next boot tries it once, and a failure falls back
+bootctl: run `bootctl commit` after the new kernel boots

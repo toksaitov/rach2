@@ -1,0 +1,13 @@
+t5804: 15:10:55 claim t5804-m-1795511455; plan full:1
+t5804: 15:10:55 run 1 full: booting
+t5804: 15:11:04 run 1 full: go, throttle {'bps_rd': 0, 'iops_rd': 0}, reads before 7246
+t5804: 15:11:14 run 1 full: full speed at 10 s
+t5804: 15:11:14 run 1 full: result: {"run": 1, "step": "full", "start": "15:10:55", "go": "15:11:04", "full_at": 10.0, "stall": false, "status": 0, "end_s": 9.6, "made_s": "8.1", "explorer_seen": "802@2.0-7.8;923@8.6-9.3", "explorer_alive_at_end": "none", "reads": 9398, "read_mb": 806, "qemu_cpu": 17, "load": ["11.80 12.57 13.16", "11.96 12.58 13.16"], "failmsg": false, "nodrv": false, "explorer_gone": "9.6"}
+t5804: 15:11:16 post (not sent): Loop m, #5804, runs 1 to 1 of 1 at 15:11:16 (UTC+6), plain Debian 13 (6.12 cloud kernel), KVM, 4 CPUs, 8 GiB, virgl; claim `t5804-m-1795511455` (`cpu_millis 4000`, `memory_bytes 9663676416`).
+
+| run | step | go (UTC+6) | prefix's end | reads in the prefix | explorer.exe (pid@first-last s after go) | "explorer failed" |
+|---|---|---|---|---|---|---|
+| 1 | full | 15:11:04 | made 8.1 s, exit 9.6 s (status 0) | 9398 / 806 MB | seen 802@2.0-7.8;923@8.6-9.3; alive at end none; gone 9.6 | no |
+
+Host: run 1: load 11.80 12.57 13.16 at go, 11.96 12.58 13.16 at end, QEMU 17 CPU s.
+t5804: 15:11:16 result: 1 runs, 0 stalls
