@@ -27,10 +27,12 @@
  *   stat, access and open of "dir/." are EACCES, and stat of "dir/" reports
  *   the directory.
  * * A process left in a directory below one it may not search, as `su` from
- *   root's home leaves one, still reaches files there, as Linux's walk from
- *   the working directory lets it: as uid 1000 in "w/in", with "w" root's
- *   0700, stat of ".", an open of a file in it, getcwd and stat of the file by
- *   its absolute path succeed, and stat of "w/other" is EACCES.
+ *   root's home leaves one, still reaches files there by relative names, as
+ *   Linux's walk from the working directory lets it, but not by absolute
+ *   ones, whose walk from the root needs search permission on each directory
+ *   on the way: as uid 1000 in "w/in", with "w" root's 0700, stat of ".", an
+ *   open of a file in it and getcwd succeed, and stat of the file by its
+ *   absolute path and stat of "w/other" are EACCES.
  *
  * Uid and gid 1000 are the NEW of 1000 when a native run gives
  * `ids=OLD:NEW,...` (tests/native/Readme.md).
@@ -123,13 +125,26 @@ static int cwd_rows(void)
     close(fd);
     pid = fork();
     if (pid == 0) {
-        int ok = chdir(CWD_DIR "/in") == 0 && setgid(PERM_ID) == 0 && setuid(PERM_ID) == 0;
-
-        ok = ok && stat(".", &st) == 0 && (fd = open("f", O_RDONLY)) >= 0;
-        ok = ok && getcwd(cwd, sizeof(cwd)) && strcmp(cwd, CWD_DIR "/in") == 0;
-        ok = ok && stat(CWD_DIR "/in/f", &st) == 0;
-        ok = ok && stat(CWD_DIR "/other", &st) == -1 && errno == EACCES;
-        _exit(ok ? 0 : 1);
+        /* The exit status is the number of the check that failed. */
+        if (chdir(CWD_DIR "/in") != 0 || setgid(PERM_ID) != 0 || setuid(PERM_ID) != 0) {
+            _exit(1);
+        }
+        if (stat(".", &st) != 0) {
+            _exit(2);
+        }
+        if ((fd = open("f", O_RDONLY)) < 0) {
+            _exit(3);
+        }
+        if (!getcwd(cwd, sizeof(cwd)) || strcmp(cwd, CWD_DIR "/in") != 0) {
+            _exit(4);
+        }
+        if (stat(CWD_DIR "/in/f", &st) != -1 || errno != EACCES) {
+            _exit(5);
+        }
+        if (stat(CWD_DIR "/other", &st) != -1 || errno != EACCES) {
+            _exit(6);
+        }
+        _exit(0);
     }
     if (pid > 0) {
         waitpid(pid, &status, 0);
@@ -139,7 +154,17 @@ static int cwd_rows(void)
     rmdir(CWD_DIR "/other");
     rmdir(CWD_DIR);
     if (pid < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        printf("PERMMUSL FAIL (a file of the working directory below an unsearchable one)\n");
+        static const char *const why[] = {"fork or wait",
+                                          "chdir and the drop to uid 1000",
+                                          "stat of .",
+                                          "open of a file in .",
+                                          "getcwd",
+                                          "stat of the file by its absolute path not EACCES",
+                                          "stat of w/other not EACCES"};
+        int n = pid > 0 && WIFEXITED(status) && WEXITSTATUS(status) < 7 ? WEXITSTATUS(status) : 0;
+
+        printf("PERMMUSL FAIL (a file of the working directory below an unsearchable one: %s)\n",
+               why[n]);
         report_stop("a file of the working directory below an unsearchable one");
         return 1;
     }

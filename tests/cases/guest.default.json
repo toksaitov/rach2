@@ -3168,7 +3168,7 @@
         {"assertion_id": "chmod-restore", "checks": "chmod puts /hello.txt back to 0644.", "source": "program"},
         {"assertion_id": "setid", "checks": "seteuid(0), setegid(0) and setresuid(0, 0, 0) succeed.", "source": "program"},
         {"assertion_id": "seteuid-excursion", "checks": "seteuid(1) and back to 0 works.", "source": "program"},
-        {"assertion_id": "cwd-below", "checks": "A process left in a directory below one it may not search reaches `.`, a file in it, getcwd and the file's absolute path, and a sibling is EACCES; with a directory of mode 0600, dir/. is EACCES for stat, access and open while dir/ stats.", "source": "program"},
+        {"assertion_id": "cwd-below", "checks": "A process left in a directory below one it may not search reaches `.`, a file in it and getcwd, while the file's absolute path and a sibling are EACCES; with a directory of mode 0600, dir/. is EACCES for stat, access and open while dir/ stats.", "source": "program"},
         {"assertion_id": "drop", "checks": "The process drops to uid and gid 1000.", "source": "program"},
         {"assertion_id": "read-other", "checks": "As uid 1000 a root file of mode 0644 opens for reading.", "source": "program"},
         {"assertion_id": "write-other-eacces", "checks": "As uid 1000 the same file does not open for writing: EACCES.", "source": "program"},
