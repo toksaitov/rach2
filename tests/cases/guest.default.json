@@ -1304,7 +1304,8 @@
       ],
       "branches": [
         {"group_id": "arch", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["old-stat-root"]}, {"alternative_id": "x86-64", "when": null, "assertions": []}]},
-        {"group_id": "root", "decided_by": "report", "alternatives": [{"alternative_id": "krffs", "when": null, "assertions": ["link-krffs", "handle-krffs", "krffs-keep", "krffs-relocate", "walk-climb"]}, {"alternative_id": "ext2", "when": null, "assertions": ["link-ext2-names", "link-ext2-read", "link-ext2-unlink", "cwd-unlocked", "unlocked-shared", "full-shared", "shared-points", "shared-links", "handle-ext2", "walk-restart", "walk-handoff", "walk-width", "walk-overlap", "walk-fault", "walk-cold", "walk-cold-fail", "walk-link-fail", "walk-trunc", "walk-handoffs"]}]}
+        {"group_id": "root", "decided_by": "report", "alternatives": [{"alternative_id": "krffs", "when": null, "assertions": ["link-krffs", "handle-krffs", "krffs-keep", "krffs-relocate", "walk-climb"]}, {"alternative_id": "ext2", "when": null, "assertions": ["link-ext2-names", "link-ext2-read", "link-ext2-unlink", "unlocked-shared", "full-shared", "shared-points", "shared-links", "handle-ext2", "walk-restart", "walk-handoff", "walk-width", "walk-overlap", "walk-fault", "walk-cold", "walk-cold-fail", "walk-link-fail", "walk-trunc", "walk-handoffs"]}]},
+        {"group_id": "locks", "decided_by": "report", "alternatives": [{"alternative_id": "counted", "when": null, "assertions": ["cwd-unlocked"]}, {"alternative_id": "uncounted", "when": null, "assertions": []}]}
       ],
       "termination": {"end": "exited", "value": 0},
       "progress": [],

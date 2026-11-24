@@ -362,6 +362,12 @@ static const struct row rows[] = {
 /* The root magic once `root_magic` has read it, and 0 before. */
 static unsigned root_seen;
 
+/* Whether the working directory's lock rows count the big lock's holds
+ * (`cwd_unlocked_rows`): on an ext2 root, but not for an i386 probe on the
+ * x86-64 kernel, whose fstatat64 runs under the big lock by the i386 table.
+ * `start` sets it, with the branch it reports. */
+static int locks_counted;
+
 /** Whether the strings `a` and `b` are equal. */
 static int same(const char *a, const char *b)
 {
@@ -391,6 +397,7 @@ static void report_rows(const char *why)
     }
     for (i = 0; i < NROWS; i++) {
         if ((rows[i].root != 0 && rows[i].root != root_seen) ||
+            (!locks_counted && same(rows[i].id, "cwd-unlocked")) ||
             (last != 0 && same(last, rows[i].id))) {
             continue;
         }
@@ -594,14 +601,15 @@ static void cwd_unlocked_undo(void)
  * the cache finishes it without the lock. A tmpfs mounted on /vp/m moves the
  * walk sequence, and the names after it take no hold either, since a walk
  * from a held directory has no path above it to check. A root of another
- * type, `magic`, has no such rows. A failure undoes what the rows made
+ * type, `magic`, has no such rows, and neither has a probe whose holds are
+ * not counted (`locks_counted`). A failure undoes what the rows made
  * (`cwd_unlocked_undo`).
  */
 static void cwd_unlocked_rows(unsigned magic)
 {
     unsigned before, after;
 
-    if (magic != STATFS_MAGIC_EXT2) {
+    if (magic != STATFS_MAGIC_EXT2 || !locks_counted) {
         return;
     }
     fail_undo = cwd_unlocked_undo;
@@ -2820,8 +2828,9 @@ int stat_marked_file_dotdot(void)
 }
 
 /** Keep the arguments of the initial stack `sp` (probe_args.h), begin the
- * report with the branch of the architecture and that of the root type, and
- * return the root type's magic (`root_magic`). */
+ * report with the branches of the architecture, the root type and the
+ * counted locks (`locks_counted`), and return the root type's magic
+ * (`root_magic`). */
 static unsigned start(unsigned long *sp)
 {
     probe_args((int)sp[0], (char **)(sp + 1));
@@ -2833,6 +2842,12 @@ static unsigned start(unsigned long *sp)
 #endif
     root_seen = root_magic();
     report_branch("root", root_seen == STATFS_MAGIC_KRFFS ? "krffs" : "ext2");
+#if defined __x86_64__
+    locks_counted = root_seen == STATFS_MAGIC_EXT2;
+#else
+    locks_counted = root_seen == STATFS_MAGIC_EXT2 && !probe_kernel_wide();
+#endif
+    report_branch("locks", locks_counted ? "counted" : "uncounted");
     return root_seen;
 }
 
