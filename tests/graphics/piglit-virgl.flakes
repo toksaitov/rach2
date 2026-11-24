@@ -14,3 +14,10 @@
 # Linux's 15 s bound in both guests, with Mesa's "waiting got error - 16"
 # and a black probe (dev-log/84-locks/84-266w.md).
 ^spec@!opengl 1\.1@copypixels-draw-sync$
+# ext_image_dma_buf_import-refcount-multithread aborts in glibc's heap checks
+# now and then, by a double free in Mesa 25.0.7's virgl winsys that Mesa
+# 25.2.0 fixed (dev-log/84-locks/upstream.md): 5 runs of 59 on master and 1
+# of 75 on milestone 84, both on Rach2's kernel; 1 of 17 with Debian's kernel
+# under the same GNU root; 10 of 10 under a load that widens the race, each
+# with the second destroy's failed GEM_CLOSE (EINVAL).
+^spec@ext_image_dma_buf_import@ext_image_dma_buf_import-refcount-multithread$
