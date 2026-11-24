@@ -524,24 +524,72 @@ static void client_environment(const char *env[5], char password[512])
     }
 }
 
-/** Read a client's result evidence into the ordinary network result. */
-static enum etude_status client_result(struct net_case *u, const char *output, enum etude_status st,
-                                       const struct etude_guest_result *result, struct net_run *r)
+/** Read the kept standard output `output` and its error into `r`. */
+static void result_texts(struct net_case *u, const char *output, struct net_run *r)
 {
     char name[256];
     const char *path;
 
-    r->end = result->termination;
-    if (st == ETUDE_OK && (!result->complete || result->cleanup != ETUDE_CLEANUP_CONFIRMED))
-        st = ETUDE_LOST;
-    if (st != ETUDE_OK)
-        return failed(u, st, "Rach2 SSH client: %s", status_text(st));
     path = etude_evidence(u->c, output);
     r->out = net_file(path != NULL ? path : "");
     snprintf(name, sizeof(name), "%s.err", output);
     path = etude_evidence(u->c, name);
     r->err = net_file(path != NULL ? path : "");
+}
+
+/** Read a client's result evidence into the ordinary network result. */
+static enum etude_status client_result(struct net_case *u, const char *output, enum etude_status st,
+                                       const struct etude_guest_result *result, struct net_run *r)
+{
+    r->end = result->termination;
+    if (st == ETUDE_OK && (!result->complete || result->cleanup != ETUDE_CLEANUP_CONFIRMED))
+        st = ETUDE_LOST;
+    if (st != ETUDE_OK)
+        return failed(u, st, "Rach2 SSH client: %s", status_text(st));
+    result_texts(u, output, r);
     return ETUDE_OK;
+}
+
+/** Copy the last line of `text` that is not empty to `buf`; give `buf`. */
+static const char *last_line(const char *text, char *buf, size_t size)
+{
+    const char *line = NULL, *p;
+
+    for (p = text != NULL ? text : ""; *p != '\0'; p += strcspn(p, "\r\n")) {
+        p += strspn(p, "\r\n");
+        if (*p != '\0')
+            line = p;
+    }
+    return net_copy_line(line, buf, size);
+}
+
+/** Fail the attempt with how a program ended before it printed `ready`: by
+ * its exit and standard error when its whole result arrived, and by `st`, the
+ * status of its collection, when the channel failed. */
+static enum etude_status unready_result(struct net_case *u, const char *ready, const char *output,
+                                        enum etude_status st,
+                                        const struct etude_guest_result *result, struct net_run *r)
+{
+    char end[32], line[96];
+
+    r->end = result->termination;
+    if (st != ETUDE_OK)
+        return failed(u, st, "the guest program did not start: %s", status_text(st));
+    if (!result->complete)
+        return failed(u, ETUDE_FAILED,
+                      "the guest program ended before \"%s\", its result incomplete", ready);
+    if (r->end.end == ETUDE_END_EXITED)
+        snprintf(end, sizeof(end), "exited %d", r->end.value);
+    else if (r->end.end == ETUDE_END_SIGNALED)
+        snprintf(end, sizeof(end), "signal %d", r->end.value);
+    else
+        snprintf(end, sizeof(end), "%s", r->end.end == ETUDE_END_STOPPED ? "stopped" : "lost");
+    result_texts(u, output, r);
+    failed(u, ETUDE_FAILED, "the guest program ended before \"%s\": %s%s: %s", ready, end,
+           result->cleanup == ETUDE_CLEANUP_CONFIRMED ? "" : ", cleanup unconfirmed",
+           last_line(r->err, line, sizeof(line)));
+    net_run_free(r);
+    return ETUDE_FAILED;
 }
 
 enum etude_status net_guest(struct net_case *u, struct etude_case_machine *m,
@@ -566,11 +614,17 @@ enum etude_status net_guest_start(struct net_case *u, struct etude_case_machine 
 {
     enum etude_status st;
 
+    u->unready = NULL;
     if (!net_ok(u))
         return u->st;
     st = etude_guest_start(m, argv, env, NULL);
-    if (st == ETUDE_OK)
+    if (st == ETUDE_OK) {
         st = etude_guest_output_wait(m, ready);
+        if (st == ETUDE_LOST) {
+            u->unready = ready;
+            return st;
+        }
+    }
     return failed(u, st, "the guest program did not start: %s", status_text(st));
 }
 
@@ -578,14 +632,18 @@ enum etude_status net_guest_finish(struct net_case *u, struct etude_case_machine
                                    const char *output, struct net_run *r)
 {
     struct etude_guest_result result;
+    const char *unready = u->unready;
     enum etude_status st;
 
     memset(r, 0, sizeof(*r));
     r->end.end = ETUDE_END_LOST;
     r->end.value = -1;
-    st = etude_guest_finish(m, cancel || !net_ok(u), output, &result);
+    u->unready = NULL;
+    st = etude_guest_finish(m, cancel || !net_ok(u) || unready != NULL, output, &result);
     if (!net_ok(u))
         return u->st;
+    if (unready != NULL)
+        return unready_result(u, unready, output, st, &result, r);
     return client_result(u, output, st, &result, r);
 }
 

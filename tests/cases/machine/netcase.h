@@ -57,6 +57,8 @@ struct net_case {
     unsigned client_files;
     char client_input[4096]; /* the file bound as the client's raw input disk */
     struct net_made *made;   /* the files net_path gave, the newest first */
+    const char *unready;     /* the text net_guest_start never saw of a program
+                                whose end net_guest_finish is to judge, or NULL */
 };
 
 /* One boot of a machine, and how far the scenario has read its console. */
@@ -192,7 +194,10 @@ enum etude_status net_guest(struct net_case *u, struct etude_case_machine *m,
 
 /** Start an installed guest program through the machine's open channel
  * without waiting, and wait for READY on its standard output, so that the
- * scenario may act on the host while it runs. */
+ * scenario may act on the host while it runs. When the program ended or the
+ * channel was lost before READY, give ETUDE_LOST and leave which to
+ * net_guest_finish, which the caller calls whatever the status and until
+ * which READY stays valid. */
 enum etude_status net_guest_start(struct net_case *u, struct etude_case_machine *m,
                                   const char *const argv[], const char *const env[],
                                   const char *ready);
@@ -200,7 +205,10 @@ enum etude_status net_guest_start(struct net_case *u, struct etude_case_machine 
 /** Wait for the program net_guest_start started to end, by itself or,
  * when CANCEL is nonzero, by its cancellation, and read its result
  * evidence, standard output OUTPUT, into R. It runs even after a failure
- * of the attempt, so that the program never outlives it. */
+ * of the attempt, so that the program never outlives it. A program that
+ * ended before its READY text fails the attempt, with its exit and the last
+ * line of its standard error as the reason, or with the lost transport when
+ * the channel failed; R then holds no texts. */
 enum etude_status net_guest_finish(struct net_case *u, struct etude_case_machine *m, int cancel,
                                    const char *output, struct net_run *r);
 

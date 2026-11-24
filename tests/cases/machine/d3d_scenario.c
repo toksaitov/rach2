@@ -1,6 +1,7 @@
 /* Run a Direct3D row as test from a separate disk on the GNU root, on the
  * guest's lavapipe or, for the d3dvenus family, on Venus. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "netcase.h"
@@ -19,7 +20,7 @@ static enum etude_status vkd3d_part(struct net_case *u, struct etude_case_machin
 
     if (net_guest_start(u, m, argv, NULL, "d3d: units: ") == ETUDE_OK) {
         for (n = 1;; n++) {
-            snprintf(text, sizeof(text), "d3d: done: %lu of ", n);
+            snprintf(text, sizeof(text), "\nd3d: done: %lu of ", n);
             if (etude_guest_output_wait(m, text) != ETUDE_OK)
                 break;
             etude_progress(u->c, "unit", n);
@@ -28,8 +29,79 @@ static enum etude_status vkd3d_part(struct net_case *u, struct etude_case_machin
     return net_guest_finish(u, m, 0, "direct3d", r);
 }
 
+/** Say whether the line at `line` is `want`, its end a newline. */
+static int line_is(const char *line, const char *want)
+{
+    size_t n = strlen(want);
+
+    return strncmp(line, want, n) == 0 && line[n] == '\n';
+}
+
 /**
- * Run one row and require its exit and complete result token to agree.
+ * Say whether a vkd3d part's standard output `out`, NULL when it was not
+ * kept, has its whole progress: one line `d3d: units: M`, and after it the
+ * lines `d3d: done: N of M` for each N from 1 to M, in order. Write what is
+ * wrong to `why` when it has not.
+ */
+static int progress_whole(const char *out, char *why, size_t size)
+{
+    static const char units[] = "d3d: units: ", done[] = "d3d: done: ";
+    char want[64], got[48];
+    const char *line, *next;
+    unsigned long n = 0, total = 0;
+
+    for (line = out != NULL ? out : ""; *line != '\0'; line = next) {
+        next = strchr(line, '\n');
+        next = next != NULL ? next + 1 : line + strlen(line);
+        if (strncmp(line, units, sizeof(units) - 1) == 0) {
+            /* A second header is as wrong as one of no tests. */
+            total = total == 0 ? strtoul(line + sizeof(units) - 1, NULL, 10) : 0;
+            snprintf(want, sizeof(want), "%s%lu", units, total);
+            if (total == 0 || !line_is(line, want)) {
+                snprintf(why, size, "\"%s\" is not the one header",
+                         net_copy_line(line, got, sizeof(got)));
+                return 0;
+            }
+        } else if (strncmp(line, done, sizeof(done) - 1) == 0) {
+            snprintf(want, sizeof(want), "%s%lu of %lu", done, ++n, total);
+            if (!line_is(line, want)) {
+                snprintf(why, size, "\"%s\" where \"%s\" was due",
+                         net_copy_line(line, got, sizeof(got)), want);
+                return 0;
+            }
+        }
+    }
+    if (total == 0 || n != total) {
+        snprintf(why, size, "%lu of %lu tests have ended", n, total);
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * Print what run.py printed in `r` and assert that it exited 0 with the
+ * result token of the row `row` of `family` and, for a d3dvenus vkd3d part,
+ * when `part` is nonzero, that its progress is whole.
+ */
+static void judge(struct net_case *u, const struct net_run *r, const char *family, const char *row,
+                  int part)
+{
+    char marker[192], progress[160];
+    int matched, whole;
+
+    fputs(r->out, stdout);
+    fputs(r->err, stderr);
+    snprintf(marker, sizeof(marker), "D3DROW OK %s %s", family, row);
+    matched = net_exited0(r) && net_find(r->out, marker) != NULL;
+    whole = !part || progress_whole(r->out, progress, sizeof(progress));
+    net_assert(u, "row", matched && whole, "%s%s%s%s",
+               matched ? "" : "Direct3D row did not match Linux; see direct3d evidence",
+               matched || whole ? "" : "; ", whole ? "" : "progress: ", whole ? "" : progress);
+}
+
+/**
+ * Run one row and require its exit and complete result token to agree, and a
+ * d3dvenus vkd3d part's progress to be whole.
  *
  * A d3dvenus case is probe-PATH-N, wine-PATH-EXE-UNIT or vkd3d-PART, run
  * with run.py's -a venus against the Linux guest's reference on Venus. A
@@ -41,11 +113,11 @@ int etude_scenario(struct etude_case *c)
     struct net_boot b;
     struct net_run r;
     char password[128], mode[16], exe[32], unit[64];
-    char family[16], row[128], command[2048], marker[192], path[16], n[16];
+    char family[16], row[128], command[2048], path[16], n[16];
     const char *id = etude_case_id(c), *tail = strrchr(id, '.');
     const char *argv[] = {"/bin/bash", "-c", command, NULL};
     const char *adapter = "lavapipe";
-    int matched = 0;
+    int part;
 
     net_case(&u, c);
     memset(&b, 0, sizeof(b));
@@ -104,15 +176,11 @@ int etude_scenario(struct etude_case *c)
              "LOGNAME=u.pw_name); os.execvp(sys.argv[1], sys.argv[1:])' "
              "python3 /tmp/d3d/run.py -a %s %s %s /tmp/d3d-results",
              adapter, family, row);
+    part = strcmp(adapter, "venus") == 0 && strcmp(family, "vkd3d") == 0;
     if (net_step(&u, "row") == ETUDE_OK &&
-        (strcmp(adapter, "venus") == 0 && strcmp(family, "vkd3d") == 0
-             ? vkd3d_part(&u, b.m, argv, &r)
-             : net_guest(&u, b.m, argv, NULL, NULL, "direct3d", &r)) == ETUDE_OK) {
-        fputs(r.out, stdout);
-        fputs(r.err, stderr);
-        snprintf(marker, sizeof(marker), "D3DROW OK %s %s", family, row);
-        matched = net_exited0(&r) && net_find(r.out, marker) != NULL;
-        net_assert(&u, "row", matched, "Direct3D row did not match Linux; see direct3d evidence");
+        (part ? vkd3d_part(&u, b.m, argv, &r)
+              : net_guest(&u, b.m, argv, NULL, NULL, "direct3d", &r)) == ETUDE_OK) {
+        judge(&u, &r, family, row, part);
         net_run_free(&r);
     } else
         net_assert(&u, "row", 0, "Direct3D row could not run");
