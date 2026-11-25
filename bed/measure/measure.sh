@@ -258,13 +258,9 @@ scene_webgl()
     # shellcheck disable=SC2034 # runner_switches reads it
     RUNNER_CHROMIUM_EXTRA='--disable-gpu-vsync --disable-frame-rate-limit'
     query="frames=$frames"
-    # Under Weston's Pixman, which offers no dmabuf, Chromium falls back to
-    # software compositing after its start, and its renderer then drops its
-    # GPU channel and the page's context with it. A native rung starts in
-    # software compositing, so that no fallback comes, and the page, which
-    # then runs before the window is full, waits for its size.
-    case $own:$rung in
-        1:native-*)
+    # Chromium's fallback to software compositing loses the page's context.
+    case ${RUNNER_WESTON:+own}:$rung in
+        own:native-*)
             RUNNER_CHROMIUM_EXTRA="$RUNNER_CHROMIUM_EXTRA --disable-gpu-compositing"
             query="$query&size=${RUNNER_WIDTH}x$RUNNER_HEIGHT"
             ;;

@@ -15,9 +15,9 @@
 // to /event, `times` being each frame's callback time in ms after the first,
 // after a {kind: "tick"} every 10 s while it draws, which events.py's
 // `wait` reads as the page's progress. With `size`, WIDTHxHEIGHT in device
-// pixels, the page first waits for the window to reach it, and posts no
-// tick until then, so that a window that never does ends the wait in
-// events.py.
+// pixels, the page first waits until the canvas covers that many, and draws
+// at them; it posts no tick until then, so that a window that never does
+// ends the wait in events.py.
 'use strict';
 const post = event => fetch('/event', {method: 'POST', body: JSON.stringify(event), keepalive: true});
 (async () => {
@@ -29,23 +29,23 @@ const post = event => fetch('/event', {method: 'POST', body: JSON.stringify(even
   const frames = Number(query.get('frames') || 600);
   const canvas = document.getElementById('scene');
   const size = query.get('size');
+  let pixels = null;
   if (size !== null) {
-   // A window starts smaller and grows once the compositor has sized it.
-   const fits = () => canvas.clientWidth * devicePixelRatio + 'x' + canvas.clientHeight * devicePixelRatio === size;
-   await new Promise(resolve => {
-    const check = () => {
-     if (!fits()) return;
-     removeEventListener('resize', check);
-     resolve();
-    };
-    addEventListener('resize', check);
-    check();
+   // The observer's first call is the present size, and one follows each change.
+   pixels = await new Promise(resolve => {
+    const observer = new ResizeObserver(entries => {
+     const box = entries[0].devicePixelContentBoxSize[0];
+     if (box.inlineSize + 'x' + box.blockSize !== size) return;
+     observer.disconnect();
+     resolve([box.inlineSize, box.blockSize]);
+    });
+    observer.observe(canvas, {box: 'device-pixel-content-box'});
    });
   }
   ticker = setInterval(() => post({kind: 'tick'}), 10000);
   canvas.addEventListener('webglcontextlost', () => post({kind: 'lost', frames: times.length}));
-  canvas.width = canvas.clientWidth * devicePixelRatio;
-  canvas.height = canvas.clientHeight * devicePixelRatio;
+  canvas.width = pixels ? pixels[0] : canvas.clientWidth * devicePixelRatio;
+  canvas.height = pixels ? pixels[1] : canvas.clientHeight * devicePixelRatio;
   const gl = canvas.getContext('webgl', {antialias: false, preserveDrawingBuffer: true});
   if (!gl) throw Error('no WebGL context');
   const dbg = gl.getExtension('WEBGL_debug_renderer_info');
