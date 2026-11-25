@@ -1,0 +1,53 @@
+The WebGL scene and Chromium's fallback to software compositing, 2026-11-25,
+LENOVO, HD 4400, a trial boot at 0f27baf219, the files of the native case
+testbed/webgl at that commit, each run a fresh copy with a new profile and an
+empty Mesa cache, headless Weston 14.0.2 with Pixman, Chromium 156.0.8078.79,
+Mesa 25.0.7-2+deb13u1. "lost" is the page's `GL error 0x9242, the context lost
+at frame N` with the renderer's `GPU state invalid after
+WaitForGetOffsetInRange`; "drew" is 599 frames. Times are UTC.
+
+The release's own run at 0f27baf219, untraced: lost at frame 3
+
+As released (arm A), and with a Chromium trace (T, and A 01), one run a line
+  A 01  traced    drew
+  A 02  untraced  lost at frame 3
+  T 01  traced    lost at frame 3   (its trace was not written: the scene ends
+                                     the browser by SIGTERM)
+  T 01  traced    drew              (from here the copy of measure.sh slept
+  T 02  traced    drew               8 s before the browser's stop, so that
+  T 03  traced    lost at frame 3    the trace came first)
+  3 lost of 6
+
+Arm C, --disable-software-compositing-fallback, untraced
+  5 of 5 ended with `Software compositing fallback is unavailable. Goodbye.`
+
+Arm B, --disable-gpu-compositing, untraced, in two goes of 8 and 12
+  20 of 20 drew, no `GPU state invalid` line; canvas 1018 x 651 in each, where
+  the runs as released that drew have 1280 x 800
+
+The traces of the last T 01 (drew) and T 03 (lost), read with a parser of the
+task's own; seconds of the minute 06:03 (T 01) and 06:04 (T 03), as the
+trace's clock snapshot puts them. Client 6 is the page's renderer in both.
+
+  event                                        T 03, lost     T 01, drew
+  LaunchGpuProcess                             10.379         23.204
+  first EstablishGpuChannel, client 6          10.909         23.734
+  RenderThreadImpl::Init                       10.952-11.006  23.814-23.861
+  page's getContext, EstablishGpuChannelSync   11.304-11.368  24.190-24.213
+  first SkiaOutputSurfaceImplOnGpu::Initialize
+    ends (of three)                            11.35676       24.09051
+  first channel reaches the renderer           11.360         24.137
+  browser's UI thread frees its GPU contexts   11.365         24.166
+  page's context made, GPU CreateCommandBuffer 11.36854       24.21578
+                                               first channel  second channel
+  renderer's channel dropped, between          11.53724 and   24.14873 and
+                                               11.54378       24.17486
+  renderer asks for its second channel         11.56309       24.17486
+  second EstablishGpuChannel, client 6         11.56880       24.20237
+  failing WaitForGetOffset                     11.55818       none
+
+No event names the fallback, LoseChannel or the channel's close. The drop is
+read from the renderer's flushes, which stop reaching the GPU process (last at
+11.537235 and, in T 01, before 24.175194), and from the GPU process, whose
+main thread was in one task from 11.537493 to 11.590630 and so did not close
+it.
