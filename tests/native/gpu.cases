@@ -237,7 +237,8 @@ case gpu/gate-probe.firefox alone log \
     -- graphics/runners/lenovo.sh gate probe firefox gate
 
 # The test bed's harness on the GPU, the rung native-rach2, each scene under
-# a headless Weston of its own, set beside Linux's native-linux line (83-7).
+# a headless Weston of its own, set beside Linux's native-linux line where
+# lenovo-linux.lines has one that is not a comment (83-7).
 case testbed/glmark2 alone log \
     file:bed/measure/measure.sh file:bed/measure/piglit.txt file:bed/measure/latency.c file:bed/measure/webgl.html \
     file:tests/graphics/runners/common.sh file:tests/graphics/runners/games.sh file:tests/graphics/runners/piglit.sh \

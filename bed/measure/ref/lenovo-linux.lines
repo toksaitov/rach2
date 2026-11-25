@@ -1,9 +1,10 @@
 # lenovo-linux.lines: Linux's `measure: result:` line for each scene of the
 # test bed's harness on the Lenovo, the rung native-linux, under a headless
 # Weston of the harness's own, which the native cases testbed/* of
-# tests/native/gpu.cases print beside Rach2's native-rach2 lines. A line is
-# the harness's last line as it printed it, after a comment naming the boot,
-# its kernel and its IOMMU setting. The Debian boot of 83-15 adds them.
+# tests/native/gpu.cases print beside Rach2's native-rach2 lines. A line that
+# is a comment, as the webgl scene's is, is not printed. A line is the
+# harness's last line as it printed it, after a comment naming the boot, its
+# kernel and its IOMMU setting. The Debian boot of 83-15 adds them.
 # 83-15's Debian boot of 2026-11-12 on the Lenovo's p5, Debian 13.7 with
 # kernel 6.12.115+deb13.1 and Mesa 25.0.7-2+deb13u1, intel_iommu=on: the
 # IOMMU's translation on, as the release boots Rach2. The webgl scene drew
