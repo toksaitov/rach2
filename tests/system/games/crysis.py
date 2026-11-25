@@ -33,11 +33,18 @@ but on the 32-bit game, which need only complete its loops. Each loop's
 frame figures are of its 2000 frames in the HUD's dump, counted from the
 load's last frame, which is loop 0's first and which `load:` reports apart.
 A run whose load mark cannot fix that frame is uncut, and an uncut run, or
-one whose dump does not hold a loop whole, fails (loop_windows); the frame
-figures themselves carry no gate. With CRYSIS_LOAD_TRACE=N it samples every
-thread from the HUD's Nth frame across the long frame that ends the level's
-load, in a child process killed at 30 s, into STATE/NAME-load, and fails
-unless the sampler ended by itself and the long frame came (LoadTrace).
+one whose dump does not hold a loop whole, fails (loop_windows), as does one
+whose dump, read after a look at the benchmark log found a loop finished, was
+more than a frame short of the loop's end (loop_fault); the frame figures
+themselves carry no gate. When a count was taken for every loop asked for and
+the dump as read then gives their windows, the script waits, before it ends
+the game, until the dump holds the complete record of the last loop's last
+frame, the game has ended by itself, or the dump's complete records have not
+passed their highest count for SILENCE seconds; a signal cuts that wait short.
+With CRYSIS_LOAD_TRACE=N it samples every thread from the HUD's Nth frame
+across the long frame that ends the level's load, in a child process killed at
+30 s, into STATE/NAME-load, and fails unless the sampler ended by itself and
+the long frame came (LoadTrace).
 `hud` loads a copy of SAVE, a checkpoint before the suit's reboot on the
 first level, made under a name of its own so that the player's save is only
 read, enters the reboot's trigger at the console and reads the HUD back 35 s
@@ -297,17 +304,29 @@ class Game:
             self.still = time.monotonic()
         return time.monotonic() - self.still < SILENCE
 
-    def wait(self, ready, what):
+    def wait(self, ready, what, progress=None):
         """Tick until READY() holds, the game ends or its logs stop growing;
-        return whether READY() held."""
+        return whether READY() held. With PROGRESS, a function that returns a
+        count, only a rise of that count is growth."""
+        most, risen = -1, time.monotonic()
         while True:
             if ready():
                 return True
             if self.proc.poll() is not None:
+                # With PROGRESS the game may make READY() hold and end between
+                # the look above and this one.
+                if progress and ready():
+                    return True
                 say("%s: the game ended first, status %d" % (what, self.proc.returncode))
                 return False
-            if not self.tick():
-                say("%s: no log grew for %d s" % (what, SILENCE))
+            growing = self.tick()
+            if progress:
+                count = progress()
+                if count > most:
+                    most, risen = count, time.monotonic()
+                growing = time.monotonic() - risen < SILENCE
+            if not growing:
+                say("%s: no %s grew for %d s" % (what, "count" if progress else "log", SILENCE))
                 return False
             time.sleep(0.5)
 
@@ -318,6 +337,10 @@ class Game:
                 return sum(1 for line in f if line.split())
         except OSError:
             return 0
+
+    def records(self):
+        """Return the number of complete records the HUD's dump holds."""
+        return len(hud_records(self.hud / "frametime_(ms)"))
 
     def loaded(self):
         """Return the level's loading time from Game.log, or None, and keep
@@ -529,6 +552,31 @@ def loop_windows(dump, mark, loops):
     return last, (first, count), windows, None
 
 
+# How many frames a loop's count may be short of the loop's end. The game logs
+# a loop's end before it presents the loop's last frame, and the HUD writes
+# that frame's line at the present, so a count read between the two lacks it.
+UNPRESENTED = 1
+
+
+def loop_fault(end, count, held):
+    """Return what is wrong with a loop whose window ends before frame END,
+    or None. COUNT is the number of nonblank lines, an unterminated last one
+    among them, read in the HUD's dump after a look at the benchmark log found
+    the loop finished, 0 if the dump could not be read and None if it was not
+    counted, and HELD the number in the whole dump.
+
+    A COUNT that is not short does not show that the loop was whole: it is
+    read at a poll after the loop's end, so frames of the next loop can
+    be in it and hide a short loop."""
+    if end > held:
+        return "past the dump's %d" % held
+    if count is None:
+        return "no frame count read as the loop finished"
+    if count < end - UNPRESENTED:
+        return "the count taken at the poll is %d short of the loop's end" % (end - count)
+    return None
+
+
 def frame_stats(values):
     """Return the median, the 99th percentile and the worst of VALUES, in ms,
     and how many pass 50 and 100 ms."""
@@ -589,13 +637,19 @@ def thread_rows():
     return rows
 
 
-def hud_times(path):
-    """Return the frame times of the HUD's dump at PATH so far, in ms."""
+def hud_records(path):
+    """Return the lines of the HUD's dump at PATH so far, one a frame, leaving
+    out a last line without its newline, whatever its cause."""
     try:
-        with open(path) as f:
-            return [float(line.split()[-1]) for line in f if line.split()]
+        with open(path, newline="\n") as f:
+            return [line for line in f if line.endswith("\n") and line.split()]
     except OSError:
         return []
+
+
+def hud_times(path):
+    """Return the frame times of the HUD's dump at PATH so far, in ms."""
+    return [float(line.split()[-1]) for line in hud_records(path)]
 
 
 def start_child(argv, log):
@@ -868,8 +922,17 @@ def flyby(route, name, loops):
                     profiling = False
                 say("loop %d finished at frame %d" % (done - 1, ends[-1]))
                 continue
-            if not game.wait(lambda: len(finished()) > len(ends), "loop %d" % len(ends)):
+            # The game may log its last loop and quit between the wait's look
+            # at the log and its look at the game.
+            if not game.wait(lambda: len(finished()) > len(ends), "loop %d" % len(ends)) and \
+                    len(finished()) <= len(ends):
                 break
+        if len(ends) == loops:
+            _, _, windows, _ = loop_windows(hud_times(game.hud / "frametime_(ms)"),
+                                            mark[0] if mark else None, loops)
+            if windows:
+                game.wait(lambda: game.records() >= windows[-1][1], "last loop's last frame",
+                          game.records)
     finally:
         # A signal here waits for the profiler's stop and the game's end.
         with HELD:
@@ -877,12 +940,7 @@ def flyby(route, name, loops):
                 flyby_profile(game, counts, "stop")
             game.end()
     runs = finished()[:loops]
-    dump = []
-    try:
-        dump = [float(line.split()[-1]) for line in
-                open(game.hud / "frametime_(ms)") if line.split()]
-    except OSError:
-        pass
+    dump = hud_times(game.hud / "frametime_(ms)")
     linux = LINUX.get(route, ())
     # The plan asks the 32-bit game only to complete its loop.
     gate = 0 if route == "32" else GATE
@@ -898,14 +956,13 @@ def flyby(route, name, loops):
                 LOOP_FRAMES, last))
     for i, (fps, play) in enumerate(runs):
         start, end = windows[i] if windows else (0, 0)
-        whole = bool(windows) and end <= len(dump)
-        segment = dump[start:end] if whole else []
+        fault = why or loop_fault(end, ends[i] if i < len(ends) else None, len(dump))
+        segment = dump[start:end] if windows and end <= len(dump) else []
         beside = (" linux %.2f" % linux[i]) if i < len(linux) else ""
         check("loop%d" % i, fps >= gate, "%.2f fps (gate %.0f)%s, play %.2f s%s" % (
             fps, gate, beside, play, (", " + frame_stats(segment)) if segment else ""))
-        check("loop%d-frames" % i, whole, ("frames %d to %d" % (start, end - 1)) if whole
-              else ("uncut: " + why) if why else
-              "frames %d to %d, past the dump's %d" % (start, end - 1, len(dump)))
+        check("loop%d-frames" % i, fault is None, ("uncut: " + why) if why else
+              "frames %d to %d%s" % (start, end - 1, ", " + fault if fault else ""))
     check("loops", len(runs) == loops, "%d of %d loops finished" % (len(runs), loops))
     game.renderer()
 
