@@ -22,8 +22,8 @@
 #   webgl    webgl.html in Chromium, fullscreen at 1280x800, for SECONDS
 #            times 60 frames (600), its frames paced by neither the
 #            display's refresh nor a frame rate limit; on a native-* rung
-#            under the script's own Weston, drawn on the GPU but composited
-#            in software, from the window's full size on
+#            under the script's own Weston, Chromium starts with software
+#            compositing and the page draws from the window's full size on
 #   game     SuperTuxKart's replay of REPLAYS, as games.sh -r plays it, with
 #            SECONDS of the race's own time when -t gives them
 #
@@ -258,7 +258,7 @@ scene_webgl()
     # shellcheck disable=SC2034 # runner_switches reads it
     RUNNER_CHROMIUM_EXTRA='--disable-gpu-vsync --disable-frame-rate-limit'
     query="frames=$frames"
-    # Chromium's fallback to software compositing loses the page's context.
+    # Start Chromium with software compositing (83-testbed/upstream.md).
     case ${RUNNER_WESTON:+own}:$rung in
         own:native-*)
             RUNNER_CHROMIUM_EXTRA="$RUNNER_CHROMIUM_EXTRA --disable-gpu-compositing"

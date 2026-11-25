@@ -6,17 +6,20 @@ Mesa 25.0.7-2+deb13u1. "lost" is the page's `GL error 0x9242, the context lost
 at frame N` with the renderer's `GPU state invalid after
 WaitForGetOffsetInRange`; "drew" is 599 frames. Times are UTC.
 
-The release's own run at 0f27baf219, untraced: lost at frame 3
+The release's own run at 0f27baf219, untraced: lost at frame 3. It is apart
+from the runs below.
 
-As released (arm A), and with a Chromium trace (T, and A 01), one run a line
+A mixed diagnostic series, not a reproduction of the release: neither switch of
+arms B and C, five runs of six traced. One run a line
   A 01  traced    drew
-  A 02  untraced  lost at frame 3
+  A 02  untraced  lost at frame 3   (the only run as released)
   T 01  traced    lost at frame 3   (its trace was not written: the scene ends
                                      the browser by SIGTERM)
   T 01  traced    drew              (from here the copy of measure.sh slept
   T 02  traced    drew               8 s before the browser's stop, so that
   T 03  traced    lost at frame 3    the trace came first)
-  3 lost of 6
+  Lost: the one untraced run, 1 of the 2 traced without the 8 s wait, 1 of
+  the 3 traced with it; 3 of the 6 together, of three variants
 
 Arm C, --disable-software-compositing-fallback, untraced
   5 of 5 ended with `Software compositing fallback is unavailable. Goodbye.`
@@ -42,12 +45,20 @@ trace's clock snapshot puts them. Client 6 is the page's renderer in both.
                                                first channel  second channel
   renderer's channel dropped, between          11.53724 and   24.14873 and
                                                11.54378       24.17486
+  failing WaitForGetOffset                     11.55818       none
   renderer asks for its second channel         11.56309       24.17486
   second EstablishGpuChannel, client 6         11.56880       24.20237
-  failing WaitForGetOffset                     11.55818       none
+  last DidDestroyChannel of three (no id)      11.59125       24.23380
+
+In T 03 the failing wait, at 11.55818, came before the renderer asked for its
+second channel, at 11.56309, and before the DidDestroyChannel at 11.59125. The
+two earlier DidDestroyChannel of T 03, at 11.38485 and 11.44576, were before
+the wait and, by their times, are the browser's and client 5's.
 
 No event names the fallback, LoseChannel or the channel's close. The drop is
-read from the renderer's flushes, which stop reaching the GPU process (last at
-11.537235 and, in T 01, before 24.175194), and from the GPU process, whose
+read from the renderer's flushes, which stop reaching the GPU process: in T 03
+the compositor's flush, made at 11.537235, was received at 11.537389, and the
+renderer's next, made at 11.543776, was never received; in T 01 the first
+unreceived flush is at 24.175194. It is read also from the GPU process, whose
 main thread was in one task from 11.537493 to 11.590630 and so did not close
-it.
+the channel.
