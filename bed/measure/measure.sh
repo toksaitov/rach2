@@ -21,7 +21,9 @@
 #            skipped: TEST: needs N MiB, and the VM has MIB MiB`
 #   webgl    webgl.html in Chromium, fullscreen at 1280x800, for SECONDS
 #            times 60 frames (600), its frames paced by neither the
-#            display's refresh nor a frame rate limit
+#            display's refresh nor a frame rate limit; on a native-* rung
+#            under the script's own Weston, drawn on the GPU but composited
+#            in software, from the window's full size on
 #   game     SuperTuxKart's replay of REPLAYS, as games.sh -r plays it, with
 #            SECONDS of the race's own time when -t gives them
 #
@@ -255,9 +257,21 @@ scene_webgl()
     # Frames as fast as the path draws them, as glmark2's swap interval 0.
     # shellcheck disable=SC2034 # runner_switches reads it
     RUNNER_CHROMIUM_EXTRA='--disable-gpu-vsync --disable-frame-rate-limit'
+    query="frames=$frames"
+    # Under Weston's Pixman, which offers no dmabuf, Chromium falls back to
+    # software compositing after its start, and its renderer then drops its
+    # GPU channel and the page's context with it. A native rung starts in
+    # software compositing, so that no fallback comes, and the page, which
+    # then runs before the window is full, waits for its size.
+    case $own:$rung in
+        1:native-*)
+            RUNNER_CHROMIUM_EXTRA="$RUNNER_CHROMIUM_EXTRA --disable-gpu-compositing"
+            query="$query&size=${RUNNER_WIDTH}x$RUNNER_HEIGHT"
+            ;;
+    esac
     runner_server "$here"
     runner_browser_record chromium
-    runner_browser chromium "http://127.0.0.1:$RUNNER_PORT/webgl.html?frames=$frames" \
+    runner_browser chromium "http://127.0.0.1:$RUNNER_PORT/webgl.html?$query" \
         "$out/browser.log"
     # shellcheck disable=SC2046 # two words
     set -- $(python3 -I "$runners/events.py" wait "$RUNNER_WORK/events" 0 "$RUNNER_BROWSER" 120)

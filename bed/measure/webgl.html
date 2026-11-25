@@ -14,16 +14,35 @@
 // the last frame, and posts {kind: "done", frames, times, renderer, ok}
 // to /event, `times` being each frame's callback time in ms after the first,
 // after a {kind: "tick"} every 10 s while it draws, which events.py's
-// `wait` reads as the page's progress.
+// `wait` reads as the page's progress. With `size`, WIDTHxHEIGHT in device
+// pixels, the page first waits for the window to reach it, and posts no
+// tick until then, so that a window that never does ends the wait in
+// events.py.
 'use strict';
 const post = event => fetch('/event', {method: 'POST', body: JSON.stringify(event), keepalive: true});
 (async () => {
  const result = {kind: 'done', ok: false};
  const times = [];
- const ticker = setInterval(() => post({kind: 'tick'}), 10000);
+ let ticker = null;
  try {
-  const frames = Number(new URLSearchParams(location.search).get('frames') || 600);
+  const query = new URLSearchParams(location.search);
+  const frames = Number(query.get('frames') || 600);
   const canvas = document.getElementById('scene');
+  const size = query.get('size');
+  if (size !== null) {
+   // A window starts smaller and grows once the compositor has sized it.
+   const fits = () => canvas.clientWidth * devicePixelRatio + 'x' + canvas.clientHeight * devicePixelRatio === size;
+   await new Promise(resolve => {
+    const check = () => {
+     if (!fits()) return;
+     removeEventListener('resize', check);
+     resolve();
+    };
+    addEventListener('resize', check);
+    check();
+   });
+  }
+  ticker = setInterval(() => post({kind: 'tick'}), 10000);
   canvas.addEventListener('webglcontextlost', () => post({kind: 'lost', frames: times.length}));
   canvas.width = canvas.clientWidth * devicePixelRatio;
   canvas.height = canvas.clientHeight * devicePixelRatio;
